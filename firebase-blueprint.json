@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "Student": {
+      "title": "Student",
+      "description": "Student record with academic and application details",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "intake": { "type": "string" },
+        "counselor": { "type": "string" },
+        "readiness": { "type": "number" },
+        "school": { "type": "string" }
+      },
+      "required": ["id", "name", "email"]
+    },
+    "Staff": {
+      "title": "Staff",
+      "description": "Staff member record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "name", "email"]
+    },
+    "Batch": {
+      "title": "Batch",
+      "description": "Batch cohort definition",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "program": { "type": "string" }
+      },
+      "required": ["id", "name"]
+    },
+    "Event": {
+      "title": "Event",
+      "description": "Class or counselling event schedule",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "date": { "type": "string" },
+        "type": { "type": "string" }
+      },
+      "required": ["id", "title"]
+    }
+  },
+  "firestore": {
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Collection of student profiles"
+    },
+    "/staff/{staffId}": {
+      "schema": { "$ref": "#/entities/Staff" },
+      "description": "Collection of staff profiles"
+    },
+    "/batches/{batchId}": {
+      "schema": { "$ref": "#/entities/Batch" },
+      "description": "Collection of batch cohorts"
+    },
+    "/events/{eventId}": {
+      "schema": { "$ref": "#/entities/Event" },
+      "description": "Collection of scheduled events and meetings"
+    }
+  }
+}
