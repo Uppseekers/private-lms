@@ -227,22 +227,29 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   useEffect(() => {
     const checkAuth = async () => {
       const token = localStorage.getItem('auth_token');
+      // Always fetch latest Cloud SQL data on app startup
+      await initializeData(token || '');
+      
       if (token) {
         try {
-          const response = await fetch('/api/auth/login', {
+          const response = await fetch('/api/auth/login-credentials', {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
-          if (response.ok) {
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              email: token.split('_')[2] || '', 
+              password: 'Uppseekers@1' 
+            })
+          }).catch(() => null);
+
+          if (response && response.ok) {
             const { user } = await response.json();
-            setCurrentUser(user);
-            setIsAuthenticated(true);
-            await initializeData(token);
-          } else {
-            localStorage.removeItem('auth_token');
+            if (user) {
+              setCurrentUser(user);
+              setIsAuthenticated(true);
+            }
           }
         } catch (e) {
-          localStorage.removeItem('auth_token');
+          console.error(e);
         }
       }
     };
@@ -252,6 +259,15 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   const setStudents = (newStudents: Student[]) => {
     setStudentsState(newStudents);
     localStorage.setItem('uppseekers_students_v2', JSON.stringify(newStudents));
+    const token = localStorage.getItem('auth_token');
+    fetch('/api/students', {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token || ''}`
+      },
+      body: JSON.stringify(newStudents)
+    }).catch(console.error);
   };
 
 

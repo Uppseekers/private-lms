@@ -106,11 +106,24 @@ export default function TeamSettings() {
           : s
       );
       setStaff(updatedStaff);
+      
+      const member = updatedStaff.find(s => s.id === editingId);
+      if (member) {
+        fetch('/api/staff/create', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+          },
+          body: JSON.stringify(member)
+        }).catch(console.error);
+      }
+      
       addAuditLog(`Updated user ${formName} (Role: ${formRole})`);
     } else {
       const generatedPassword = formPassword || Math.random().toString(36).slice(-8) + Math.floor(Math.random() * 10);
       const newMember: StaffMember = {
-        id: Math.random().toString(),
+        id: `STAFF-${Math.floor(Math.random() * 10000)}`,
         name: formName,
         email: formEmail,
         role: formRole,
@@ -119,6 +132,16 @@ export default function TeamSettings() {
         password: generatedPassword
       };
       setStaff([...staff, newMember]);
+      
+      fetch('/api/staff/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify(newMember)
+      }).catch(console.error);
+
       addAuditLog(`Added new user ${formName} (Role: ${formRole})`);
     }
     

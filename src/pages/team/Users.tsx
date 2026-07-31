@@ -96,7 +96,7 @@ export default function TeamUsers() {
                     <p className="text-xs text-slate-500">{student.phone}</p>
                   </td>
                   <td className="px-6 py-4 text-slate-600 font-medium">{student.intake}</td>
-                  <td className="px-6 py-4 text-slate-600">{student.countries.join(', ')}</td>
+                  <td className="px-6 py-4 text-slate-600">{(student.countries || []).join(', ')}</td>
                   <td className="px-6 py-4 font-bold">
                     <span className={getReadinessColor(student.readiness)}>{getReadinessIcon(student.readiness)} {student.readiness}%</span>
                   </td>
@@ -621,12 +621,30 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
   };
 
     if (formData.sendInvite) {
-      // Simulate sending email
+      // Send student to Cloud SQL DB
+      fetch('/api/students/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify(newStudent)
+      }).catch(console.error);
+
       setShowToast(true);
       setTimeout(() => {
         onSave(newStudent);
-      }, 1500); // Wait a bit so user can see toast
+      }, 1500);
     } else {
+      fetch('/api/students/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
+        },
+        body: JSON.stringify(newStudent)
+      }).catch(console.error);
+
       onSave(newStudent);
     }
   }

@@ -15,10 +15,43 @@ export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const handleCredentialLogin = (e: React.FormEvent) => {
+  const handleCredentialLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError('');
+    setLoading(true);
+
+    try {
+      // Send login request to backend Cloud SQL auth
+      const response = await fetch('/api/auth/login-credentials', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      if (response.ok) {
+        const { user, token } = await response.json();
+        localStorage.setItem('auth_token', token);
+        
+        // Load latest Cloud SQL database
+        await initializeData(token);
+        
+        setCurrentUser(user);
+        setIsAuthenticated(true);
+
+        if (user.role === 'STUDENT') {
+          navigate('/student/dashboard');
+        } else {
+          navigate('/team/dashboard');
+        }
+        return;
+      }
+    } catch (err) {
+      console.error('API login error:', err);
+    } finally {
+      setLoading(false);
+    }
     
-    // Check Staff/Admin
+    // Fallback: Check local memory/localStorage if backend fails
     const staffUser = staff.find(s => {
       const isEmailMatch = s.email === email || (s.email === 'uppseekers@gmail.com' && (email === 'uppseekers@gmail.com' || email === 'uppseekers@gmail.cm'));
       const isPasswordMatch = s.password === password || (s.email === 'uppseekers@gmail.com' && password === 'Uppseekers@1');
@@ -26,15 +59,16 @@ export default function Login() {
     });
     
     if (staffUser) {
+      localStorage.setItem('auth_token', `custom_${staffUser.id}_${staffUser.email}`);
       setCurrentUser(staffUser);
       setIsAuthenticated(true);
       navigate('/team/dashboard');
       return;
     }
     
-    // Check Students
     const studentUser = students.find(s => s.email === email && s.password === password);
     if (studentUser) {
+      localStorage.setItem('auth_token', `custom_${studentUser.id}_${studentUser.email}`);
       setCurrentUser({
         ...studentUser,
         role: 'STUDENT',
@@ -61,7 +95,7 @@ export default function Login() {
       return;
     }
 
-    setError('Invalid credentials');
+    setError('Invalid email or password');
   };
 
   const handleGoogleLogin = async () => {

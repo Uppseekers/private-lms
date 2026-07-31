@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="uppGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4F46E5" />
+      <stop offset="100%" stop-color="#312E81" />
+    </linearGradient>
+    <linearGradient id="arrowGrad" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#818CF8" />
+    </linearGradient>
+  </defs>
+  <!-- Background icon card -->
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#uppGrad)" />
+  <!-- Small stylish upward arrow accent -->
+  <path d="M48 18L40 26H45V34H51V26H56L48 18Z" fill="url(#arrowGrad)" opacity="0.9" />
+  <!-- Text 'Upp' -->
+  <text x="10" y="44" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="800" font-size="22" fill="#FFFFFF" letter-spacing="-0.5">Upp</text>
+</svg>
