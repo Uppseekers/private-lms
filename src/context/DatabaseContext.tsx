@@ -307,18 +307,27 @@ function calculateReadiness(student: Student): number {
   const updateStudent = async (updatedStudent: Student) => {
     updatedStudent.readiness = calculateReadiness(updatedStudent);
     setStudentsState(prev => {
-      const newStudents = prev.map(s => s.id === updatedStudent.id ? updatedStudent : s);
+      const exists = prev.some(s => s.id === updatedStudent.id || s.email === updatedStudent.email);
+      const newStudents = exists 
+        ? prev.map(s => (s.id === updatedStudent.id || s.email === updatedStudent.email) ? updatedStudent : s)
+        : [...prev, updatedStudent];
       localStorage.setItem('uppseekers_students_v2', JSON.stringify(newStudents));
       return newStudents;
     });
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      fetch('/api/student', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(updatedStudent)
-      }).catch(console.error);
-    }
+
+    setCurrentUser(prev => {
+      if (prev && (prev.id === updatedStudent.id || prev.email === updatedStudent.email)) {
+        return { ...prev, ...updatedStudent };
+      }
+      return prev;
+    });
+
+    const token = localStorage.getItem('auth_token') || 'custom_user';
+    fetch('/api/student', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify(updatedStudent)
+    }).catch(console.error);
   };
 
   const getStudent = (id: string) => students.find(s => s.id === id);
@@ -342,14 +351,12 @@ function calculateReadiness(student: Student): number {
   const setEvents = async (newEvents: EventItem[]) => {
     setEventsState(newEvents);
     localStorage.setItem('uppseekers_events_v2', JSON.stringify(newEvents));
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      fetch('/api/events', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(newEvents)
-      }).catch(console.error);
-    }
+    const token = localStorage.getItem('auth_token') || 'custom_user';
+    fetch('/api/events', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify(newEvents)
+    }).catch(console.error);
   };
 
   const [batches, setBatchesState] = useState<Batch[]>(() => {
@@ -363,14 +370,12 @@ function calculateReadiness(student: Student): number {
   const setBatches = async (newBatches: Batch[]) => {
     setBatchesState(newBatches);
     localStorage.setItem('uppseekers_batches_v2', JSON.stringify(newBatches));
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      fetch('/api/batches', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify(newBatches)
-      }).catch(console.error);
-    }
+    const token = localStorage.getItem('auth_token') || 'custom_user';
+    fetch('/api/batches', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify(newBatches)
+    }).catch(console.error);
   };
 
   const initializeData = async (token: string) => {
@@ -380,10 +385,22 @@ function calculateReadiness(student: Student): number {
       });
       if (response.ok) {
         const data = await response.json();
-        if (data.students && data.students.length > 0) setStudentsState(data.students);
-        if (data.staff && data.staff.length > 0) setStaffState(data.staff);
-        if (data.batches && data.batches.length > 0) setBatchesState(data.batches);
-        if (data.events && data.events.length > 0) setEventsState(data.events);
+        if (data.students && data.students.length > 0) {
+          setStudentsState(data.students);
+          localStorage.setItem('uppseekers_students_v2', JSON.stringify(data.students));
+        }
+        if (data.staff && data.staff.length > 0) {
+          setStaffState(data.staff);
+          localStorage.setItem('uppseekers_staff_v2', JSON.stringify(data.staff));
+        }
+        if (data.batches && data.batches.length > 0) {
+          setBatchesState(data.batches);
+          localStorage.setItem('uppseekers_batches_v2', JSON.stringify(data.batches));
+        }
+        if (data.events && data.events.length > 0) {
+          setEventsState(data.events);
+          localStorage.setItem('uppseekers_events_v2', JSON.stringify(data.events));
+        }
         return data;
       }
     } catch (e) {

@@ -104,8 +104,8 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
 
 
 export default function StudentTasks() {
-  const { students, updateStudent } = useDatabase();
-  const student = students[0]; // Assuming logged in as first student
+  const { students, updateStudent, currentUser } = useDatabase();
+  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0] || { id: 'STU-1', name: currentUser?.name || 'Student', tasks: [], activities: [] };
   const tasks = student.tasks || [];
   
   const [viewMode, setViewMode] = useState<'board' | 'list'>('board');

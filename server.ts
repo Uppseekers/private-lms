@@ -335,23 +335,23 @@ async function startServer() {
     try {
       const events = req.body;
       await db.delete(eventsData);
-      if (events.length > 0) {
+      if (events && events.length > 0) {
         await db.insert(eventsData).values(events.map((e: any) => ({
-          id: e.id,
+          id: e.id || `EVT-${Math.floor(Math.random() * 100000)}`,
           title: e.title || '',
-          date: e.date || '',
-          type: e.type || e.stream || 'Other',
+          date: e.day || e.date || '',
+          type: e.stream || e.type || 'Counselling',
           category: e.category || '',
-          attendees: e.attendees || e.students || '',
-          status: e.status || '',
-          link: e.link || '',
+          attendees: typeof e.students === 'string' ? e.students : (e.attendees || ''),
+          status: e.status || 'Scheduled',
+          link: e.location || e.link || '',
           time: e.time || '',
-          duration: e.duration || '',
+          duration: e.duration || '1 hr',
         })));
       }
       res.json({ success: true });
     } catch (e) {
-      console.error(e);
+      console.error('Error saving events:', e);
       res.status(500).json({ error: "Failed to update events" });
     }
   });
@@ -404,9 +404,13 @@ async function startServer() {
       const events = rawEvents.map(e => ({
         ...e,
         stream: e.type,
+        type: e.type,
         location: e.link,
+        link: e.link,
         students: e.attendees,
+        attendees: e.attendees,
         day: e.date,
+        date: e.date,
       }));
 
       res.json({ students, staff, batches, events });

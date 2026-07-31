@@ -107,16 +107,19 @@ export default function TeamScheduler() {
     const newEvents = occurrences.map((dateStr, idx) => ({
       id: baseId + '-' + idx,
       day: dateStr,
-      time: formData.startTime,
+      date: dateStr,
+      time: formData.startTime + (formData.endTime ? ` - ${formData.endTime}` : ''),
       duration: duration,
       stream: formData.stream,
+      type: formData.stream,
       title: formData.title,
       batch: audienceType === 'batch' ? selectedBatchId : undefined,
-      students: audienceType === 'batch' ? (batches.find(b => b.id === selectedBatchId)?.name || 'Batch') : studentSearch,
-      location: formData.location || 'Google Meet',
+      students: audienceType === 'batch' ? (batches.find(b => b.id === selectedBatchId)?.name || 'Batch') : (studentSearch || 'All'),
+      location: formData.location || 'https://meet.google.com',
+      link: formData.location || 'https://meet.google.com',
       notes: formData.notes,
       assignments: formData.assignments,
-      host: currentUser.name,
+      host: currentUser.name || 'Team Counselor',
     }));
     
     setEvents([...events, ...newEvents]);
@@ -388,7 +391,18 @@ export default function TeamScheduler() {
                 </div>
                 
                 <div className="flex md:flex-col items-center md:items-end gap-3 shrink-0 pt-2">
-                  <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white w-full shadow-sm">
+                  <Button 
+                    size="sm" 
+                    onClick={() => {
+                      const link = evt.location || evt.link;
+                      if (link) {
+                        window.open(link.startsWith('http') ? link : `https://${link}`, '_blank');
+                      } else {
+                        alert('No meeting link available');
+                      }
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white w-full shadow-sm"
+                  >
                     <Video className="w-4 h-4 mr-2" /> Join
                   </Button>
                   <div className="flex gap-2">

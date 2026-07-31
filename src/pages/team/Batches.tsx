@@ -330,9 +330,20 @@ export default function Batches() {
                         <UserPlus className="w-4 h-4 mr-2" />
                         Add Students
                       </Button>
-                      <Button variant="outline" size="sm" className="bg-white border-slate-200 hover:bg-slate-50 hover:text-indigo-600">
+                      <Button 
+                        variant="outline" 
+                        size="sm" 
+                        onClick={() => {
+                          if (batch.meetingLink) {
+                            window.open(batch.meetingLink.startsWith('http') ? batch.meetingLink : `https://${batch.meetingLink}`, '_blank');
+                          } else {
+                            alert('No meeting link set for this batch.');
+                          }
+                        }}
+                        className="bg-white border-slate-200 hover:bg-slate-50 hover:text-indigo-600"
+                      >
                         <Video className="w-4 h-4 mr-2" />
-                        Meeting Link
+                        Join Class
                       </Button>
                       <Button variant="outline" size="sm" onClick={() => openEditModal(batch)} className="bg-white border-slate-200 hover:bg-slate-50 hover:text-indigo-600">
                         Edit

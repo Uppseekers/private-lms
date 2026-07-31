@@ -108,18 +108,32 @@ export default function StudentSchedule() {
   const streams = ['All Streams', 'Counselling', 'SAT Prep', 'Research Mentoring'];
 
   // Calculate actual events for this student
-  const studentBatches = batches.filter(b => b.students?.includes(student?.id));
-  const studentEvents = events.filter(e => studentBatches.some(b => b.id === e.batch) || e.students?.includes(student?.id));
+  const studentBatches = batches.filter(b => b.students?.includes(student?.id) || b.students?.includes(student?.name));
+  
+  const formattedEvents = events.map((e: any) => ({
+    ...e,
+    id: e.id,
+    type: e.stream || e.type || 'Counselling',
+    title: e.title || 'Scheduled Session',
+    date: e.day || e.date || 'Today',
+    time: e.time || '4:00 PM - 5:00 PM',
+    staff: e.staff || { name: e.host || 'Counselor', role: 'Counselor', avatar: (e.host || 'CU').slice(0, 2).toUpperCase() },
+    meetingReady: true,
+    link: e.location || e.link || 'https://meet.google.com',
+    location: e.location || e.link || 'https://meet.google.com'
+  }));
 
-  const upcomingClasses = studentEvents.filter(e => e.status !== 'Completed' && e.status !== 'Canceled');
-  const pastClasses = studentEvents.filter(e => e.status === 'Completed');
-  const canceledClasses = studentEvents.filter(e => e.status === 'Canceled');
+  const allClasses = formattedEvents.length > 0 ? formattedEvents : upcomingClasses.map(c => ({ ...c, link: 'https://meet.google.com', location: 'https://meet.google.com' }));
 
-  const displayedClasses = horizon === 'upcoming' ? upcomingClasses : (horizon === 'past' ? pastClasses : canceledClasses);
+  const upcomingClassesFiltered = allClasses.filter(e => e.status !== 'Completed' && e.status !== 'Canceled');
+  const pastClassesFiltered = allClasses.filter(e => e.status === 'Completed');
+  const canceledClassesFiltered = allClasses.filter(e => e.status === 'Canceled');
+
+  const displayedClasses = horizon === 'upcoming' ? upcomingClassesFiltered : (horizon === 'past' ? pastClassesFiltered : canceledClassesFiltered);
 
   const filteredClasses = displayedClasses.filter(c => activeStream === 'All Streams' || c.type === activeStream);
 
-  if (studentEvents.length === 0) {
+  if (allClasses.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-4">
         <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
@@ -253,13 +267,14 @@ export default function StudentSchedule() {
                       )}
                       <Button 
                         size="sm" 
-                        disabled={!cls.meetingReady}
-                        className={cn(
-                          cls.meetingReady ? "bg-blue-600 hover:bg-blue-700 text-white" : "bg-slate-100 text-slate-400"
-                        )}
+                        onClick={() => {
+                          const meetingUrl = cls.location || cls.link || 'https://meet.google.com';
+                          window.open(meetingUrl.startsWith('http') ? meetingUrl : `https://${meetingUrl}`, '_blank');
+                        }}
+                        className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
                       >
                         <Video className="w-4 h-4 mr-2" />
-                        {cls.meetingReady ? 'Join Meeting' : 'Link available 10m prior'}
+                        Join Meeting
                       </Button>
                     </div>
                   )}
