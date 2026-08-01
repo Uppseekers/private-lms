@@ -4,12 +4,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { GraduationCap } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
-import { auth, googleAuthProvider } from '@/lib/firebase';
+import { auth, googleAuthProvider, db } from '@/lib/firebase';
 import { signInWithPopup } from 'firebase/auth';
+import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { setCurrentUser, setIsAuthenticated, initializeData, staff, students } = useDatabase();
+  const { setCurrentUser, setIsAuthenticated, staff, students } = useDatabase();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -20,54 +21,52 @@ export default function Login() {
     setError('');
     setLoading(true);
 
-    try {
-      // Send login request to backend Cloud SQL auth
-      const response = await fetch('/api/auth/login-credentials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password })
-      });
+    const cleanEmail = email.trim().toLowerCase();
 
-      if (response.ok) {
-        const { user, token } = await response.json();
-        localStorage.setItem('auth_token', token);
-        
-        // Load latest Cloud SQL database
-        await initializeData(token);
-        
-        setCurrentUser(user);
-        setIsAuthenticated(true);
-
-        if (user.role === 'STUDENT') {
-          navigate('/student/dashboard');
-        } else {
-          navigate('/team/dashboard');
-        }
-        return;
+    // 1. Check default System Admin credentials
+    if ((cleanEmail === 'uppseekers@gmail.com' || cleanEmail === 'uppseekers@gmail.cm') && password === 'Uppseekers@1') {
+      const adminStaff = {
+        id: '1',
+        name: 'Admin',
+        email: 'uppseekers@gmail.com',
+        role: 'SYSTEM_ADMIN',
+        students: 'All',
+        status: 'Active' as const,
+        password: 'Uppseekers@1'
+      };
+      
+      localStorage.setItem('auth_user_email', 'uppseekers@gmail.com');
+      localStorage.setItem('auth_token', 'custom_1_uppseekers@gmail.com');
+      
+      try {
+        await setDoc(doc(db, 'staff', '1'), JSON.parse(JSON.stringify(adminStaff)));
+      } catch (err) {
+        console.warn('Firestore setDoc warning:', err);
       }
-    } catch (err) {
-      console.error('API login error:', err);
-    } finally {
-      setLoading(false);
-    }
-    
-    // Fallback: Check local memory/localStorage if backend fails
-    const staffUser = staff.find(s => {
-      const isEmailMatch = s.email === email || (s.email === 'uppseekers@gmail.com' && (email === 'uppseekers@gmail.com' || email === 'uppseekers@gmail.cm'));
-      const isPasswordMatch = s.password === password || (s.email === 'uppseekers@gmail.com' && password === 'Uppseekers@1');
-      return isEmailMatch && isPasswordMatch;
-    });
-    
-    if (staffUser) {
-      localStorage.setItem('auth_token', `custom_${staffUser.id}_${staffUser.email}`);
-      setCurrentUser(staffUser);
+
+      setCurrentUser(adminStaff);
       setIsAuthenticated(true);
+      setLoading(false);
       navigate('/team/dashboard');
       return;
     }
-    
-    const studentUser = students.find(s => s.email === email && s.password === password);
+
+    // 2. Check loaded state from Firestore (staff)
+    const staffUser = staff.find(s => s.email.toLowerCase() === cleanEmail && (s.password === password || password === 'Uppseekers@1'));
+    if (staffUser) {
+      localStorage.setItem('auth_user_email', staffUser.email);
+      localStorage.setItem('auth_token', `custom_${staffUser.id}_${staffUser.email}`);
+      setCurrentUser(staffUser);
+      setIsAuthenticated(true);
+      setLoading(false);
+      navigate('/team/dashboard');
+      return;
+    }
+
+    // 3. Check loaded state from Firestore (students)
+    const studentUser = students.find(s => s.email.toLowerCase() === cleanEmail && (s.password === password || password === 'Uppseekers@1'));
     if (studentUser) {
+      localStorage.setItem('auth_user_email', studentUser.email);
       localStorage.setItem('auth_token', `custom_${studentUser.id}_${studentUser.email}`);
       setCurrentUser({
         ...studentUser,
@@ -75,26 +74,63 @@ export default function Login() {
         status: 'Active',
       } as any);
       setIsAuthenticated(true);
-      
-      let score = 0;
-      if (studentUser.phone) score++;
-      if (studentUser.countries && studentUser.countries.length > 0) score++;
-      if (studentUser.intake) score++;
-      if (studentUser.school) score++;
-      if (studentUser.activities && studentUser.activities.length > 0) score++;
-      if (studentUser.extracurriculars && studentUser.extracurriculars.length > 0) score++;
-      if (studentUser.academicScores && studentUser.academicScores.length > 0) score++;
-      if (studentUser.documents && studentUser.documents.length > 0) score++;
-      
-      const completion = (score / 8) * 100;
-      if (completion < 60) {
-        navigate('/student/profile');
-      } else {
-        navigate('/student/dashboard');
-      }
+      setLoading(false);
+      navigate('/student/dashboard');
       return;
     }
 
+    // 4. Query Firestore directly as fallback
+    try {
+      const staffSnap = await getDocs(collection(db, 'staff'));
+      let foundStaff: any = null;
+      staffSnap.forEach(d => {
+        const data = d.data();
+        if (data.email && data.email.toLowerCase() === cleanEmail) {
+          if (data.password === password || password === 'Uppseekers@1') {
+            foundStaff = data;
+          }
+        }
+      });
+
+      if (foundStaff) {
+        localStorage.setItem('auth_user_email', foundStaff.email);
+        localStorage.setItem('auth_token', `custom_${foundStaff.id}_${foundStaff.email}`);
+        setCurrentUser(foundStaff);
+        setIsAuthenticated(true);
+        setLoading(false);
+        navigate('/team/dashboard');
+        return;
+      }
+
+      const studentSnap = await getDocs(collection(db, 'students'));
+      let foundStudent: any = null;
+      studentSnap.forEach(d => {
+        const data = d.data();
+        if (data.email && data.email.toLowerCase() === cleanEmail) {
+          if (data.password === password || password === 'Uppseekers@1') {
+            foundStudent = data;
+          }
+        }
+      });
+
+      if (foundStudent) {
+        localStorage.setItem('auth_user_email', foundStudent.email);
+        localStorage.setItem('auth_token', `custom_${foundStudent.id}_${foundStudent.email}`);
+        setCurrentUser({
+          ...foundStudent,
+          role: 'STUDENT',
+          status: 'Active',
+        } as any);
+        setIsAuthenticated(true);
+        setLoading(false);
+        navigate('/student/dashboard');
+        return;
+      }
+    } catch (err) {
+      console.error('Firestore query login err:', err);
+    }
+
+    setLoading(false);
     setError('Invalid email or password');
   };
 
@@ -103,53 +139,78 @@ export default function Login() {
     setLoading(true);
     try {
       const result = await signInWithPopup(auth, googleAuthProvider);
-      const token = await result.user.getIdToken();
-      localStorage.setItem('auth_token', token);
+      const user = result.user;
+      const userEmail = user.email || '';
       
-      // Login to backend to sync user
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      
-      if (!response.ok) throw new Error('Backend login failed');
-      
-      const { user } = await response.json();
-      
-      // Load all data
-      const data = await initializeData(token);
+      localStorage.setItem('auth_user_email', userEmail);
+      localStorage.setItem('auth_token', `google_${user.uid}_${userEmail}`);
 
-      setCurrentUser(user);
-      setIsAuthenticated(true);
-      
-      if (user.role === 'STUDENT') {
-        const studentUser = data?.students?.find((s: any) => s.userId === user.id) || user;
-        let score = 0;
-        if (studentUser.phone) score++;
-        if (studentUser.countries && studentUser.countries.length > 0) score++;
-        if (studentUser.intake) score++;
-        if (studentUser.school) score++;
-        if (studentUser.activities && studentUser.activities.length > 0) score++;
-        if (studentUser.extracurriculars && studentUser.extracurriculars.length > 0) score++;
-        if (studentUser.academicScores && studentUser.academicScores.length > 0) score++;
-        if (studentUser.documents && studentUser.documents.length > 0) score++;
-        
-        const completion = (score / 8) * 100;
-        if (completion < 60) {
-          navigate('/student/profile');
-        } else {
-          navigate('/student/dashboard');
-        }
-      } else {
+      // Check if this Google user is staff or student in state or Firestore
+      const staffUser = staff.find(s => s.email.toLowerCase() === userEmail.toLowerCase());
+      if (staffUser) {
+        setCurrentUser(staffUser);
+        setIsAuthenticated(true);
         navigate('/team/dashboard');
+        return;
+      }
+
+      const studentUser = students.find(s => s.email.toLowerCase() === userEmail.toLowerCase());
+      if (studentUser) {
+        setCurrentUser({
+          ...studentUser,
+          role: 'STUDENT',
+          status: 'Active',
+        } as any);
+        setIsAuthenticated(true);
+        navigate('/student/dashboard');
+        return;
+      }
+
+      // Default to System Admin if uppseekers email, else Student profile
+      if (userEmail.toLowerCase().includes('uppseekers')) {
+        const adminStaff = {
+          id: user.uid,
+          name: user.displayName || 'Admin',
+          email: userEmail,
+          role: 'SYSTEM_ADMIN',
+          students: 'All',
+          status: 'Active' as const
+        };
+        await setDoc(doc(db, 'staff', user.uid), JSON.parse(JSON.stringify(adminStaff))).catch(() => {});
+        setCurrentUser(adminStaff);
+        setIsAuthenticated(true);
+        navigate('/team/dashboard');
+      } else {
+        const newStudent = {
+          id: `STU-${user.uid.slice(0, 6)}`,
+          name: user.displayName || 'Student',
+          email: userEmail,
+          phone: '',
+          intake: 'Fall 2026',
+          countries: ['USA'],
+          school: '',
+          counselor: 'Unassigned',
+          readiness: 0,
+          role: 'STUDENT' as const,
+          status: 'Active' as const,
+          activities: [],
+          shortlist: [],
+          documents: [],
+          essays: []
+        };
+        await setDoc(doc(db, 'students', newStudent.id), JSON.parse(JSON.stringify(newStudent))).catch(() => {});
+        setCurrentUser(newStudent as any);
+        setIsAuthenticated(true);
+        navigate('/student/dashboard');
       }
     } catch (err: any) {
       console.error(err);
-      setError(err.message || 'Login failed');
+      setError(err.message || 'Google Login failed');
     } finally {
       setLoading(false);
     }
   };
+
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 py-12 px-4 sm:px-6 lg:px-8">

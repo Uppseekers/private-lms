@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Student, StaffMember } from '@/types';
+import { Student, StaffMember, Batch } from '@/types';
+import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | null;
 
@@ -157,8 +159,6 @@ const initialStaff: StaffMember[] = [
   { id: '1', name: 'Admin', email: 'uppseekers@gmail.com', role: 'SYSTEM_ADMIN', students: 'All', status: 'Active', password: 'Uppseekers@1' }
 ];
 
-import { Batch } from '@/types';
-
 const initialBatches: Batch[] = [];
 
 
@@ -225,40 +225,184 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
 
   useEffect(() => {
-    const checkAuth = async () => {
-      const token = localStorage.getItem('auth_token');
-      // Always fetch latest Cloud SQL data on app startup
-      await initializeData(token || '');
-      
-      if (token) {
-        try {
-          const response = await fetch('/api/auth/login-credentials', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              email: token.split('_')[2] || '', 
-              password: 'Uppseekers@1' 
-            })
-          }).catch(() => null);
-
-          if (response && response.ok) {
-            const { user } = await response.json();
-            if (user) {
-              setCurrentUser(user);
-              setIsAuthenticated(true);
-            }
+    // 1. Listen for Students from Firestore
+    const unsubStudents = onSnapshot(collection(db, 'students'), async (snapshot) => {
+      if (!snapshot.empty) {
+        const loaded: Student[] = [];
+        snapshot.forEach(docSnap => loaded.push(docSnap.data() as Student));
+        setStudentsState(loaded);
+        localStorage.setItem('uppseekers_students_v2', JSON.stringify(loaded));
+      } else {
+        const defaultStudents: Student[] = [
+          {
+            id: 'STU-101',
+            name: 'Aarav Sharma',
+            email: 'aarav.sharma@example.com',
+            phone: '+91 9876543210',
+            intake: 'Fall 2026',
+            school: 'Delhi Public School',
+            counselor: 'Admin',
+            readiness: 75,
+            countries: ['USA', 'UK'],
+            password: 'Student@123',
+            activities: [],
+            shortlist: [],
+            documents: [],
+            essays: []
+          },
+          {
+            id: 'STU-102',
+            name: 'Ananya Iyer',
+            email: 'ananya.iyer@example.com',
+            phone: '+91 9812345678',
+            intake: 'Fall 2026',
+            school: 'The Doon School',
+            counselor: 'Admin',
+            readiness: 50,
+            countries: ['USA', 'Canada'],
+            password: 'Student@123',
+            activities: [],
+            shortlist: [],
+            documents: [],
+            essays: []
           }
-        } catch (e) {
-          console.error(e);
+        ];
+        for (const s of defaultStudents) {
+          try {
+            await setDoc(doc(db, 'students', s.id), JSON.parse(JSON.stringify(s)));
+          } catch (e) {
+            console.error('Error seeding student:', e);
+          }
         }
       }
+    }, (err) => console.warn('Firestore students error:', err));
+
+    // 2. Listen for Staff from Firestore
+    const unsubStaff = onSnapshot(collection(db, 'staff'), async (snapshot) => {
+      if (!snapshot.empty) {
+        const loaded: StaffMember[] = [];
+        snapshot.forEach(docSnap => loaded.push(docSnap.data() as StaffMember));
+        setStaffState(loaded);
+        localStorage.setItem('uppseekers_staff_v2', JSON.stringify(loaded));
+      } else {
+        const defaultStaff: StaffMember[] = [
+          {
+            id: '1',
+            name: 'Admin',
+            email: 'uppseekers@gmail.com',
+            role: 'SYSTEM_ADMIN',
+            students: 'All',
+            status: 'Active',
+            password: 'Uppseekers@1'
+          },
+          {
+            id: '2',
+            name: 'Sarah Jenkins',
+            email: 'sarah@uppseekers.com',
+            role: 'COUNSELOR',
+            students: '12 Students',
+            status: 'Active',
+            password: 'Staff@123'
+          }
+        ];
+        for (const st of defaultStaff) {
+          try {
+            await setDoc(doc(db, 'staff', st.id), JSON.parse(JSON.stringify(st)));
+          } catch (e) {
+            console.error('Error seeding staff:', e);
+          }
+        }
+      }
+    }, (err) => console.warn('Firestore staff error:', err));
+
+    // 3. Listen for Batches from Firestore
+    const unsubBatches = onSnapshot(collection(db, 'batches'), async (snapshot) => {
+      if (!snapshot.empty) {
+        const loaded: Batch[] = [];
+        snapshot.forEach(docSnap => loaded.push(docSnap.data() as Batch));
+        setBatchesState(loaded);
+        localStorage.setItem('uppseekers_batches_v2', JSON.stringify(loaded));
+      } else {
+        const defaultBatches: Batch[] = [
+          {
+            id: 'BATCH-2026-A',
+            name: 'Fall 2026 Ivy Cohort A',
+            type: 'Master Batch',
+            mentors: ['Sarah Jenkins'],
+            meetingLink: 'https://zoom.us/j/123456789',
+            status: 'Active',
+            capacity: 20,
+            students: ['STU-101', 'STU-102']
+          }
+        ];
+        for (const b of defaultBatches) {
+          try {
+            await setDoc(doc(db, 'batches', b.id), JSON.parse(JSON.stringify(b)));
+          } catch (e) {
+            console.error('Error seeding batch:', e);
+          }
+        }
+      }
+    }, (err) => console.warn('Firestore batches error:', err));
+
+    // 4. Listen for Events from Firestore
+    const unsubEvents = onSnapshot(collection(db, 'events'), async (snapshot) => {
+      if (!snapshot.empty) {
+        const loaded: EventItem[] = [];
+        snapshot.forEach(docSnap => loaded.push(docSnap.data() as EventItem));
+        setEventsState(loaded);
+        localStorage.setItem('uppseekers_events_v2', JSON.stringify(loaded));
+      } else {
+        const defaultEvents: EventItem[] = [
+          {
+            id: 'EVT-01',
+            title: 'SAT Math Practice Test & Review',
+            day: 'Monday',
+            time: '17:00',
+            duration: '2 hrs',
+            stream: 'SAT Prep',
+            students: '15 Students',
+            location: 'Zoom Room Alpha'
+          }
+        ];
+        for (const ev of defaultEvents) {
+          try {
+            await setDoc(doc(db, 'events', ev.id), JSON.parse(JSON.stringify(ev)));
+          } catch (e) {
+            console.error('Error seeding event:', e);
+          }
+        }
+      }
+    }, (err) => console.warn('Firestore events error:', err));
+
+    const checkAuth = async () => {
+      const token = localStorage.getItem('auth_token');
+      const savedEmail = localStorage.getItem('auth_user_email');
+      
+      if (savedEmail || token) {
+        setIsAuthenticated(true);
+      }
+      
+      await initializeData(token || '');
     };
     checkAuth();
+
+    return () => {
+      unsubStudents();
+      unsubStaff();
+      unsubBatches();
+      unsubEvents();
+    };
   }, []);
 
   const setStudents = (newStudents: Student[]) => {
     setStudentsState(newStudents);
     localStorage.setItem('uppseekers_students_v2', JSON.stringify(newStudents));
+    newStudents.forEach(s => {
+      if (s.id) {
+        setDoc(doc(db, 'students', s.id), JSON.parse(JSON.stringify(s))).catch(console.error);
+      }
+    });
     const token = localStorage.getItem('auth_token');
     fetch('/api/students', {
       method: 'POST',
@@ -322,6 +466,10 @@ function calculateReadiness(student: Student): number {
       return prev;
     });
 
+    if (updatedStudent.id) {
+      setDoc(doc(db, 'students', updatedStudent.id), JSON.parse(JSON.stringify(updatedStudent))).catch(console.error);
+    }
+
     const token = localStorage.getItem('auth_token') || 'custom_user';
     fetch('/api/student', {
       method: 'PUT',
@@ -335,6 +483,11 @@ function calculateReadiness(student: Student): number {
   const setStaff = (newStaff: StaffMember[]) => {
     setStaffState(newStaff);
     localStorage.setItem('uppseekers_staff_v2', JSON.stringify(newStaff));
+    newStaff.forEach(s => {
+      if (s.id) {
+        setDoc(doc(db, 'staff', s.id), JSON.parse(JSON.stringify(s))).catch(console.error);
+      }
+    });
   };
   
   const setPermissionsMatrix = (matrix: Record<string, PermissionCategory[]>) => {
@@ -351,6 +504,11 @@ function calculateReadiness(student: Student): number {
   const setEvents = async (newEvents: EventItem[]) => {
     setEventsState(newEvents);
     localStorage.setItem('uppseekers_events_v2', JSON.stringify(newEvents));
+    newEvents.forEach(e => {
+      if (e.id) {
+        setDoc(doc(db, 'events', e.id), JSON.parse(JSON.stringify(e))).catch(console.error);
+      }
+    });
     const token = localStorage.getItem('auth_token') || 'custom_user';
     fetch('/api/events', {
       method: 'POST',
@@ -370,6 +528,11 @@ function calculateReadiness(student: Student): number {
   const setBatches = async (newBatches: Batch[]) => {
     setBatchesState(newBatches);
     localStorage.setItem('uppseekers_batches_v2', JSON.stringify(newBatches));
+    newBatches.forEach(b => {
+      if (b.id) {
+        setDoc(doc(db, 'batches', b.id), JSON.parse(JSON.stringify(b))).catch(console.error);
+      }
+    });
     const token = localStorage.getItem('auth_token') || 'custom_user';
     fetch('/api/batches', {
       method: 'POST',
@@ -377,6 +540,7 @@ function calculateReadiness(student: Student): number {
       body: JSON.stringify(newBatches)
     }).catch(console.error);
   };
+
 
   const initializeData = async (token: string) => {
     try {
