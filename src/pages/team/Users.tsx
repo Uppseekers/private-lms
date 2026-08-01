@@ -256,8 +256,56 @@ const mockRequiredDocsList = [
   { id: 'doc12', name: 'Financial Bank Statement / Affidavit' }
 ];
 
+const topUniversities = [
+  'Harvard University',
+  'Stanford University',
+  'Massachusetts Institute of Technology (MIT)',
+  'Princeton University',
+  'Yale University',
+  'Columbia University',
+  'University of Pennsylvania (UPenn)',
+  'Cornell University',
+  'Brown University',
+  'Dartmouth College',
+  'University of Chicago',
+  'Northwestern University',
+  'Johns Hopkins University',
+  'Duke University',
+  'Vanderbilt University',
+  'Rice University',
+  'Washington University in St. Louis',
+  'University of Notre Dame',
+  'Emory University',
+  'Georgetown University',
+  'Carnegie Mellon University',
+  'New York University (NYU)',
+  'University of California, Berkeley (UC Berkeley)',
+  'University of California, Los Angeles (UCLA)',
+  'University of Michigan - Ann Arbor',
+  'University of Virginia (UVA)',
+  'University of North Carolina at Chapel Hill',
+  'University of Texas at Austin',
+  'Georgia Institute of Technology (Georgia Tech)',
+  'University of Washington',
+  'Purdue University',
+  'Arizona State University (ASU)',
+  'University of Oxford',
+  'University of Cambridge',
+  'Imperial College London',
+  'London School of Economics (LSE)',
+  'University College London (UCL)',
+  'University of Toronto',
+  'University of British Columbia (UBC)',
+  'McGill University',
+  'National University of Singapore (NUS)',
+  'Nanyang Technological University (NTU)',
+  'University of Melbourne',
+  'University of Sydney'
+];
+
 function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [showUniSuggestions, setShowUniSuggestions] = useState(false);
   const [formData, setFormData] = useState<{
     name: string;
     category: 'Reach' | 'Target' | 'Safety';
@@ -275,6 +323,10 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
     portalLink: '',
     requiredDocs: []
   });
+
+  const matchingUniversities = formData.name.trim() 
+    ? topUniversities.filter(u => u.toLowerCase().includes(formData.name.toLowerCase()))
+    : topUniversities.slice(0, 8);
   
   const handleAdd = () => {
     if (!formData.name.trim()) return;
@@ -438,15 +490,41 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
             <div className="p-4 sm:p-6 space-y-8 flex-1 overflow-y-auto">
               {/* Basic Info */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">University Name</label>
+                <div className="relative">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">University Name (Auto-Prompt)</label>
                   <input 
                     type="text" 
                     value={formData.name}
-                    onChange={(e) => setFormData({...formData, name: e.target.value})}
-                    placeholder="e.g. Columbia University" 
+                    onChange={(e) => {
+                      setFormData({...formData, name: e.target.value});
+                      setShowUniSuggestions(true);
+                    }}
+                    onFocus={() => setShowUniSuggestions(true)}
+                    placeholder="Type or select university name..." 
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900" 
                   />
+                  {showUniSuggestions && matchingUniversities.length > 0 && (
+                    <div className="absolute z-30 left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-xl shadow-xl max-h-48 overflow-y-auto divide-y divide-slate-100">
+                      {matchingUniversities.map((uniName) => (
+                        <button
+                          key={uniName}
+                          type="button"
+                          onClick={() => {
+                            setFormData({
+                              ...formData,
+                              name: uniName,
+                              portalLink: formData.portalLink || 'https://commonapp.org'
+                            });
+                            setShowUniSuggestions(false);
+                          }}
+                          className="w-full text-left px-4 py-2 text-xs font-semibold text-slate-800 hover:bg-blue-50 hover:text-blue-700 flex items-center justify-between"
+                        >
+                          <span>{uniName}</span>
+                          <span className="text-[10px] text-slate-400 font-normal">Select</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Target Category</label>
@@ -709,12 +787,15 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Academic Targets & Preferences</h3>
            <div className="grid grid-cols-2 gap-6">
              <div className="col-span-2 sm:col-span-1">
-               <label className="block text-sm font-bold text-slate-700 mb-1.5">Target Intake Term</label>
+               <label className="block text-sm font-bold text-slate-700 mb-1.5">Target Intake Term (Next 8 Years)</label>
                <select value={formData.intake} onChange={e => setFormData({...formData, intake: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
                  <option value="">Select Target Intake</option>
-                 <option>Fall 2026</option>
-                 <option>Spring 2027</option>
-                 <option>Fall 2027</option>
+                 {Array.from({ length: 9 }, (_, i) => 2026 + i).flatMap(yr => [
+                   <option key={`Fall ${yr}`} value={`Fall ${yr}`}>Fall {yr}</option>,
+                   <option key={`Spring ${yr}`} value={`Spring ${yr}`}>Spring {yr}</option>,
+                   <option key={`Summer ${yr}`} value={`Summer ${yr}`}>Summer {yr}</option>,
+                   <option key={`Winter ${yr}`} value={`Winter ${yr}`}>Winter {yr}</option>
+                 ])}
                </select>
              </div>
              <div className="col-span-2 sm:col-span-1">

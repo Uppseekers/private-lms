@@ -2,7 +2,7 @@ import { useDatabase } from '@/context/DatabaseContext';
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, Upload, Plus, ShieldCheck, Clock, FileText, AlertCircle } from 'lucide-react';
+import { CheckCircle2, Upload, Plus, ShieldCheck, Clock, FileText, AlertCircle, Trash2, Edit3, X } from 'lucide-react';
 
 // Reusable components
 const Label = ({ children }: { children: React.ReactNode }) => (
@@ -27,7 +27,7 @@ const Select = ({ label, options, ...props }: any) => (
       className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"
       {...props}
     >
-      <option value="" disabled>Select...</option>
+      <option value="">Select...</option>
       {options.map((opt: string) => <option key={opt} value={opt}>{opt}</option>)}
     </select>
   </div>
@@ -55,23 +55,90 @@ const Section = ({ title, children, description }: any) => (
   </Card>
 );
 
+// Generate intake year options (current year + next 8 years)
+const currentYear = new Date().getFullYear();
+const intakeYears = Array.from({ length: 9 }, (_, i) => (currentYear + i).toString());
+const intakeTerms = ['Fall', 'Spring', 'Summer', 'Winter'];
+const fullIntakeOptions = intakeYears.flatMap(yr => intakeTerms.map(term => `${term} ${yr}`));
+
 export default function StudentProfile() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
-  const { updateStudent } = useDatabase();
-
-  const { currentUser } = useDatabase();
+  const { updateStudent, currentUser } = useDatabase();
   const student = currentUser as any;
 
-  const [activities, setActivities] = useState(student?.activities || []);
-  const [honors, setHonors] = useState(student?.extracurriculars || []);
+  // Split intake into term and year if present
+  const initialIntakeParts = (student?.intake || '').split(' ');
+  const [intakeTerm, setIntakeTerm] = useState<string>(initialIntakeParts[0] && intakeTerms.includes(initialIntakeParts[0]) ? initialIntakeParts[0] : 'Fall');
+  const [intakeYear, setIntakeYear] = useState<string>(initialIntakeParts[1] || currentYear.toString());
+
+  const [activities, setActivities] = useState<any[]>(student?.activities || []);
+  const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
+  const [editingActivityIdx, setEditingActivityIdx] = useState<number | null>(null);
+  
+  // Activity form state
+  const [actTitle, setActTitle] = useState('');
+  const [actCategory, setActCategory] = useState('Leadership & STEM');
+  const [actOrg, setActOrg] = useState('');
+  const [actDesc, setActDesc] = useState('');
+  const [actYears, setActYears] = useState('11th, 12th Grade');
+
+  const openAddActivityModal = () => {
+    if (activities.length >= 10) return;
+    setEditingActivityIdx(null);
+    setActTitle('');
+    setActCategory('Leadership & STEM');
+    setActOrg('');
+    setActDesc('');
+    setActYears('11th, 12th Grade');
+    setIsActivityModalOpen(true);
+  };
+
+  const openEditActivityModal = (idx: number) => {
+    const act = activities[idx];
+    setEditingActivityIdx(idx);
+    setActTitle(act.title || act.description || '');
+    setActCategory(act.category || act.role || 'Leadership & STEM');
+    setActOrg(act.organization || '');
+    setActDesc(act.description || '');
+    setActYears(act.date || act.years || '11th, 12th Grade');
+    setIsActivityModalOpen(true);
+  };
+
+  const handleSaveActivity = () => {
+    if (!actTitle.trim()) return;
+    const newAct = {
+      id: editingActivityIdx !== null ? activities[editingActivityIdx].id : 'act_' + Date.now(),
+      title: actTitle.trim(),
+      category: actCategory,
+      organization: actOrg.trim(),
+      description: actDesc.trim(),
+      date: actYears,
+      role: actCategory
+    };
+
+    if (editingActivityIdx !== null) {
+      const updated = [...activities];
+      updated[editingActivityIdx] = newAct;
+      setActivities(updated);
+    } else {
+      if (activities.length < 10) {
+        setActivities([...activities, newAct]);
+      }
+    }
+    setIsActivityModalOpen(false);
+  };
+
+  const handleRemoveActivity = (idx: number) => {
+    setActivities(activities.filter((_, i) => i !== idx));
+  };
 
   let score = 0;
   if (student?.phone) score++;
   if (student?.countries && student?.countries.length > 0) score++;
   if (student?.intake) score++;
   if (student?.school) score++;
-  if (student?.activities && student?.activities.length > 0) score++;
+  if (activities.length > 0) score++;
   if (student?.extracurriculars && student?.extracurriculars.length > 0) score++;
   if (student?.academicScores && student?.academicScores.length > 0) score++;
   if (student?.documents && student?.documents.length > 0) score++;
@@ -83,13 +150,31 @@ export default function StudentProfile() {
       e.preventDefault();
       setIsSaving(true);
       const fd = new FormData(e.target);
+      const combinedIntake = `${intakeTerm} ${intakeYear}`;
       const updated = {
         ...student,
-        name: fd.get('name') || student?.name,
-        phone: fd.get('phone') || student?.phone,
-        countries: fd.get('countries') ? [fd.get('countries')] : student?.countries,
-        intake: fd.get('intake') || student?.intake,
-        school: fd.get('school') || student?.school
+        name: fd.get('name') || student?.name || '',
+        phone: fd.get('phone') || student?.phone || '',
+        countries: fd.get('countries') ? [fd.get('countries')] : (student?.countries || []),
+        intake: combinedIntake,
+        school: fd.get('school') || student?.school || '',
+        dob: fd.get('dob') || student?.dob || '',
+        gender: fd.get('gender') || student?.gender || '',
+        cityCountry: fd.get('cityCountry') || student?.cityCountry || '',
+        passportStatus: fd.get('passportStatus') || student?.passportStatus || '',
+        passportExpiry: fd.get('passportExpiry') || student?.passportExpiry || '',
+        curriculum: fd.get('curriculum') || student?.curriculum || '',
+        grade: fd.get('grade') || student?.grade || '',
+        gpa: fd.get('gpa') || student?.gpa || '',
+        classRank: fd.get('classRank') || student?.classRank || '',
+        graduationYear: fd.get('graduationYear') || student?.graduationYear || '',
+        satTotal: fd.get('satTotal') || student?.satTotal || '',
+        actScore: fd.get('actScore') || student?.actScore || '',
+        engTest: fd.get('engTest') || student?.engTest || '',
+        engScore: fd.get('engScore') || student?.engScore || '',
+        major1: fd.get('major1') || student?.major1 || '',
+        major2: fd.get('major2') || student?.major2 || '',
+        activities: activities
       };
       updateStudent(updated).then(() => {
         setIsSaving(false);
@@ -129,18 +214,18 @@ export default function StudentProfile() {
 
       <Section title="1. Basic Personal & Contact Information" description="Your primary identity and contact channels.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Input label="Full Name" name="name" placeholder="John Doe" defaultValue={student?.name} />
-          <Input label="Date of Birth" name="dob" type="date" defaultValue={student?.dob || '2007-05-14'} />
-          <Select label="Gender" name="gender" options={["Male", "Female", "Non-Binary", "Prefer not to say"]} defaultValue={student?.gender || "Male"} />
-          <Select label="Nationality / Citizenship" name="countries" options={["USA", "India", "UK", "Canada", "Australia", "Singapore", "Other"]} defaultValue={student?.countries?.[0] || 'USA'} />
-          <Input label="City & Country of Residence" name="cityCountry" placeholder="e.g. San Francisco, USA" defaultValue={student?.cityCountry || 'San Francisco, USA'} />
-          <Input label="Phone & Email" name="phone" placeholder="+1 234 567 8900 | john@example.com" defaultValue={`${student?.phone || '+1 (555) 234-5678'} | ${student?.email}`} />
+          <Input label="Full Name" name="name" placeholder="John Doe" defaultValue={student?.name || ''} />
+          <Input label="Date of Birth" name="dob" type="date" defaultValue={student?.dob || ''} />
+          <Select label="Gender" name="gender" options={["Male", "Female", "Non-Binary", "Prefer not to say"]} defaultValue={student?.gender || ''} />
+          <Select label="Nationality / Citizenship" name="countries" options={["USA", "India", "UK", "Canada", "Australia", "Singapore", "Other"]} defaultValue={student?.countries?.[0] || ''} />
+          <Input label="City & Country of Residence" name="cityCountry" placeholder="e.g. San Francisco, USA" defaultValue={student?.cityCountry || ''} />
+          <Input label="Phone & Email" name="phone" placeholder="+1 234 567 8900 | john@example.com" defaultValue={student?.phone ? `${student.phone}${student.email ? ' | ' + student.email : ''}` : (student?.email || '')} />
         </div>
         <div className="pt-4 border-t border-slate-100">
           <h4 className="text-sm font-bold text-slate-900 mb-4">Passport Details</h4>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Select label="Passport Status" name="passportStatus" options={["Valid Passport", "Applied / In Process", "Do Not Have"]} defaultValue={student?.passportStatus || "Valid Passport"} />
-            <Input label="Expiry Date" name="passportExpiry" type="date" defaultValue={student?.passportExpiry || '2030-08-20'} />
+            <Select label="Passport Status" name="passportStatus" options={["Valid Passport", "Applied / In Process", "Do Not Have"]} defaultValue={student?.passportStatus || ''} />
+            <Input label="Expiry Date" name="passportExpiry" type="date" defaultValue={student?.passportExpiry || ''} />
             <FileUpload label="Upload Passport Copy" />
           </div>
         </div>
@@ -148,32 +233,52 @@ export default function StudentProfile() {
 
       <Section title="2. Academic Profile & High School Information" description="Your educational history, GPA, curriculum, and class standing.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Input label="High School Name" name="school" placeholder="e.g. Lincoln High School" defaultValue={student?.school || 'Lincoln High School'} />
-          <Select label="Curriculum" name="curriculum" options={["US High School (AP)", "International Baccalaureate (IB)", "CBSE / ICSE", "A-Levels", "Other"]} defaultValue={student?.curriculum || "US High School (AP)"} />
-          <Input label="Current Grade / Class" name="grade" placeholder="e.g. 12th Grade (Senior Year)" defaultValue={student?.grade || '12th Grade'} />
-          <Input label="GPA / Percentage" name="gpa" placeholder="e.g. 3.92 Unweighted / 4.3 Weighted" defaultValue={student?.gpa || '3.92 Unweighted'} />
-          <Input label="Class Rank (If applicable)" name="classRank" placeholder="e.g. Top 5% / 15 out of 320" defaultValue={student?.classRank || 'Top 5%'} />
-          <Input label="Expected Graduation Year" name="graduationYear" placeholder="e.g. June 2026" defaultValue={student?.graduationYear || '2026'} />
+          <Input label="High School Name" name="school" placeholder="e.g. Lincoln High School" defaultValue={student?.school || ''} />
+          <Select label="Curriculum" name="curriculum" options={["US High School (AP)", "International Baccalaureate (IB)", "CBSE / ICSE", "A-Levels", "Other"]} defaultValue={student?.curriculum || ''} />
+          <Input label="Current Grade / Class" name="grade" placeholder="e.g. 12th Grade (Senior Year)" defaultValue={student?.grade || ''} />
+          <Input label="GPA / Percentage" name="gpa" placeholder="e.g. 3.92 Unweighted / 4.3 Weighted" defaultValue={student?.gpa || ''} />
+          <Input label="Class Rank (If applicable)" name="classRank" placeholder="e.g. Top 5% / 15 out of 320" defaultValue={student?.classRank || ''} />
+          <Input label="Expected Graduation Year" name="graduationYear" placeholder="e.g. 2026" defaultValue={student?.graduationYear || ''} />
         </div>
       </Section>
 
       <Section title="3. Standardized Test Scores" description="Your official or target SAT, ACT, and English Proficiency scores.">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Input label="SAT Total Score" name="satTotal" placeholder="e.g. 1520" defaultValue={student?.academicScores?.find((s: any) => s.type === 'SAT')?.score || '1520'} />
-          <Input label="SAT Reading & Writing" name="satRw" placeholder="e.g. 750" defaultValue="750" />
-          <Input label="SAT Math" name="satMath" placeholder="e.g. 770" defaultValue="770" />
-          <Input label="ACT Score (If taken)" name="actScore" placeholder="e.g. 34" defaultValue="34" />
-          <Select label="English Proficiency Test" name="engTest" options={["TOEFL", "IELTS", "Duolingo", "Waived"]} defaultValue="TOEFL" />
-          <Input label="English Test Score" name="engScore" placeholder="e.g. 112 / 120" defaultValue="112" />
+          <Input label="SAT Total Score" name="satTotal" placeholder="e.g. 1520" defaultValue={student?.satTotal || student?.academicScores?.find((s: any) => s.type === 'SAT')?.score || ''} />
+          <Input label="SAT Reading & Writing" name="satRw" placeholder="e.g. 750" defaultValue="" />
+          <Input label="SAT Math" name="satMath" placeholder="e.g. 770" defaultValue="" />
+          <Input label="ACT Score (If taken)" name="actScore" placeholder="e.g. 34" defaultValue={student?.actScore || ''} />
+          <Select label="English Proficiency Test" name="engTest" options={["TOEFL", "IELTS", "Duolingo", "Waived"]} defaultValue={student?.engTest || ''} />
+          <Input label="English Test Score" name="engScore" placeholder="e.g. 112 / 120" defaultValue={student?.engScore || ''} />
         </div>
       </Section>
 
       <Section title="4. Target Intake & University Preferences" description="Your application timeline, target countries, and majors.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Select label="Target Entry Intake" name="intake" options={["Fall 2026", "Spring 2027", "Fall 2027", "Spring 2028"]} defaultValue={student?.intake || 'Fall 2026'} />
-          <Select label="Primary Target Country" name="primaryCountry" options={["USA", "United Kingdom", "Canada", "Australia", "Singapore", "Europe"]} defaultValue={student?.countries?.[0] || 'USA'} />
-          <Input label="Intended Major 1" name="major1" placeholder="e.g. Computer Science & AI" defaultValue={student?.major1 || 'Computer Science'} />
-          <Input label="Intended Major 2" name="major2" placeholder="e.g. Applied Mathematics" defaultValue={student?.major2 || 'Applied Mathematics'} />
+          <div>
+            <Label>Intake Term & Year (Next 8 Years)</Label>
+            <div className="grid grid-cols-2 gap-3 mt-1">
+              <select 
+                value={intakeTerm}
+                onChange={e => setIntakeTerm(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"
+              >
+                {intakeTerms.map(term => <option key={term} value={term}>{term}</option>)}
+              </select>
+              <select 
+                value={intakeYear}
+                onChange={e => setIntakeYear(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"
+              >
+                {intakeYears.map(yr => <option key={yr} value={yr}>{yr}</option>)}
+              </select>
+            </div>
+            <span className="text-[11px] text-slate-500 mt-1 block">Selected Intake: <strong className="text-blue-700">{intakeTerm} {intakeYear}</strong></span>
+          </div>
+
+          <Select label="Primary Target Country" name="primaryCountry" options={["USA", "United Kingdom", "Canada", "Australia", "Singapore", "Europe"]} defaultValue={student?.countries?.[0] || ''} />
+          <Input label="Intended Major 1" name="major1" placeholder="e.g. Computer Science & AI" defaultValue={student?.major1 || ''} />
+          <Input label="Intended Major 2" name="major2" placeholder="e.g. Applied Mathematics" defaultValue={student?.major2 || ''} />
         </div>
       </Section>
 
@@ -181,37 +286,154 @@ export default function StudentProfile() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
             <span className="text-[10px] uppercase font-bold text-blue-600 block mb-1">Lead Counselor</span>
-            <p className="font-bold text-slate-900">{student?.counselor || 'Sarah Jenkins'}</p>
-            <p className="text-xs text-slate-500 mt-1">sarah.j@counseling.edu</p>
+            <p className="font-bold text-slate-900">{student?.counselor || 'Assigned Counselor'}</p>
+            <p className="text-xs text-slate-500 mt-1">Admissions & Strategy Advisor</p>
           </div>
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
             <span className="text-[10px] uppercase font-bold text-indigo-600 block mb-1">SAT & Prep Mentor</span>
-            <p className="font-bold text-slate-900">David Ross</p>
-            <p className="text-xs text-slate-500 mt-1">david.r@satprep.edu</p>
+            <p className="font-bold text-slate-900">Test Prep Faculty</p>
+            <p className="text-xs text-slate-500 mt-1">Standardized Prep Advisor</p>
           </div>
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
             <span className="text-[10px] uppercase font-bold text-purple-600 block mb-1">Research Mentor</span>
-            <p className="font-bold text-slate-900">Dr. Aris Thorne</p>
-            <p className="text-xs text-slate-500 mt-1">aris.t@research.edu</p>
+            <p className="font-bold text-slate-900">Academic Mentor</p>
+            <p className="text-xs text-slate-500 mt-1">Projects & Research Lead</p>
           </div>
         </div>
       </Section>
 
-      <Section title="6. Extracurricular Activities & Honors" description="Your leadership roles, awards, projects, and achievements.">
+      <Section title="6. Extracurricular Activities & Honors" description="Your leadership roles, awards, projects, and achievements (Add up to 10 activities).">
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-bold text-slate-900">Activities ({activities.length})</h4>
+            <h4 className="text-sm font-bold text-slate-900">
+              Activities ({activities.length} / 10)
+            </h4>
+            <Button 
+              type="button" 
+              onClick={openAddActivityModal} 
+              disabled={activities.length >= 10}
+              className="bg-blue-600 hover:bg-blue-700 text-white text-xs disabled:opacity-50"
+            >
+              <Plus className="w-3.5 h-3.5 mr-1" /> Add Activity
+            </Button>
           </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {activities.slice(0, 4).map((act: any, idx: number) => (
-              <div key={idx} className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1">
-                <span className="font-bold text-slate-900 block">{act.description || act.title || 'Robotics Club Captain'}</span>
-                <span className="text-[10px] text-slate-500 uppercase">{act.date || act.role || 'Leadership & STEM'}</span>
+            {activities.map((act: any, idx: number) => (
+              <div key={act.id || idx} className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2 relative group hover:border-blue-300 transition-colors">
+                <div className="flex justify-between items-start gap-2">
+                  <div>
+                    <span className="font-bold text-slate-900 text-sm block">{act.title || act.description || `Activity #${idx + 1}`}</span>
+                    <span className="text-[11px] text-blue-600 font-semibold">{act.category || act.role || 'General'}</span>
+                    {act.organization && <span className="text-slate-500 block text-[11px]">{act.organization}</span>}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={() => openEditActivityModal(idx)} className="p-1 text-slate-400 hover:text-blue-600 rounded">
+                      <Edit3 className="w-3.5 h-3.5" />
+                    </button>
+                    <button type="button" onClick={() => handleRemoveActivity(idx)} className="p-1 text-slate-400 hover:text-red-600 rounded">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                {act.description && <p className="text-slate-600 line-clamp-2">{act.description}</p>}
+                {act.date && <span className="text-[10px] text-slate-400 uppercase font-semibold block">{act.date}</span>}
               </div>
             ))}
+            {activities.length === 0 && (
+              <div className="col-span-full p-8 text-center text-slate-500 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                No activities added yet. Click "+ Add Activity" to build your activity profile (up to 10 entries).
+              </div>
+            )}
           </div>
         </div>
       </Section>
+
+      {/* Activity Modal */}
+      {isActivityModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-xl space-y-4">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="font-bold text-slate-900 text-base">
+                {editingActivityIdx !== null ? 'Edit Activity' : 'Add New Activity'} ({activities.length + (editingActivityIdx === null ? 1 : 0)} / 10)
+              </h3>
+              <button type="button" onClick={() => setIsActivityModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-3 text-left">
+              <div>
+                <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Activity Title / Role *</label>
+                <input 
+                  type="text" 
+                  value={actTitle} 
+                  onChange={e => setActTitle(e.target.value)} 
+                  placeholder="e.g. Captain, Robotics Club" 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Category</label>
+                  <select 
+                    value={actCategory} 
+                    onChange={e => setActCategory(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="Leadership & STEM">Leadership & STEM</option>
+                    <option value="Community Service">Community Service</option>
+                    <option value="Athletics & Sports">Athletics & Sports</option>
+                    <option value="Arts & Music">Arts & Music</option>
+                    <option value="Research & Academic">Research & Academic</option>
+                    <option value="Internship & Work">Internship & Work</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Participation Grade(s)</label>
+                  <input 
+                    type="text" 
+                    value={actYears} 
+                    onChange={e => setActYears(e.target.value)} 
+                    placeholder="e.g. 10th, 11th, 12th Grade" 
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Organization / School Name</label>
+                <input 
+                  type="text" 
+                  value={actOrg} 
+                  onChange={e => setActOrg(e.target.value)} 
+                  placeholder="e.g. Lincoln High School / FIRST Robotics" 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Description / Key Achievements</label>
+                <textarea 
+                  value={actDesc} 
+                  onChange={e => setActDesc(e.target.value)} 
+                  placeholder="Describe your role, responsibilities, and achievements..." 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm h-24 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <Button type="button" variant="outline" onClick={() => setIsActivityModalOpen(false)}>Cancel</Button>
+              <Button type="button" onClick={handleSaveActivity} disabled={!actTitle.trim()} className="bg-blue-600 hover:bg-blue-700 text-white">
+                {editingActivityIdx !== null ? 'Save Changes' : 'Add Activity'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="flex justify-end gap-4 mt-8 items-center">
         {saveMessage && <span className="text-emerald-600 font-semibold">{saveMessage}</span>}
@@ -223,3 +445,4 @@ export default function StudentProfile() {
     </form>
   );
 }
+

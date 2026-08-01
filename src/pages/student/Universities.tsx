@@ -220,94 +220,18 @@ export default function StudentUniversities() {
 
   if (shortlist.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-4">
-        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-          <GraduationCap className="h-8 w-8 text-slate-400" />
+      <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-4 max-w-lg mx-auto">
+        <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mb-2">
+          <GraduationCap className="h-8 w-8 text-blue-600" />
         </div>
-        <h2 className="text-2xl font-semibold text-slate-800">Your University Shortlist is Empty</h2>
-        <p className="text-slate-500 max-w-md">
-          You have not shortlisted any universities yet. Start adding universities to track deadlines and requirements.
+        <h2 className="text-2xl font-bold text-slate-800">Your University Shortlist is Empty</h2>
+        <p className="text-slate-500 text-sm">
+          Target universities are shortlisted and managed in the database by your assigned lead counselor: <strong className="text-slate-800">{student?.counselor || 'Assigned Lead Counselor'}</strong>.
         </p>
-        <Button onClick={() => setIsAddUniModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white mt-4">
-          <Plus className="w-4 h-4 mr-2" /> Shortlist a University
-        </Button>
-
-        {/* Modal for adding university */}
-        {isAddUniModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm text-left">
-            <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
-              <div className="flex justify-between items-center mb-4 border-b pb-3">
-                <h3 className="font-bold text-lg text-slate-900">Add Target University</h3>
-                <button onClick={() => setIsAddUniModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <form onSubmit={handleAddUniversity} className="space-y-4">
-                <div>
-                  <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">University Name</label>
-                  <input 
-                    type="text" 
-                    required 
-                    placeholder="e.g. Stanford University" 
-                    value={newUniName} 
-                    onChange={e => setNewUniName(e.target.value)} 
-                    className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Category</label>
-                    <select 
-                      value={newUniCategory} 
-                      onChange={e => setNewUniCategory(e.target.value as any)}
-                      className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none"
-                    >
-                      <option value="Reach">Reach</option>
-                      <option value="Target">Target</option>
-                      <option value="Safety">Safety</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Round</label>
-                    <select 
-                      value={newUniRound} 
-                      onChange={e => setNewUniRound(e.target.value)}
-                      className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none"
-                    >
-                      <option value="Early Decision (ED)">Early Decision (ED)</option>
-                      <option value="Early Action (EA)">Early Action (EA)</option>
-                      <option value="Regular Decision (RD)">Regular Decision (RD)</option>
-                      <option value="Rolling">Rolling</option>
-                    </select>
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Major / Program</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. B.S. in Computer Science" 
-                    value={newUniMajor} 
-                    onChange={e => setNewUniMajor(e.target.value)} 
-                    className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Application Deadline</label>
-                  <input 
-                    type="date" 
-                    value={newUniDeadline} 
-                    onChange={e => setNewUniDeadline(e.target.value)} 
-                    className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none"
-                  />
-                </div>
-                <div className="flex justify-end gap-3 pt-3">
-                  <Button type="button" variant="ghost" onClick={() => setIsAddUniModalOpen(false)}>Cancel</Button>
-                  <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Add University</Button>
-                </div>
-              </form>
-            </div>
-          </div>
-        )}
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600 text-left space-y-2 w-full mt-2">
+          <span className="font-bold text-slate-800 uppercase block text-[10px] tracking-wider text-blue-600">Counselor Managed Database</span>
+          <p>Please consult with your assigned counselor to review your admissions strategy and add target Reach, Target, or Safety universities to your shortlist.</p>
+        </div>
       </div>
     );
   }
@@ -345,9 +269,13 @@ export default function StudentUniversities() {
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">University Shortlist</h2>
           <p className="text-sm text-slate-500 font-medium">Track your deadlines and application readiness.</p>
         </div>
-        <Button onClick={() => setIsAddUniModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white shrink-0">
-          <Plus className="w-4 h-4 mr-2" /> Add University
-        </Button>
+        <div className="bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-2 flex items-center gap-2">
+          <GraduationCap className="w-4 h-4 text-blue-600" />
+          <div className="text-xs">
+            <span className="text-[10px] text-blue-600 font-bold uppercase block leading-none">Assigned Lead Counselor</span>
+            <span className="font-bold text-slate-900">{student?.counselor || 'Sarah Jenkins'}</span>
+          </div>
+        </div>
       </div>
 
       {/* Application Readiness Engine */}
