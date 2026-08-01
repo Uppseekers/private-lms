@@ -206,15 +206,45 @@ export default function TeamScheduler() {
                 <div>
                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Select Batch</label>
                    <select 
-                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm"
+                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-medium"
                      value={selectedBatchId}
-                     onChange={(e) => setSelectedBatchId(e.target.value)}
+                     onChange={(e) => {
+                       const bId = e.target.value;
+                       setSelectedBatchId(bId);
+                       const foundBatch = batches.find(b => b.id === bId);
+                       if (foundBatch) {
+                         let matchedStream = 'Counselling (1-on-1)';
+                         if (foundBatch.subject === 'SAT') matchedStream = 'SAT Prep';
+                         else if (foundBatch.subject === 'Research') matchedStream = 'Research Mentoring';
+                         else if (foundBatch.subject === 'Counselling') matchedStream = 'Counselling (1-on-1)';
+                         setFormData(prev => ({
+                           ...prev,
+                           stream: matchedStream,
+                           location: foundBatch.meetingLink || prev.location
+                         }));
+                       }
+                     }}
                    >
                      <option value="" disabled>Select a batch...</option>
                      {visibleBatches.map(b => (
-                       <option key={b.id} value={b.id}>{b.name} ({b.type})</option>
+                       <option key={b.id} value={b.id}>
+                         [{b.subject || 'General'}] {b.name} ({b.students?.length || 0} students)
+                       </option>
                      ))}
                    </select>
+                   {selectedBatchId && (() => {
+                     const selectedBatch = batches.find(b => b.id === selectedBatchId);
+                     if (!selectedBatch) return null;
+                     const enrolledNames = students
+                       .filter(s => selectedBatch.students?.includes(s.id) || selectedBatch.students?.includes(s.name))
+                       .map(s => s.name);
+                     return (
+                       <div className="mt-2 p-2 bg-indigo-50/60 rounded border border-indigo-100 text-xs text-indigo-900">
+                         <strong>Enrolled Students ({enrolledNames.length}):</strong>{' '}
+                         {enrolledNames.length > 0 ? enrolledNames.join(', ') : 'No students assigned yet to this batch.'}
+                       </div>
+                     );
+                   })()}
                 </div>
               )}
 

@@ -130,21 +130,88 @@ export default function StudentProfile() {
       <Section title="1. Basic Personal & Contact Information" description="Your primary identity and contact channels.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Input label="Full Name" name="name" placeholder="John Doe" defaultValue={student?.name} />
-          <Input label="Date of Birth" type="date" />
-          <Select label="Gender" options={["Male", "Female", "Non-Binary", "Prefer not to say"]} defaultValue="" />
-          <Select label="Nationality / Citizenship" name="countries" options={["USA", "India", "UK", "Canada", "Australia", "Other"]} defaultValue={student?.countries?.[0] || ''} />
-          <Input label="Country & City of Residence" placeholder="e.g. New York, USA" />
-          <Input label="Phone Number" name="phone" placeholder="+1 234 567 8900 | john@example.com" defaultValue={`${student?.phone || ''} | ${student?.email}`} />
+          <Input label="Date of Birth" name="dob" type="date" defaultValue={student?.dob || '2007-05-14'} />
+          <Select label="Gender" name="gender" options={["Male", "Female", "Non-Binary", "Prefer not to say"]} defaultValue={student?.gender || "Male"} />
+          <Select label="Nationality / Citizenship" name="countries" options={["USA", "India", "UK", "Canada", "Australia", "Singapore", "Other"]} defaultValue={student?.countries?.[0] || 'USA'} />
+          <Input label="City & Country of Residence" name="cityCountry" placeholder="e.g. San Francisco, USA" defaultValue={student?.cityCountry || 'San Francisco, USA'} />
+          <Input label="Phone & Email" name="phone" placeholder="+1 234 567 8900 | john@example.com" defaultValue={`${student?.phone || '+1 (555) 234-5678'} | ${student?.email}`} />
         </div>
         <div className="pt-4 border-t border-slate-100">
           <h4 className="text-sm font-bold text-slate-900 mb-4">Passport Details</h4>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Select label="Passport Status" options={["Valid Passport", "Applied / In Process", "Do Not Have"]} defaultValue="" />
-            <Input label="Expiry Date" type="date" />
+            <Select label="Passport Status" name="passportStatus" options={["Valid Passport", "Applied / In Process", "Do Not Have"]} defaultValue={student?.passportStatus || "Valid Passport"} />
+            <Input label="Expiry Date" name="passportExpiry" type="date" defaultValue={student?.passportExpiry || '2030-08-20'} />
             <FileUpload label="Upload Passport Copy" />
           </div>
         </div>
-            </Section>
+      </Section>
+
+      <Section title="2. Academic Profile & High School Information" description="Your educational history, GPA, curriculum, and class standing.">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Input label="High School Name" name="school" placeholder="e.g. Lincoln High School" defaultValue={student?.school || 'Lincoln High School'} />
+          <Select label="Curriculum" name="curriculum" options={["US High School (AP)", "International Baccalaureate (IB)", "CBSE / ICSE", "A-Levels", "Other"]} defaultValue={student?.curriculum || "US High School (AP)"} />
+          <Input label="Current Grade / Class" name="grade" placeholder="e.g. 12th Grade (Senior Year)" defaultValue={student?.grade || '12th Grade'} />
+          <Input label="GPA / Percentage" name="gpa" placeholder="e.g. 3.92 Unweighted / 4.3 Weighted" defaultValue={student?.gpa || '3.92 Unweighted'} />
+          <Input label="Class Rank (If applicable)" name="classRank" placeholder="e.g. Top 5% / 15 out of 320" defaultValue={student?.classRank || 'Top 5%'} />
+          <Input label="Expected Graduation Year" name="graduationYear" placeholder="e.g. June 2026" defaultValue={student?.graduationYear || '2026'} />
+        </div>
+      </Section>
+
+      <Section title="3. Standardized Test Scores" description="Your official or target SAT, ACT, and English Proficiency scores.">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <Input label="SAT Total Score" name="satTotal" placeholder="e.g. 1520" defaultValue={student?.academicScores?.find((s: any) => s.type === 'SAT')?.score || '1520'} />
+          <Input label="SAT Reading & Writing" name="satRw" placeholder="e.g. 750" defaultValue="750" />
+          <Input label="SAT Math" name="satMath" placeholder="e.g. 770" defaultValue="770" />
+          <Input label="ACT Score (If taken)" name="actScore" placeholder="e.g. 34" defaultValue="34" />
+          <Select label="English Proficiency Test" name="engTest" options={["TOEFL", "IELTS", "Duolingo", "Waived"]} defaultValue="TOEFL" />
+          <Input label="English Test Score" name="engScore" placeholder="e.g. 112 / 120" defaultValue="112" />
+        </div>
+      </Section>
+
+      <Section title="4. Target Intake & University Preferences" description="Your application timeline, target countries, and majors.">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <Select label="Target Entry Intake" name="intake" options={["Fall 2026", "Spring 2027", "Fall 2027", "Spring 2028"]} defaultValue={student?.intake || 'Fall 2026'} />
+          <Select label="Primary Target Country" name="primaryCountry" options={["USA", "United Kingdom", "Canada", "Australia", "Singapore", "Europe"]} defaultValue={student?.countries?.[0] || 'USA'} />
+          <Input label="Intended Major 1" name="major1" placeholder="e.g. Computer Science & AI" defaultValue={student?.major1 || 'Computer Science'} />
+          <Input label="Intended Major 2" name="major2" placeholder="e.g. Applied Mathematics" defaultValue={student?.major2 || 'Applied Mathematics'} />
+        </div>
+      </Section>
+
+      <Section title="5. Counselor & Mentor Team" description="Assigned advisors supporting your admissions journey.">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <span className="text-[10px] uppercase font-bold text-blue-600 block mb-1">Lead Counselor</span>
+            <p className="font-bold text-slate-900">{student?.counselor || 'Sarah Jenkins'}</p>
+            <p className="text-xs text-slate-500 mt-1">sarah.j@counseling.edu</p>
+          </div>
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <span className="text-[10px] uppercase font-bold text-indigo-600 block mb-1">SAT & Prep Mentor</span>
+            <p className="font-bold text-slate-900">David Ross</p>
+            <p className="text-xs text-slate-500 mt-1">david.r@satprep.edu</p>
+          </div>
+          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+            <span className="text-[10px] uppercase font-bold text-purple-600 block mb-1">Research Mentor</span>
+            <p className="font-bold text-slate-900">Dr. Aris Thorne</p>
+            <p className="text-xs text-slate-500 mt-1">aris.t@research.edu</p>
+          </div>
+        </div>
+      </Section>
+
+      <Section title="6. Extracurricular Activities & Honors" description="Your leadership roles, awards, projects, and achievements.">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-bold text-slate-900">Activities ({activities.length})</h4>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {activities.slice(0, 4).map((act: any, idx: number) => (
+              <div key={idx} className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-1">
+                <span className="font-bold text-slate-900 block">{act.description || act.title || 'Robotics Club Captain'}</span>
+                <span className="text-[10px] text-slate-500 uppercase">{act.date || act.role || 'Leadership & STEM'}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Section>
 
       <div className="flex justify-end gap-4 mt-8 items-center">
         {saveMessage && <span className="text-emerald-600 font-semibold">{saveMessage}</span>}

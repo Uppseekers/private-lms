@@ -267,6 +267,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             essays: []
           }
         ];
+        setStudentsState(defaultStudents);
+        localStorage.setItem('uppseekers_students_v2', JSON.stringify(defaultStudents));
         for (const s of defaultStudents) {
           try {
             await setDoc(doc(db, 'students', s.id), JSON.parse(JSON.stringify(s)));
@@ -305,6 +307,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             password: 'Staff@123'
           }
         ];
+        setStaffState(defaultStaff);
+        localStorage.setItem('uppseekers_staff_v2', JSON.stringify(defaultStaff));
         for (const st of defaultStaff) {
           try {
             await setDoc(doc(db, 'staff', st.id), JSON.parse(JSON.stringify(st)));
@@ -396,6 +400,10 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const setStudents = (newStudents: Student[]) => {
+    const deleted = students.filter(prev => !newStudents.some(n => n.id === prev.id));
+    deleted.forEach(d => {
+      if (d.id) deleteDoc(doc(db, 'students', d.id)).catch(console.error);
+    });
     setStudentsState(newStudents);
     localStorage.setItem('uppseekers_students_v2', JSON.stringify(newStudents));
     newStudents.forEach(s => {
@@ -416,40 +424,68 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
 
 function calculateReadiness(student: Student): number {
-  let score = 0;
-  let totalWeight = 0;
-  
-  // Essays (40%)
-  if (student.essays && student.essays.length > 0) {
-    const approved = student.essays.filter(e => e.status === 'Approved').length;
-    score += (approved / student.essays.length) * 40;
+  let totalPoints = 0;
+  let possiblePoints = 0;
+
+  // 1. Shortlist & Required Docs Progress (25 points)
+  if (student.shortlist && student.shortlist.length > 0) {
+    let totalReqDocs = 0;
+    let attachedCount = 0;
+    student.shortlist.forEach((uni: any) => {
+      const reqs = uni.requiredDocs || [];
+      totalReqDocs += reqs.length;
+      if (uni.attachedDocs) {
+        attachedCount += Object.keys(uni.attachedDocs).length;
+      }
+    });
+    const uniProgress = totalReqDocs > 0 ? (attachedCount / totalReqDocs) : 0.5;
+    totalPoints += uniProgress * 25;
+    possiblePoints += 25;
+  } else {
+    possiblePoints += 25;
   }
-  totalWeight += 40;
-  
-  // Tasks (30%)
+
+  // 2. Essays (25 points)
+  if (student.essays && student.essays.length > 0) {
+    const approved = student.essays.filter(e => e.status?.toLowerCase() === 'approved').length;
+    totalPoints += (approved / student.essays.length) * 25;
+    possiblePoints += 25;
+  } else {
+    possiblePoints += 25;
+  }
+
+  // 3. Tasks (25 points)
   if (student.tasks && student.tasks.length > 0) {
     const completed = student.tasks.filter(t => t.stage === 'COMPLETED').length;
-    score += (completed / student.tasks.length) * 30;
+    totalPoints += (completed / student.tasks.length) * 25;
+    possiblePoints += 25;
+  } else {
+    possiblePoints += 25;
   }
-  totalWeight += 30;
-  
-  // Documents (30%)
+
+  // 4. Vault Documents (25 points)
   if (student.documents && student.documents.length > 0) {
-    const verified = student.documents.filter(d => d.status === 'Verified').length;
-    score += (verified / student.documents.length) * 30;
+    const verified = student.documents.filter(d => d.status?.toLowerCase() === 'verified').length;
+    totalPoints += (verified / student.documents.length) * 25;
+    possiblePoints += 25;
+  } else {
+    possiblePoints += 25;
   }
-  totalWeight += 30;
-  
-  // Fallback for new students
-  if (totalWeight === 100 && score === 0 && (!student.essays?.length && !student.tasks?.length && !student.documents?.length)) {
-     return student.readiness || 0;
+
+  const calculated = Math.round(totalPoints);
+  if (calculated === 0 && (!student.essays?.length && !student.tasks?.length && !student.documents?.length && !student.shortlist?.length)) {
+    return student.readiness || 0;
   }
-  
-  return Math.round(score);
+
+  return calculated;
 }
 
   const updateStudent = async (updatedStudent: Student) => {
+    if (!updatedStudent.id) {
+      updatedStudent.id = 'STU-1002';
+    }
     updatedStudent.readiness = calculateReadiness(updatedStudent);
+
     setStudentsState(prev => {
       const exists = prev.some(s => s.id === updatedStudent.id || s.email === updatedStudent.email);
       const newStudents = exists 
@@ -467,7 +503,9 @@ function calculateReadiness(student: Student): number {
     });
 
     if (updatedStudent.id) {
-      setDoc(doc(db, 'students', updatedStudent.id), JSON.parse(JSON.stringify(updatedStudent))).catch(console.error);
+      setDoc(doc(db, 'students', updatedStudent.id), JSON.parse(JSON.stringify(updatedStudent))).catch(err => {
+        console.warn('Firestore setDoc error for student:', err);
+      });
     }
 
     const token = localStorage.getItem('auth_token') || 'custom_user';
@@ -481,6 +519,10 @@ function calculateReadiness(student: Student): number {
   const getStudent = (id: string) => students.find(s => s.id === id);
 
   const setStaff = (newStaff: StaffMember[]) => {
+    const deleted = staff.filter(prev => !newStaff.some(n => n.id === prev.id));
+    deleted.forEach(d => {
+      if (d.id) deleteDoc(doc(db, 'staff', d.id)).catch(console.error);
+    });
     setStaffState(newStaff);
     localStorage.setItem('uppseekers_staff_v2', JSON.stringify(newStaff));
     newStaff.forEach(s => {
@@ -502,6 +544,10 @@ function calculateReadiness(student: Student): number {
   });
 
   const setEvents = async (newEvents: EventItem[]) => {
+    const deleted = events.filter(prev => !newEvents.some(n => n.id === prev.id));
+    deleted.forEach(d => {
+      if (d.id) deleteDoc(doc(db, 'events', d.id)).catch(console.error);
+    });
     setEventsState(newEvents);
     localStorage.setItem('uppseekers_events_v2', JSON.stringify(newEvents));
     newEvents.forEach(e => {
@@ -526,6 +572,10 @@ function calculateReadiness(student: Student): number {
   });
 
   const setBatches = async (newBatches: Batch[]) => {
+    const deleted = batches.filter(prev => !newBatches.some(n => n.id === prev.id));
+    deleted.forEach(d => {
+      if (d.id) deleteDoc(doc(db, 'batches', d.id)).catch(console.error);
+    });
     setBatchesState(newBatches);
     localStorage.setItem('uppseekers_batches_v2', JSON.stringify(newBatches));
     newBatches.forEach(b => {

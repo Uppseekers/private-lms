@@ -34,12 +34,15 @@ export default function Batches() {
     return matchesSearch && matchesType;
   });
 
+  const [newBatchSubject, setNewBatchSubject] = useState<'SAT' | 'Research' | 'Counselling' | 'Other'>('SAT');
+
   const handleEditBatch = () => {
     if(!editingBatch || !newBatchName) return;
     const updated = {
       ...editingBatch,
       name: newBatchName,
       type: newBatchType,
+      subject: newBatchSubject,
       capacity: parseInt(newBatchCapacity),
       totalSessions: parseInt(newBatchTotalSessions),
       completedSessions: parseInt(newBatchCompletedSessions),
@@ -54,9 +57,10 @@ export default function Batches() {
     setEditingBatch(batch);
     setNewBatchName(batch.name);
     setNewBatchType(batch.type as any);
+    setNewBatchSubject((batch.subject as any) || 'SAT');
     setNewBatchCapacity(batch.capacity.toString());
-    setNewBatchTotalSessions(batch.totalSessions.toString());
-    setNewBatchCompletedSessions(batch.completedSessions.toString());
+    setNewBatchTotalSessions((batch.totalSessions || 10).toString());
+    setNewBatchCompletedSessions((batch.completedSessions || 0).toString());
     setNewBatchMentor(batch.mentors[0] || '');
     setMeetingLink(batch.meetingLink || '');
   };
@@ -67,12 +71,13 @@ export default function Batches() {
       id: 'BATCH-' + Math.floor(Math.random() * 10000),
       name: newBatchName,
       type: newBatchType,
+      subject: newBatchSubject,
       capacity: parseInt(newBatchCapacity) || 20,
       totalSessions: parseInt(newBatchTotalSessions) || 10,
       completedSessions: parseInt(newBatchCompletedSessions) || 0,
       mentors: newBatchMentor ? [newBatchMentor] : (isAdmin ? [] : [currentUser.name]),
       students: [],
-      meetingLink: 'https://zoom.us/j/' + Math.floor(Math.random() * 1000000000),
+      meetingLink: meetingLink || ('https://zoom.us/j/' + Math.floor(Math.random() * 1000000000)),
       status: 'Upcoming'
     };
     
@@ -81,10 +86,12 @@ export default function Batches() {
     
     setNewBatchName('');
     setNewBatchType('Master Batch');
+    setNewBatchSubject('SAT');
     setNewBatchCapacity('20');
     setNewBatchTotalSessions('10');
     setNewBatchCompletedSessions('0');
     setNewBatchMentor('');
+    setMeetingLink('');
   };
 
   const handleAddStudent = () => {
@@ -128,6 +135,19 @@ export default function Batches() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Batch Subject</label>
+                  <select 
+                    value={newBatchSubject}
+                    onChange={(e: any) => setNewBatchSubject(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm font-semibold text-indigo-700"
+                  >
+                    <option value="SAT">SAT</option>
+                    <option value="Research">Research</option>
+                    <option value="Counselling">Counselling</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+                <div>
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Type</label>
                   <select 
                     value={newBatchType}
@@ -138,6 +158,8 @@ export default function Batches() {
                     <option value="Sub-Batch">Sub-Batch</option>
                   </select>
                 </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Capacity</label>
                   <input 
@@ -147,7 +169,16 @@ export default function Batches() {
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm" 
                   />
                 </div>
-              
+                <div>
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Meeting Link</label>
+                  <input 
+                    type="text" 
+                    value={meetingLink}
+                    onChange={(e) => setMeetingLink(e.target.value)}
+                    placeholder="https://zoom.us/j/..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm" 
+                  />
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -184,8 +215,10 @@ export default function Batches() {
               </div>
             </div>
             <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
-              <Button variant="ghost" onClick={() => setIsCreateModalOpen(false)}>Cancel</Button>
-              <Button className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm" onClick={handleCreateBatch}>Create Batch</Button>
+              <Button variant="ghost" onClick={() => { setIsCreateModalOpen(false); setEditingBatch(null); }}>Cancel</Button>
+              <Button className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm" onClick={editingBatch ? handleEditBatch : handleCreateBatch}>
+                {editingBatch ? 'Save Changes' : 'Create Batch'}
+              </Button>
             </div>
           </div>
         </div>
@@ -283,7 +316,18 @@ export default function Batches() {
                         {batch.type === 'Master Batch' ? <Layers className="w-5 h-5" /> : <GraduationCap className="w-5 h-5" />}
                       </div>
                       <div>
-                        <div className="font-bold text-slate-900">{batch.name}</div>
+                        <div className="font-bold text-slate-900 flex items-center gap-2">
+                          {batch.name}
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border",
+                            batch.subject === 'SAT' ? 'bg-blue-50 text-blue-700 border-blue-200' :
+                            batch.subject === 'Research' ? 'bg-purple-50 text-purple-700 border-purple-200' :
+                            batch.subject === 'Counselling' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                            'bg-slate-100 text-slate-700 border-slate-200'
+                          )}>
+                            {batch.subject || 'Counselling'}
+                          </span>
+                        </div>
                         <div className="text-xs text-slate-500 mt-0.5">{batch.id} • {batch.type}</div>
                       </div>
                     </div>

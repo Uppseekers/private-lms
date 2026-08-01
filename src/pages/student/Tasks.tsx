@@ -321,15 +321,39 @@ const TaskCard: React.FC<{ task: Task, onClick: () => void }> = ({ task, onClick
 const TaskDetailModal: React.FC<{ task: Task, onClose: () => void, onUpdate: (t: Task) => void }> = ({ task, onClose, onUpdate }) => {
   const [notes, setNotes] = useState(task.studentNotes || '');
   const [url, setUrl] = useState(task.externalUrl || '');
+  const [attachments, setAttachments] = useState<{ id: string; fileName: string; fileUrl?: string }[]>(task.attachments || []);
   const isLocked = task.stage === 'SUBMITTED_FOR_REVIEW' || task.stage === 'COMPLETED';
   const stageInfo = STAGES.find(s => s.id === task.stage);
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || e.target.files.length === 0) return;
+    const file = e.target.files[0];
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const newAtt = {
+        id: `ATT-${Date.now()}`,
+        fileName: file.name,
+        fileUrl: event.target?.result as string
+      };
+      const updated = [...attachments, newAtt];
+      setAttachments(updated);
+      onUpdate({ ...task, studentNotes: notes, externalUrl: url, attachments: updated });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveAttachment = (attId: string) => {
+    const updated = attachments.filter(a => a.id !== attId);
+    setAttachments(updated);
+    onUpdate({ ...task, studentNotes: notes, externalUrl: url, attachments: updated });
+  };
+
   const handleSave = () => {
-    onUpdate({ ...task, studentNotes: notes, externalUrl: url });
+    onUpdate({ ...task, studentNotes: notes, externalUrl: url, attachments });
   };
   
   const handleSubmit = () => {
-    onUpdate({ ...task, studentNotes: notes, externalUrl: url, stage: 'SUBMITTED_FOR_REVIEW' });
+    onUpdate({ ...task, studentNotes: notes, externalUrl: url, attachments, stage: 'SUBMITTED_FOR_REVIEW' });
   };
   
   const handleStart = () => {
@@ -419,24 +443,31 @@ const TaskDetailModal: React.FC<{ task: Task, onClose: () => void, onUpdate: (t:
                <div className="flex justify-between items-center mb-3">
                  <label className="block text-xs font-semibold text-slate-700">Proof Documents & Certificates</label>
                  {!isLocked && (
-                   <Button variant="outline" size="sm" className="h-8 text-xs bg-white">
-                     <Plus className="w-3 h-3 mr-1" /> Add File
-                   </Button>
+                   <label className="cursor-pointer inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50">
+                      <Plus className="w-3 h-3 mr-1" /> Add File
+                      <input type="file" className="hidden" onChange={handleFileUpload} />
+                    </label>
                  )}
                </div>
                
-               {task.attachments.length > 0 ? (
+               {attachments.length > 0 ? (
                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                   {task.attachments.map(att => (
+                   {attachments.map(att => (
                      <div key={att.id} className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-lg">
                        <div className="flex items-center gap-2 overflow-hidden">
                          <FileText className="w-4 h-4 text-blue-500 shrink-0" />
-                         <span className="text-sm font-medium text-slate-700 truncate">{att.fileName}</span>
+                         {att.fileUrl ? (
+                            <a href={att.fileUrl} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-blue-600 hover:underline truncate">
+                              {att.fileName}
+                            </a>
+                          ) : (
+                            <span className="text-sm font-medium text-slate-700 truncate">{att.fileName}</span>
+                          )}
                        </div>
                        {!isLocked && (
-                         <button className="text-slate-400 hover:text-red-500 transition-colors">
-                           <X className="w-4 h-4" />
-                         </button>
+                         <button onClick={() => handleRemoveAttachment(att.id)} className="text-slate-400 hover:text-red-500 transition-colors">
+                          <X className="w-4 h-4" />
+                        </button>
                        )}
                      </div>
                    ))}

@@ -117,6 +117,8 @@ export interface Batch {
   id: string;
   name: string;
   type: 'Master Batch' | 'Sub-Batch';
+  subject?: 'SAT' | 'Research' | 'Counselling' | string;
+  subSubject?: string;
   parentBatchId?: string;
   mentors: string[]; // staff IDs or names
   meetingLink: string;

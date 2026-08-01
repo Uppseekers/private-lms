@@ -10,11 +10,91 @@ import { Student, Essay, EssayVersion } from '@/types';
 
 interface GrammarError {
   id: string;
+  category: "spelling" | "punctuation" | "style" | "grammar" | "redundancy";
   message: string;
   matchText: string;
+  suggestion?: string;
   index: number;
   length: number;
 }
+
+const COMMON_SPELLING_MAP: Record<string, string> = {
+  teh: "the",
+  recieve: "receive",
+  beleive: "believe",
+  definately: "definitely",
+  seperate: "separate",
+  alot: "a lot",
+  occured: "occurred",
+  tommorrow: "tomorrow",
+  embarass: "embarrass",
+  accomodate: "accommodate",
+  occassion: "occasion",
+  independant: "independent",
+  goverment: "government",
+  writting: "writing",
+  truely: "truly",
+  maintainance: "maintenance",
+  persue: "pursue",
+  perfer: "prefer",
+  experiance: "experience",
+  acheive: "achieve",
+  pronounciation: "pronunciation",
+  refered: "referred",
+  judgement: "judgment",
+  unfortunatly: "unfortunately",
+  neccessary: "necessary",
+  recomended: "recommended",
+  successfuly: "successfully",
+  dissapoint: "disappoint",
+  enviornment: "environment",
+  knwoledge: "knowledge",
+  oppurtunity: "opportunity",
+  passsion: "passion",
+  univresity: "university"
+};
+
+const FORMAL_CONTRACTIONS_MAP: Record<string, string> = {
+  "don't": "do not",
+  "can't": "cannot",
+  "won't": "will not",
+  "isn't": "is not",
+  "aren't": "are not",
+  "wasn't": "was not",
+  "weren't": "were not",
+  "haven't": "have not",
+  "hasn't": "has not",
+  "didn't": "did not",
+  "couldn't": "could not",
+  "shouldn't": "should not",
+  "wouldn't": "would not"
+};
+
+const REDUNDANT_PHRASES: Record<string, string> = {
+  "due to the fact that": "because",
+  "in order to": "to",
+  "at this point in time": "currently",
+  "first and foremost": "first",
+  "in the event that": "if"
+};
+
+const ESSAY_CLICHES: Record<string, string> = {
+  "at the end of the day": "ultimately",
+  "think outside the box": "innovate",
+  "since the dawn of time": "historically",
+  "makes a world of difference": "significantly impacts",
+  "passion for learning": "intellectual curiosity"
+};
+
+const ACADEMIC_DICTIONARY = [
+  { word: "Spearhead", pos: "verb", def: "To lead an initiative or movement.", synonyms: ["Pioneer", "Initiate", "Lead", "Drive"], example: "I spearheaded a STEM outreach program for local middle schoolers." },
+  { word: "Meticulous", pos: "adj", def: "Showing great attention to detail; very careful and precise.", synonyms: ["Thorough", "Rigorous", "Conscientious"], example: "Through meticulous data logging, our team identified key trends." },
+  { word: "Resilience", pos: "noun", def: "The capacity to recover quickly from difficulties.", synonyms: ["Tenacity", "Fortitude", "Perseverance"], example: "Overcoming project setbacks fostered deep personal resilience." },
+  { word: "Catalyst", pos: "noun", def: "A person or thing that precipitates an event or change.", synonyms: ["Impetus", "Spark", "Driver"], example: "That summer workshop became the catalyst for my interest in AI." },
+  { word: "Pivotal", pos: "adj", def: "Of crucial importance in relation to development or success.", synonyms: ["Decisive", "Critical", "Fundamental"], example: "Mentoring younger students was a pivotal moment in my high school career." },
+  { word: "Elucidate", pos: "verb", def: "Make something clear; explain.", synonyms: ["Clarify", "Illuminate", "Expound"], example: "I wrote a research summary to elucidate complex physics concepts." },
+  { word: "Empower", pos: "verb", def: "Give someone the authority or confidence to do something.", synonyms: ["Enable", "Foster", "Bolster"], example: "We sought to empower underprivileged youths through coding workshops." }
+];
 
 export default function StudentEssays() {
   const { currentUser, students, updateStudent } = useDatabase();
@@ -227,9 +307,18 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
   const [charNoSpaces, setCharNoSpaces] = useState(0);
   const [symbolsCount, setSymbolsCount] = useState(0);
   const [grammarErrors, setGrammarErrors] = useState<GrammarError[]>([]);
+  const grammarIssues = grammarErrors.length;
   const [activeErrorId, setActiveErrorId] = useState<string | null>(null);
   
-  const [grammarIssues, setGrammarIssues] = useState(0);
+  const [aiTab, setAiTab] = useState<'checks' | 'dictionary'>('checks');
+  const [dictionarySearch, setDictionarySearch] = useState('');
+
+  const handleFixError = (err: GrammarError) => {
+    if (!err.suggestion) return;
+    const regex = new RegExp(err.matchText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
+    const newText = content.replace(regex, err.suggestion);
+    setContent(newText);
+  };
   const [isAnalyzing, setIsAnalyzing] = useState(false);
 
   const isReadOnly = essay.status === 'Under Review' || essay.status === 'Approved';
@@ -251,43 +340,105 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
     setIsAnalyzing(true);
 
     typingTimeoutRef.current = setTimeout(() => {
-      // Mock readability based on sentence length and word length
-      const sentences = text.split(/[.!?]+/).filter(s => s.trim().length > 0).length || 1;
-      const avgWordsPerSentence = words / sentences;
-      const readScore = Math.min(98, Math.max(40, 100 - (avgWordsPerSentence - 15) * 2));
-      
-
-      // Mock grammar/spelling checks with positions
       const newErrors: GrammarError[] = [];
       let match;
-      
+
+      // 1. Common misspellings
+      for (const [wrong, right] of Object.entries(COMMON_SPELLING_MAP)) {
+        const regex = new RegExp(`\\b${wrong}\\b`, "gi");
+        while ((match = regex.exec(text)) !== null) {
+          newErrors.push({
+            id: Math.random().toString(),
+            category: "spelling",
+            message: `Spelling: "${match[0]}" → "${right}"`,
+            matchText: match[0],
+            suggestion: right,
+            index: match.index,
+            length: match[0].length
+          });
+        }
+      }
+
+      // 2. Informal contractions
+      for (const [informal, formal] of Object.entries(FORMAL_CONTRACTIONS_MAP)) {
+        const regex = new RegExp(`\\b${informal.replace("'", "\x27")}\\b`, "gi");
+        while ((match = regex.exec(text)) !== null) {
+          newErrors.push({
+            id: Math.random().toString(),
+            category: "style",
+            message: `Informal contraction: "${match[0]}" → use formal "${formal}"`,
+            matchText: match[0],
+            suggestion: formal,
+            index: match.index,
+            length: match[0].length
+          });
+        }
+      }
+
+      // 3. Redundant phrases
+      for (const [wordy, concise] of Object.entries(REDUNDANT_PHRASES)) {
+        const regex = new RegExp(`\\b${wordy}\\b`, "gi");
+        while ((match = regex.exec(text)) !== null) {
+          newErrors.push({
+            id: Math.random().toString(),
+            category: "redundancy",
+            message: `Wordiness: "${match[0]}" → simplify to "${concise}"`,
+            matchText: match[0],
+            suggestion: concise,
+            index: match.index,
+            length: match[0].length
+          });
+        }
+      }
+
+      // 4. Clichés
+      for (const [cliche, better] of Object.entries(ESSAY_CLICHES)) {
+        const regex = new RegExp(`\\b${cliche}\\b`, "gi");
+        while ((match = regex.exec(text)) !== null) {
+          newErrors.push({
+            id: Math.random().toString(),
+            category: "style",
+            message: `Overused cliché: "${match[0]}" → try "${better}"`,
+            matchText: match[0],
+            suggestion: better,
+            index: match.index,
+            length: match[0].length
+          });
+        }
+      }
+
+      // 5. Repeated words
       const repeatedRegex = /\b(\w+)\s+\1\b/gi;
       while ((match = repeatedRegex.exec(text)) !== null) {
-        newErrors.push({ id: Math.random().toString(), message: `Repeated word: "${match[1]}"`, matchText: match[0], index: match.index, length: match[0].length });
+        newErrors.push({
+          id: Math.random().toString(),
+          category: "grammar",
+          message: `Repeated word: "${match[1]}"`,
+          matchText: match[0],
+          suggestion: match[1],
+          index: match.index,
+          length: match[0].length
+        });
       }
-      
-      const capsRegex = /(?:^\s*|[.!?]\s+)([a-z])/g;
-      while ((match = capsRegex.exec(text)) !== null) {
-        newErrors.push({ id: Math.random().toString(), message: `Missing capitalization`, matchText: match[1], index: match.index + match[0].length - 1, length: 1 });
-      }
-      
-      const spellRegex = /\b(teh|recieve|beleive|definately|seperate|alot)\b/gi;
-      while ((match = spellRegex.exec(text)) !== null) {
-        newErrors.push({ id: Math.random().toString(), message: `Possible misspelling`, matchText: match[0], index: match.index, length: match[0].length });
-      }
-      
+
+      // 6. Space before punctuation
       const puncRegex = /(\s+[,.!?;:])/g;
       while ((match = puncRegex.exec(text)) !== null) {
-        newErrors.push({ id: Math.random().toString(), message: `Space before punctuation`, matchText: match[0], index: match.index, length: match[0].length });
+        newErrors.push({
+          id: Math.random().toString(),
+          category: "punctuation",
+          message: "Unnecessary space before punctuation mark",
+          matchText: match[0],
+          suggestion: match[0].trim(),
+          index: match.index,
+          length: match[0].length
+        });
       }
-      
-      // Keep only up to 5 errors
-      const topErrors = newErrors.slice(0, 5);
-      
+
+      const topErrors = newErrors.slice(0, 10);
       setGrammarErrors(topErrors);
-      setGrammarIssues(topErrors.length);
       setIsAnalyzing(false);
-    }, 1000);
+    }, 800);
   }, [content]);
 
   const handleScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
@@ -432,75 +583,141 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
           )}
 
           <Card className="shadow-sm border-slate-200">
-            <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                <Wand2 className="w-4 h-4 text-blue-500" /> AI Writing Assistant
-              </h4>
+            <div className="p-3 border-b border-slate-100 bg-slate-50 flex items-center justify-between">
+              <div className="flex bg-slate-200/60 p-0.5 rounded-lg text-xs font-semibold">
+                <button 
+                  onClick={() => setAiTab('checks')} 
+                  className={cn("px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5", aiTab === 'checks' ? "bg-white text-blue-700 shadow-sm font-bold" : "text-slate-600 hover:text-slate-900")}
+                >
+                  <Wand2 className="w-3.5 h-3.5" />
+                  Live Checks ({grammarIssues})
+                </button>
+                <button 
+                  onClick={() => setAiTab('dictionary')} 
+                  className={cn("px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5", aiTab === 'dictionary' ? "bg-white text-indigo-700 shadow-sm font-bold" : "text-slate-600 hover:text-slate-900")}
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                  Dictionary
+                </button>
+              </div>
               {isAnalyzing && <span className="text-[10px] font-bold text-blue-500 uppercase animate-pulse">Analyzing...</span>}
             </div>
-            <CardContent className="p-5 space-y-6">
-  <div className="pt-4 border-slate-100">
-                <h5 className="text-xs font-bold text-slate-700 uppercase mb-3">Live Checks</h5>
-                <ul className="space-y-3">
-                  <li className="flex items-start gap-3">
-                    {grammarIssues === 0 ? (
-                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                    ) : (
-                      <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+
+            <CardContent className="p-4">
+              {aiTab === 'checks' ? (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">Grammar & Tone Audit</span>
+                    {grammarErrors.length > 0 && (
+                      <button 
+                        onClick={() => {
+                          grammarErrors.forEach(err => handleFixError(err));
+                        }}
+                        className="text-[11px] font-semibold text-blue-600 hover:underline"
+                      >
+                        Fix All ({grammarErrors.length})
+                      </button>
                     )}
-                    <div className="flex-1">
-                      <p className="text-sm font-medium text-slate-900">Grammar & Spelling</p>
-                      <p className="text-xs text-slate-500">
-                        {grammarIssues === 0 ? 'No issues found.' : `${grammarIssues} potential issue${grammarIssues > 1 ? 's' : ''} detected.`}
-                      </p>
-                      {grammarErrors.length > 0 && (
-                        <div className="mt-2 space-y-2">
-                          {grammarErrors.map((err, i) => (
-                            <div 
-                              key={err.id} 
-                              className={`text-[10px] px-2 py-1.5 rounded cursor-pointer transition-colors ${activeErrorId === err.id ? 'bg-red-100 text-red-900 border border-red-200 shadow-sm' : 'bg-red-50 text-red-700 hover:bg-red-100'}`}
-                              onClick={() => setActiveErrorId(activeErrorId === err.id ? null : err.id)}
-                            >
-                              <div className="font-bold flex items-center gap-1">
-                                🔴 {err.message}
-                              </div>
-                              {activeErrorId === err.id && (
-                                <div className="mt-1 pt-1 border-t border-red-200/50 text-red-800">
-                                  Found at: "{err.matchText}"
-                                  <br/>
-                                  <span className="opacity-75 italic mt-0.5 block">Review and manually update this in your text if needed.</span>
-                                </div>
-                              )}
+                  </div>
+
+                  {grammarErrors.length === 0 ? (
+                    <div className="p-4 bg-emerald-50 border border-emerald-100 rounded-xl text-emerald-800 text-xs flex items-center gap-2">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      <span>Great job! No grammar, spelling, or formal tone errors detected in this draft.</span>
+                    </div>
+                  ) : (
+                    <div className="space-y-2.5 max-h-[320px] overflow-y-auto pr-1">
+                      {grammarErrors.map((err) => (
+                        <div key={err.id} className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1.5">
+                          <div className="flex items-start justify-between gap-2">
+                            <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                              <span className={cn(
+                                "w-2 h-2 rounded-full shrink-0",
+                                err.category === 'spelling' ? 'bg-red-500' :
+                                err.category === 'style' ? 'bg-purple-500' :
+                                err.category === 'redundancy' ? 'bg-amber-500' : 'bg-blue-500'
+                              )} />
+                              {err.message}
+                            </span>
+                          </div>
+                          {err.suggestion && (
+                            <div className="flex items-center justify-between bg-white p-2 rounded border border-slate-100 text-slate-700">
+                              <span>Suggest: <strong className="text-emerald-700">{err.suggestion}</strong></span>
+                              <Button 
+                                size="sm" 
+                                variant="outline" 
+                                onClick={() => handleFixError(err)} 
+                                className="h-6 text-[10px] px-2 bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100 font-bold"
+                              >
+                                Auto Fix
+                              </Button>
                             </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="pt-3 border-t border-slate-100 space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-500">Word Count Limit</span>
+                      <span className={cn("font-bold", wordCount > 650 ? "text-red-600" : "text-emerald-600")}>
+                        {wordCount} / 650
+                      </span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div 
+                        className={cn("h-full rounded-full transition-all", wordCount > 650 ? "bg-red-500" : "bg-emerald-500")}
+                        style={{ width: `${Math.min(100, (wordCount / 650) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                    <input 
+                      type="text" 
+                      placeholder="Search academic vocabulary..." 
+                      value={dictionarySearch}
+                      onChange={(e) => setDictionarySearch(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-8 pr-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="space-y-2.5 max-h-[350px] overflow-y-auto pr-1">
+                    {ACADEMIC_DICTIONARY.filter(item => 
+                      item.word.toLowerCase().includes(dictionarySearch.toLowerCase()) ||
+                      item.def.toLowerCase().includes(dictionarySearch.toLowerCase()) ||
+                      item.synonyms.some(s => s.toLowerCase().includes(dictionarySearch.toLowerCase()))
+                    ).map((entry, idx) => (
+                      <div key={idx} className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-900 text-sm">{entry.word}</span>
+                          <span className="text-[10px] uppercase font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">{entry.pos}</span>
+                        </div>
+                        <p className="text-slate-600 text-[11px]">{entry.def}</p>
+                        <div className="pt-1 flex flex-wrap gap-1">
+                          <span className="text-[10px] text-slate-400 font-medium mr-1">Synonyms:</span>
+                          {entry.synonyms.map((syn, sIdx) => (
+                            <button 
+                              key={sIdx}
+                              onClick={() => {
+                                setContent(prev => prev ? `${prev} ${syn}` : syn);
+                              }}
+                              className="text-[10px] bg-white border border-slate-200 text-slate-700 hover:text-indigo-600 hover:border-indigo-300 px-1.5 py-0.5 rounded transition-colors"
+                              title="Click to insert into essay"
+                            >
+                              + {syn}
+                            </button>
                           ))}
                         </div>
-                      )}
-                    </div>
-                  </li>
-                  <li className="flex items-start gap-3">
-                    {wordCount > 650 ? (
-                      <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                    ) : wordCount > 0 ? (
-                      <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                    ) : (
-                      <div className="w-4 h-4 rounded-full border-2 border-slate-200 shrink-0 mt-0.5" />
-                    )}
-                    <div>
-                      <p className="text-sm font-medium text-slate-900">Word Count Limit</p>
-                      <p className="text-xs text-slate-500">{wordCount > 650 ? 'Over 650 words limit.' : 'Within acceptable range.'}</p>
-                    </div>
-                  </li>
-                </ul>
-              </div>
-
-              <div className="pt-4 border-t border-slate-100">
-                <h5 className="text-xs font-bold text-slate-700 uppercase mb-3">Live Summary</h5>
-                <p className="text-sm text-slate-600 bg-slate-50 p-3 rounded-lg border border-slate-100 italic">
-                  {content.length > 50 
-                    ? "The essay discusses the author's background and identity, focusing on personal growth and technical aspirations."
-                    : "Start writing to generate a live summary..."}
-                </p>
-              </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

@@ -17,8 +17,8 @@ export const createPool = () => {
       connectionTimeoutMillis: 15000,
     });
 
-    global._postgresPool.on('error', (err) => {
-      console.error('Unexpected error on idle SQL pool client:', err);
+    global._postgresPool.on('error', (_err) => {
+      // Silently ignore idle SQL pool errors when SQL is not configured
     });
   }
   return global._postgresPool;

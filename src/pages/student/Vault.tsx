@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { UploadCloud, FileText, CheckCircle2, AlertCircle, Clock, X, Search, Filter } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertCircle, Clock, X, Trash2, Eye, Download } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useDatabase } from '@/context/DatabaseContext';
 
 interface DocumentInfo {
   id: string;
@@ -12,9 +13,10 @@ interface DocumentInfo {
   uploadedBy: string;
   target?: string;
   notes?: string;
-  status: 'draft' | 'pending' | 'verified' | 'rejected';
+  status: 'draft' | 'pending' | 'verified' | 'rejected' | 'Pending' | 'Verified' | 'Rejected';
   date: string;
   fileExt: string;
+  fileUrl?: string;
 }
 
 const CATEGORIES = {
@@ -70,12 +72,14 @@ const CATEGORIES = {
   ]
 };
 
-const initialDocuments: any[] = [];
-
 export default function StudentVault() {
-  const [documents, setDocuments] = useState<DocumentInfo[]>(initialDocuments);
+  const { students, updateStudent, currentUser } = useDatabase();
+  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0] || { id: 'STU-101', name: currentUser?.name || 'Student', documents: [], activities: [] };
+  const documents: DocumentInfo[] = (student.documents || []) as DocumentInfo[];
+
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('All');
+  const [previewDoc, setPreviewDoc] = useState<DocumentInfo | null>(null);
 
   // Form State
   const [selectedCategory, setSelectedCategory] = useState(Object.keys(CATEGORIES)[0]);
@@ -121,22 +125,59 @@ export default function StudentVault() {
       if (parts.length > 1) ext = parts.pop()!.toLowerCase();
     }
 
-    const newDoc: DocumentInfo = {
-      id: `DOC-00${documents.length + 1}`,
-      name: docName || selectedType,
-      category: selectedCategory,
-      type: selectedType,
-      uploadedBy: 'Student (Anya Patel - STU-1002)',
-      target: docTarget,
-      notes: docNotes,
-      status: selectedCategory === 'Application & Writing Assets' ? 'draft' : 'pending',
-      date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      fileExt: ext
+    const saveDoc = (fileDataUrl?: string) => {
+      const newDoc: DocumentInfo = {
+        id: `DOC-${Date.now()}`,
+        name: docName || selectedType,
+        category: selectedCategory,
+        type: selectedType,
+        uploadedBy: student.name || 'Student',
+        target: docTarget,
+        notes: docNotes,
+        status: selectedCategory === 'Application & Writing Assets' ? 'draft' : 'pending',
+        date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        fileExt: ext,
+        fileUrl: fileDataUrl || ''
+      };
+
+      const updatedDocs = [newDoc, ...documents];
+      const updatedActivities = [
+        {
+          id: Math.random().toString(),
+          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+          type: 'UPLOAD',
+          description: `Uploaded document: ${newDoc.name}`
+        },
+        ...(student.activities || [])
+      ];
+
+      updateStudent({
+        ...student,
+        documents: updatedDocs,
+        activities: updatedActivities
+      });
+
+      setIsUploadModalOpen(false);
+      resetForm();
     };
 
-    setDocuments([newDoc, ...documents]);
-    setIsUploadModalOpen(false);
-    resetForm();
+    if (selectedFile) {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        saveDoc(e.target?.result as string);
+      };
+      reader.readAsDataURL(selectedFile);
+    } else {
+      saveDoc();
+    }
+  };
+
+  const handleDeleteDoc = (docId: string) => {
+    const updatedDocs = documents.filter(d => d.id !== docId);
+    updateStudent({
+      ...student,
+      documents: updatedDocs
+    });
   };
 
   const resetForm = () => {
@@ -156,14 +197,16 @@ export default function StudentVault() {
   };
 
   const filteredDocs = activeTab === 'All' ? documents : documents.filter(d => {
-    if (activeTab === 'Action Needed') return d.status === 'rejected';
-    if (activeTab === 'Verified') return d.status === 'verified';
-    if (activeTab === 'Drafts') return d.status === 'draft';
+    const st = d.status?.toLowerCase();
+    if (activeTab === 'Action Needed') return st === 'rejected';
+    if (activeTab === 'Verified') return st === 'verified';
+    if (activeTab === 'Drafts') return st === 'draft';
     return true;
   });
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
+    const st = status?.toLowerCase();
+    switch (st) {
       case 'verified':
         return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-green-100 text-green-700"><CheckCircle2 className="w-3.5 h-3.5" /> Verified & Approved</span>;
       case 'rejected':
@@ -249,10 +292,26 @@ export default function StudentVault() {
                     <span className="truncate max-w-[150px]">{doc.type}</span>
                   </div>
                   <div className="flex gap-2">
-                    <Button variant="outline" className="flex-1 text-xs">Preview</Button>
-                    {(doc.status === 'rejected' || doc.status === 'draft') && (
-                      <Button variant="outline" className="flex-1 text-xs text-blue-600 hover:text-blue-700">Re-upload</Button>
+                    {doc.fileUrl ? (
+                      <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer" className="flex-1">
+                        <Button variant="outline" className="w-full text-xs flex items-center gap-1">
+                          <Eye className="w-3.5 h-3.5" /> Preview
+                        </Button>
+                      </a>
+                    ) : (
+                      <Button variant="outline" className="flex-1 text-xs flex items-center gap-1" onClick={() => setPreviewDoc(doc)}>
+                        <Eye className="w-3.5 h-3.5" /> View Details
+                      </Button>
                     )}
+
+                    <Button 
+                      variant="outline" 
+                      className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 border-slate-200"
+                      onClick={() => handleDeleteDoc(doc.id)}
+                      title="Delete document"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -260,6 +319,40 @@ export default function StudentVault() {
           ))
         )}
       </div>
+
+      {/* Preview Details Modal */}
+      {previewDoc && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="font-bold text-lg text-slate-900 truncate">{previewDoc.name}</h3>
+              <button onClick={() => setPreviewDoc(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-2 text-sm text-slate-600">
+              <p><strong className="text-slate-900">Category:</strong> {previewDoc.category}</p>
+              <p><strong className="text-slate-900">Type:</strong> {previewDoc.type}</p>
+              <p><strong className="text-slate-900">Date Uploaded:</strong> {previewDoc.date}</p>
+              <p><strong className="text-slate-900">Status:</strong> {previewDoc.status}</p>
+              {previewDoc.target && <p><strong className="text-slate-900">Target:</strong> {previewDoc.target}</p>}
+              {previewDoc.notes && <p><strong className="text-slate-900">Notes:</strong> {previewDoc.notes}</p>}
+            </div>
+            {previewDoc.fileUrl && (
+              <div className="pt-2">
+                <a href={previewDoc.fileUrl} download={previewDoc.name} target="_blank" rel="noopener noreferrer">
+                  <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center gap-2">
+                    <Download className="w-4 h-4" /> Download File
+                  </Button>
+                </a>
+              </div>
+            )}
+            <div className="pt-2 flex justify-end">
+              <Button variant="ghost" onClick={() => setPreviewDoc(null)}>Close</Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isUploadModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/40 backdrop-blur-sm">
