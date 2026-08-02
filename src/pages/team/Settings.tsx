@@ -352,7 +352,7 @@ export default function TeamSettings() {
                     </td>
                     <td className="px-6 py-4 text-slate-600 font-medium">
                       {member.students}
-                      <Button variant="link" size="sm" onClick={() => openAssignModal(member)} className="text-xs ml-2 text-indigo-600">Assign</Button>
+                      <Button variant="ghost" size="sm" onClick={() => openAssignModal(member)} className="text-xs ml-2 text-indigo-600 hover:text-indigo-700 underline p-0 h-auto font-semibold">Assign</Button>
                     </td>
                     <td className="px-6 py-4">
                       <span className={cn("flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider", member.status === 'Active' ? 'text-emerald-600' : 'text-slate-400')}>

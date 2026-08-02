@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { UploadCloud, CheckCircle2, AlertCircle, Clock, X, Trash2, Eye, Download } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertCircle, Clock, X, Trash2, Eye, Download, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDatabase } from '@/context/DatabaseContext';
 
@@ -20,6 +20,18 @@ interface DocumentInfo {
 }
 
 const CATEGORIES = {
+  'Certificates & Awards': [
+    'Official Certificate / Honor Award',
+    'Competition / Olympiad Award Certificate',
+    'Scholarship / Excellence Recognition',
+    'Extracurricular Certificate / Badge',
+  ],
+  'Experience & Projects': [
+    'Project Report / Research Portfolio',
+    'Internship Completion Letter / Certificate',
+    'Community Impact / Volunteering Proof',
+    'Work Experience / Leadership Portfolio',
+  ],
   'Academic Records': [
     'High School Transcript (Grade 9, 10, 11, 12)',
     'Projected / Predicted Grades Sheet',
@@ -74,7 +86,8 @@ const CATEGORIES = {
 
 export default function StudentVault() {
   const { students, updateStudent, currentUser } = useDatabase();
-  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0] || { id: 'STU-101', name: currentUser?.name || 'Student', documents: [], activities: [] };
+  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0];
+  if (!student) return null;
   const documents: DocumentInfo[] = (student.documents || []) as DocumentInfo[];
 
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -141,20 +154,10 @@ export default function StudentVault() {
       };
 
       const updatedDocs = [newDoc, ...documents];
-      const updatedActivities = [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'UPLOAD',
-          description: `Uploaded document: ${newDoc.name}`
-        },
-        ...(student.activities || [])
-      ];
 
       updateStudent({
         ...student,
-        documents: updatedDocs,
-        activities: updatedActivities
+        documents: updatedDocs
       });
 
       setIsUploadModalOpen(false);
@@ -292,21 +295,17 @@ export default function StudentVault() {
                     <span className="truncate max-w-[150px]">{doc.type}</span>
                   </div>
                   <div className="flex gap-2">
-                    {doc.fileUrl ? (
-                      <a href={doc.fileUrl} target="_blank" rel="noopener noreferrer" className="flex-1">
-                        <Button variant="outline" className="w-full text-xs flex items-center gap-1">
-                          <Eye className="w-3.5 h-3.5" /> Preview
-                        </Button>
-                      </a>
-                    ) : (
-                      <Button variant="outline" className="flex-1 text-xs flex items-center gap-1" onClick={() => setPreviewDoc(doc)}>
-                        <Eye className="w-3.5 h-3.5" /> View Details
-                      </Button>
-                    )}
+                    <Button 
+                      variant="outline" 
+                      className="flex-1 text-xs flex items-center justify-center gap-1.5 border-slate-200 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 transition-colors" 
+                      onClick={() => setPreviewDoc(doc)}
+                    >
+                      <Eye className="w-3.5 h-3.5 text-blue-600" /> Document Preview
+                    </Button>
 
                     <Button 
                       variant="outline" 
-                      className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 border-slate-200"
+                      className="text-xs text-red-600 hover:text-red-700 hover:bg-red-50 border-slate-200 shrink-0"
                       onClick={() => handleDeleteDoc(doc.id)}
                       title="Delete document"
                     >
@@ -320,35 +319,99 @@ export default function StudentVault() {
         )}
       </div>
 
-      {/* Preview Details Modal */}
+      {/* Preview Details & Media Modal */}
       {previewDoc && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl space-y-4">
-            <div className="flex justify-between items-center border-b pb-3">
-              <h3 className="font-bold text-lg text-slate-900 truncate">{previewDoc.name}</h3>
-              <button onClick={() => setPreviewDoc(null)} className="text-slate-400 hover:text-slate-600">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-md">
+          <div className="bg-white rounded-3xl w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
+            <div className="sticky top-0 bg-white border-b border-slate-100 p-5 flex items-center justify-between z-10 rounded-t-3xl">
+              <div className="flex items-center gap-3 overflow-hidden">
+                <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 font-bold text-xs uppercase">
+                  {previewDoc.fileExt || 'DOC'}
+                </div>
+                <div className="truncate">
+                  <h3 className="font-bold text-lg text-slate-900 truncate">{previewDoc.name}</h3>
+                  <p className="text-xs text-slate-500 font-medium">{previewDoc.category} • {previewDoc.type}</p>
+                </div>
+              </div>
+              <button onClick={() => setPreviewDoc(null)} className="text-slate-400 hover:text-slate-600 bg-slate-100 p-2 rounded-full transition-colors shrink-0">
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="space-y-2 text-sm text-slate-600">
-              <p><strong className="text-slate-900">Category:</strong> {previewDoc.category}</p>
-              <p><strong className="text-slate-900">Type:</strong> {previewDoc.type}</p>
-              <p><strong className="text-slate-900">Date Uploaded:</strong> {previewDoc.date}</p>
-              <p><strong className="text-slate-900">Status:</strong> {previewDoc.status}</p>
-              {previewDoc.target && <p><strong className="text-slate-900">Target:</strong> {previewDoc.target}</p>}
-              {previewDoc.notes && <p><strong className="text-slate-900">Notes:</strong> {previewDoc.notes}</p>}
-            </div>
-            {previewDoc.fileUrl && (
-              <div className="pt-2">
-                <a href={previewDoc.fileUrl} download={previewDoc.name} target="_blank" rel="noopener noreferrer">
-                  <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white flex items-center justify-center gap-2">
-                    <Download className="w-4 h-4" /> Download File
-                  </Button>
-                </a>
+
+            <div className="p-6 space-y-6 flex-1">
+              {/* Document File Viewer Box */}
+              {previewDoc.fileUrl ? (
+                <div className="bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-inner p-2 flex flex-col items-center justify-center min-h-[250px]">
+                  {previewDoc.fileUrl.startsWith('data:image') || ['png', 'jpg', 'jpeg', 'webp'].includes(previewDoc.fileExt.toLowerCase()) ? (
+                    <img 
+                      src={previewDoc.fileUrl} 
+                      alt={previewDoc.name} 
+                      className="max-h-[350px] w-auto object-contain rounded-lg"
+                    />
+                  ) : (
+                    <iframe 
+                      src={previewDoc.fileUrl} 
+                      title={previewDoc.name} 
+                      className="w-full h-[350px] rounded-lg bg-white border-none"
+                    />
+                  )}
+                </div>
+              ) : (
+                <div className="bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl p-8 text-center space-y-3">
+                  <div className="w-12 h-12 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mx-auto">
+                    <FileText className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-slate-800 text-base">{previewDoc.name}</h4>
+                    <p className="text-xs text-slate-500 mt-1">Document metadata record created on {previewDoc.date}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Metadata details */}
+              <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200 text-xs">
+                <div>
+                  <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px] mb-0.5">Category</span>
+                  <span className="font-semibold text-slate-800">{previewDoc.category}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px] mb-0.5">Type</span>
+                  <span className="font-semibold text-slate-800">{previewDoc.type}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px] mb-0.5">Uploaded Date</span>
+                  <span className="font-semibold text-slate-800">{previewDoc.date}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px] mb-0.5">Status</span>
+                  <span className="font-bold text-slate-900">{getStatusBadge(previewDoc.status)}</span>
+                </div>
+                {previewDoc.target && (
+                  <div className="col-span-2">
+                    <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px] mb-0.5">Associated Target</span>
+                    <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 inline-block">{previewDoc.target}</span>
+                  </div>
+                )}
+                {previewDoc.notes && (
+                  <div className="col-span-2">
+                    <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px] mb-0.5">Notes / Context</span>
+                    <p className="text-slate-700 bg-white p-2.5 rounded-lg border border-slate-200">{previewDoc.notes}</p>
+                  </div>
+                )}
               </div>
-            )}
-            <div className="pt-2 flex justify-end">
-              <Button variant="ghost" onClick={() => setPreviewDoc(null)}>Close</Button>
+            </div>
+
+            <div className="sticky bottom-0 bg-white border-t border-slate-100 p-4 sm:p-5 flex items-center justify-between gap-3 z-10 rounded-b-3xl">
+              <Button variant="ghost" onClick={() => setPreviewDoc(null)} className="text-slate-500">Close</Button>
+              <div className="flex gap-2">
+                {previewDoc.fileUrl && (
+                  <a href={previewDoc.fileUrl} download={previewDoc.name} target="_blank" rel="noopener noreferrer">
+                    <Button className="bg-blue-600 hover:bg-blue-700 text-white flex items-center gap-2">
+                      <Download className="w-4 h-4" /> Download Document
+                    </Button>
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -156,16 +156,7 @@ export default function StudentUniversities() {
     const updatedShortlist = [...(student.shortlist || []), newUni];
     updateStudent({
       ...student,
-      shortlist: updatedShortlist,
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'UPDATE',
-          description: `Shortlisted university: ${newUni.name}`
-        },
-        ...(student.activities || [])
-      ]
+      shortlist: updatedShortlist
     });
 
     setNewUniName('');
@@ -178,16 +169,7 @@ export default function StudentUniversities() {
     const updatedShortlist = (student.shortlist || []).filter((u: any) => u.id !== uniId && u.name !== targetUni?.name);
     updateStudent({
       ...student,
-      shortlist: updatedShortlist,
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'UPDATE',
-          description: `Removed university from shortlist: ${targetUni?.name || 'University'}`
-        },
-        ...(student.activities || [])
-      ]
+      shortlist: updatedShortlist
     });
   };
 
@@ -352,37 +334,37 @@ export default function StudentUniversities() {
         {shortlist.map((uni) => (
           <Card key={uni.id} className="overflow-hidden border-slate-200 transition-all hover:shadow-md">
             <div 
-              className="p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between cursor-pointer group"
+              className="p-5 flex flex-col md:flex-row items-start md:items-center justify-between cursor-pointer group gap-4"
               onClick={() => setExpandedUniId(expandedUniId === uni.id ? null : uni.id)}
             >
-              <div className="flex items-center gap-4 w-full sm:w-auto">
+              <div className="flex items-center gap-4 flex-1 min-w-0 pr-2 w-full md:w-auto">
                 <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0 text-slate-400 group-hover:text-blue-600 transition-colors">
                   <GraduationCap className="w-6 h-6" />
                 </div>
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 mb-1 min-w-0">
                     <span className={cn(
-                      "w-2 h-2 rounded-full",
+                      "w-2 h-2 rounded-full shrink-0",
                       uni.category === 'Reach' ? "bg-red-500" :
                       uni.category === 'Target' ? "bg-amber-500" :
                       "bg-green-500"
                     )} />
-                    <h3 className="font-bold text-slate-900 text-lg group-hover:text-blue-600 transition-colors">{uni.name}</h3>
+                    <h3 className="font-bold text-slate-900 text-base sm:text-lg group-hover:text-blue-600 transition-colors truncate" title={uni.name}>{uni.name}</h3>
                   </div>
-                  <p className="text-sm text-slate-500">{uni.major}</p>
+                  <p className="text-sm text-slate-500 truncate">{uni.major}</p>
                 </div>
               </div>
               
-              <div className="flex items-center gap-6 mt-4 sm:mt-0 w-full sm:w-auto justify-between sm:justify-end">
-                <div className="text-left sm:text-right">
+              <div className="flex items-center gap-4 sm:gap-6 shrink-0 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
+                <div className="text-left md:text-right shrink-0">
                   <p className="text-sm font-bold text-slate-900">{uni.round}</p>
-                  <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5 justify-start sm:justify-end">
+                  <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5 justify-start md:justify-end">
                     <Clock className="w-3.5 h-3.5" /> 
                     {isNaN(new Date(uni.deadline).getTime()) ? uni.deadline : new Date(uni.deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                   </p>
                 </div>
                 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 shrink-0">
                   <div className="text-right hidden sm:block">
                     <p className="text-xs font-bold text-slate-900">{Object.keys(uni.attachedDocs).length}/{uni.requiredDocs.length} Docs</p>
                     <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Completed</p>

@@ -1,8 +1,16 @@
 export interface Activity {
   id: string;
-  date: string;
-  type: 'SESSION' | 'UPLOAD' | 'UPDATE' | 'SYSTEM' | 'VERIFIED';
-  description: string;
+  date?: string;
+  type?: 'SESSION' | 'UPLOAD' | 'UPDATE' | 'SYSTEM' | 'VERIFIED';
+  description?: string;
+  title?: string;
+  category?: string;
+  organization?: string;
+  role?: string;
+  years?: string;
+  hoursPerWeek?: string;
+  weeksPerYear?: string;
+  verified?: boolean;
 }
 
 export interface ShortlistUniversity {
@@ -66,6 +74,11 @@ export interface Task {
   attachments: TaskAttachment[];
   feedback?: string;
   assignedBy?: string;
+  assignmentType?: string;
+  relatedTo?: string;
+  pdfUrl?: string;
+  pdfFileName?: string;
+  assignedBatch?: string;
 }
 
 export interface AcademicScore {
@@ -88,6 +101,20 @@ export interface ExtracurricularActivity {
   verified: boolean;
 }
 
+export interface DocumentInfo {
+  id: string;
+  name: string;
+  category?: string;
+  type: string;
+  uploadedBy?: string;
+  target?: string;
+  notes?: string;
+  status: 'Pending' | 'Verified' | 'Rejected' | 'rejected' | 'pending' | 'verified' | 'draft';
+  date: string;
+  fileExt?: string;
+  fileUrl?: string;
+}
+
 export interface Student {
   tasks?: Task[];
   id: string;
@@ -98,12 +125,17 @@ export interface Student {
   countries: string[];
   readiness: number;
   counselor: string;
+  researchMentor?: string;
+  satVerbalMentor?: string;
+  satMathMentor?: string;
   school: string;
+  major1?: string;
+  major2?: string;
   activities: Activity[];
   extracurriculars?: ExtracurricularActivity[];
   academicScores?: AcademicScore[];
   shortlist: ShortlistUniversity[];
-  documents: { id: string; name: string; type: string; date: string; status: 'Pending' | 'Verified' }[];
+  documents: DocumentInfo[];
   essays: Essay[];
   password?: string;
 }

@@ -72,8 +72,8 @@ export default function TeamVault() {
     if (!selectedDoc || !reviewAction) return;
     
     let newStatus = selectedDoc.status;
-    if (reviewAction === 'approve') newStatus = 'Verified';
-    if (reviewAction === 'reject') newStatus = 'Rejected';
+    if (reviewAction === 'approve') newStatus = 'verified';
+    if (reviewAction === 'reject') newStatus = 'rejected';
 
     const studentToUpdate = students.find(s => s.id === selectedDoc.studentId);
     if (studentToUpdate) {
@@ -82,16 +82,7 @@ export default function TeamVault() {
       );
       updateStudent({
         ...studentToUpdate,
-        documents: updatedDocs,
-        activities: [
-          {
-            id: Math.random().toString(),
-            date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-            type: newStatus === 'Verified' ? 'VERIFIED' : 'REJECTED',
-            description: `Document ${newStatus.toLowerCase()}: ${selectedDoc.name}`
-          },
-          ...(studentToUpdate.activities || [])
-        ]
+        documents: updatedDocs
       });
     }
     

@@ -2,6 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
+import { GoogleGenAI } from "@google/genai";
 import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { db } from "./src/db/index.ts";
 import { users, studentsData, staffData, batchesData, eventsData } from "./src/db/schema.ts";
@@ -374,6 +375,147 @@ async function startServer() {
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
+    }
+  });
+
+  // AI Narrative Strategist API for Author's Compass
+  app.post("/api/ai/narrative-angles", async (req, res) => {
+    try {
+      const { essayType, prompt, wordCount, studentProfile } = req.body;
+      if (!essayType || !wordCount) {
+        res.status(400).json({ error: "Draft Classification (essayType) and Target Word Count (wordCount) are mandatory." });
+        return;
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        res.status(500).json({ error: "GEMINI_API_KEY environment variable is missing." });
+        return;
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+
+      const systemInstruction = `You are Author's Compass, an elite AI writing environment and narrative strategist for aspiring authors, students, and essayists.
+
+CRITICAL INSTRUCTIONS:
+- DO NOT generate full copy-and-paste essay drafts or robotic AI text.
+- Your sole job is to suggest creative narrative turns, structural pacing, profile-grounded story connections, and grammar/style guidelines so the writer constructs their own authentic draft.
+
+Given the student's draft classification, target word count, optional prompt, and profile background:
+1. Analyze their real background context (activities, majors, interests).
+2. Formulate 2–3 distinct potential narrative angles/options.
+3. For each option, include:
+   - title: Catchy, working narrative angle title.
+   - narrativeTurn: The creative pivot, central story arc, or storytelling perspective.
+   - profileConnection: Specific suggestions connecting the user's profile details (activities, extracurriculars, interests) to this narration.
+   - structuralOutline: Step-by-step structural pacing and section word distribution scaled to the target word count.
+   - grammarAndToneAdvice: Key English grammar, phrase errors to avoid, punctuation tips, and tone advice.
+
+Maintain an encouraging, authentic authorial tone. Avoid cliché college admissions buzzwords ("testament," "beacon," "tapestry," "delve").`;
+
+      const userPrompt = `
+MANDATORY SETUP:
+- Draft Classification: ${essayType}
+- Target Word Count: ${wordCount}
+
+OPTIONAL PROMPT / TOPIC:
+${prompt && prompt.trim() ? prompt.trim() : 'General personal narrative / Open topic grounded in student profile'}
+
+STUDENT PROFILE CONTEXT:
+${typeof studentProfile === 'string' ? studentProfile : JSON.stringify(studentProfile, null, 2)}
+`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.6-flash',
+        contents: [
+          { role: 'user', parts: [{ text: userPrompt }] }
+        ],
+        config: {
+          systemInstruction: systemInstruction,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              options: {
+                type: "ARRAY",
+                items: {
+                  type: "OBJECT",
+                  properties: {
+                    title: { type: "STRING" },
+                    narrativeTurn: { type: "STRING" },
+                    profileConnection: { type: "STRING" },
+                    structuralOutline: { type: "STRING" },
+                    grammarAndToneAdvice: { type: "STRING" }
+                  },
+                  required: ["title", "narrativeTurn", "profileConnection", "structuralOutline", "grammarAndToneAdvice"]
+                }
+              },
+              generalAdvice: { type: "STRING" }
+            },
+            required: ["options"]
+          }
+        }
+      });
+
+      let jsonResult;
+      try {
+        jsonResult = JSON.parse(response.text || '{}');
+      } catch (e) {
+        jsonResult = { options: [], rawText: response.text };
+      }
+
+      res.json({ result: jsonResult });
+    } catch (err: any) {
+      console.error("AI narrative angles error:", err);
+      res.status(500).json({ error: err.message || "Failed to generate narrative strategy." });
+    }
+  });
+
+  // AI SOP & Personal Essay Proofreader / Mentor API
+  app.post("/api/ai/proofread-essay", async (req, res) => {
+    try {
+      const { essayText } = req.body;
+      if (!essayText || !essayText.trim()) {
+        res.status(400).json({ error: "Input text is required." });
+        return;
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        res.status(500).json({ error: "GEMINI_API_KEY environment variable is missing." });
+        return;
+      }
+
+      const ai = new GoogleGenAI({ apiKey });
+      
+      const systemInstruction = `You are an expert academic proofreader and writing mentor specializing in Statements of Purpose (SOPs) and personal student essays. Your core mission is to correct mechanical errors while fiercely protecting the user's authentic tone, personal voice, and narrative originality.
+
+### RULES FOR EDITING:
+1. GRAMMAR & MECHANICS: Fix all spelling errors, grammatical mistakes, subject-verb disagreements, and incorrect verb tenses. 
+2. PUNCTUATION: Correctly place commas, semicolons, colons, and apostrophes according to standard English rules. Remove comma splices and run-on sentences by breaking or properly linking them.
+3. TONE & STYLE CONSERVATION: Do NOT change the user's voice, vocabulary level, or emotional intent. Do NOT replace simple, honest words with overly complex academic jargon or "AI-sounding" buzzwords (e.g., "testament," "delve," "tapestry," "beacon").
+4. PRESERVATION: Keep original phrasing and sentence structures intact whenever they are grammatically defensible. Only rephrase if a sentence is entirely ungrammatical or incomprehensible.
+
+### OUTPUT FORMAT:
+Provide your response in two clearly labeled sections using Markdown:
+
+1. **Polished Text:** The fully corrected text with proper grammar, spelling, and punctuation, maintaining the exact original style and flow.
+2. **Correction Log:** A concise, bulleted list detailing every major correction made (spelling, comma/semicolon fix, tense adjustment) and a brief 5-word reason why it was changed, so the student can learn from it.`;
+
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.6-flash',
+        contents: [
+          { role: 'user', parts: [{ text: `Input text to edit:\n${essayText}` }] }
+        ],
+        config: {
+          systemInstruction: systemInstruction,
+        }
+      });
+
+      res.json({ result: response.text });
+    } catch (err: any) {
+      console.error("AI proofread error:", err);
+      res.status(500).json({ error: err.message || "Failed to process AI proofreading request." });
     }
   });
 

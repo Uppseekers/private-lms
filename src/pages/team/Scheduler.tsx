@@ -32,15 +32,17 @@ export default function TeamScheduler() {
   const handleEditEvent = (evt: any) => {
     setEditingEventId(evt.id);
     setFormData({
-      stream: evt.stream || evt.type,
-      title: evt.title,
-      date: evt.date,
-      time: evt.time,
-      duration: evt.duration,
+      stream: evt.stream || evt.type || 'Counselling (1-on-1)',
+      title: evt.title || '',
+      date: evt.date || '',
+      startTime: evt.startTime || evt.time || '10:00',
+      endTime: evt.endTime || '11:00',
       location: evt.link || evt.location || '',
+      notes: evt.notes || '',
+      assignments: evt.assignments || '',
       isRecurring: false,
-      recurringWeeks: 1,
-      notes: evt.notes || ''
+      recurrenceType: 'weekly',
+      recurrenceCount: 1
     });
     if (evt.batch) {
       setAudienceType('batch');
@@ -192,15 +194,31 @@ export default function TeamScheduler() {
               </div>
 
               {audienceType === 'individual' ? (
-                <div>
-                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Select Student</label>
+                <div className="relative">
+                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">
+                     Select Student (Assigned Database Auto-Prompt)
+                   </label>
                    <input 
                      type="text" 
-                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm" 
-                     placeholder="Search student by name..."
+                     className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 font-medium" 
+                     placeholder="Type student name or email to auto-prompt..."
                      value={studentSearch}
                      onChange={(e) => setStudentSearch(e.target.value)}
+                     list="assigned-students-datalist"
                    />
+                   <datalist id="assigned-students-datalist">
+                     {students.map(s => (
+                       <option key={s.id} value={s.name}>
+                         {s.email} | {s.school || 'High School'} | Counselor: {s.counselor || 'Unassigned'}
+                       </option>
+                     ))}
+                   </datalist>
+                   {studentSearch.trim().length > 0 && (
+                     <div className="mt-2 text-xs text-slate-500 flex items-center justify-between bg-blue-50/50 p-2 rounded border border-blue-100">
+                       <span>Selected Student Target: <strong className="text-blue-900">{studentSearch}</strong></span>
+                       <span className="text-[10px] bg-blue-100 text-blue-700 px-2 py-0.5 rounded font-bold uppercase">1-on-1 Assigned</span>
+                     </div>
+                   )}
                 </div>
               ) : (
                 <div>

@@ -105,7 +105,8 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
 
 export default function StudentTasks() {
   const { students, updateStudent, currentUser } = useDatabase();
-  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0] || { id: 'STU-1', name: currentUser?.name || 'Student', tasks: [], activities: [] };
+  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0];
+  if (!student) return null;
   const tasks = student.tasks || [];
   
   const [viewMode, setViewMode] = useState<'board' | 'list'>('board');
@@ -321,7 +322,7 @@ const TaskCard: React.FC<{ task: Task, onClick: () => void }> = ({ task, onClick
 const TaskDetailModal: React.FC<{ task: Task, onClose: () => void, onUpdate: (t: Task) => void }> = ({ task, onClose, onUpdate }) => {
   const [notes, setNotes] = useState(task.studentNotes || '');
   const [url, setUrl] = useState(task.externalUrl || '');
-  const [attachments, setAttachments] = useState<{ id: string; fileName: string; fileUrl?: string }[]>(task.attachments || []);
+  const [attachments, setAttachments] = useState<TaskAttachment[]>(task.attachments || []);
   const isLocked = task.stage === 'SUBMITTED_FOR_REVIEW' || task.stage === 'COMPLETED';
   const stageInfo = STAGES.find(s => s.id === task.stage);
 
@@ -333,7 +334,8 @@ const TaskDetailModal: React.FC<{ task: Task, onClose: () => void, onUpdate: (t:
       const newAtt = {
         id: `ATT-${Date.now()}`,
         fileName: file.name,
-        fileUrl: event.target?.result as string
+        fileUrl: event.target?.result as string,
+        uploadedAt: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })
       };
       const updated = [...attachments, newAtt];
       setAttachments(updated);
@@ -370,6 +372,16 @@ const TaskDetailModal: React.FC<{ task: Task, onClose: () => void, onUpdate: (t:
                  {stageInfo?.label}
                </span>
                <span className="px-2.5 py-1 bg-white text-slate-600 rounded-md text-[10px] font-bold border border-slate-200 uppercase tracking-wider">{task.category}</span>
+               {task.assignmentType && (
+                 <span className="px-2.5 py-1 bg-blue-100 text-blue-800 rounded-md text-[10px] font-bold uppercase tracking-wider">
+                   {task.assignmentType}
+                 </span>
+               )}
+               {task.relatedTo && (
+                 <span className="px-2.5 py-1 bg-purple-100 text-purple-800 rounded-md text-[10px] font-bold uppercase tracking-wider">
+                   Related: {task.relatedTo}
+                 </span>
+               )}
              </div>
              <h2 className="text-2xl font-bold text-slate-900">{task.name}</h2>
              <div className="flex gap-4 text-xs font-medium text-slate-500">
@@ -387,10 +399,26 @@ const TaskDetailModal: React.FC<{ task: Task, onClose: () => void, onUpdate: (t:
            {/* Instructions */}
            <div>
              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 flex items-center gap-2">
-               <FileText className="w-4 h-4" /> Task Description & Instructions
+               <FileText className="w-4 h-4" /> Task Details & Writing Instructions
              </h3>
-             <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 text-sm text-slate-700 leading-relaxed">
-               {task.description || 'No specific instructions provided.'}
+             <div className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 text-sm text-slate-700 leading-relaxed space-y-3">
+               <p className="whitespace-pre-wrap">{task.description || 'No specific instructions provided.'}</p>
+               {(task.pdfFileName || task.pdfUrl) && (
+                 <div className="pt-3 border-t border-blue-100 flex items-center justify-between bg-white p-3 rounded-lg border border-blue-200">
+                   <div className="flex items-center gap-2">
+                     <FileText className="w-4 h-4 text-red-500" />
+                     <span className="text-xs font-bold text-slate-800">{task.pdfFileName || 'Attached_Assignment_Doc.pdf'}</span>
+                   </div>
+                   <a 
+                     href={task.pdfUrl || '#'} 
+                     target="_blank" 
+                     rel="noreferrer"
+                     className="text-xs bg-blue-600 hover:bg-blue-700 text-white font-bold px-3 py-1.5 rounded-md transition-colors inline-flex items-center gap-1"
+                   >
+                     View / Download PDF
+                   </a>
+                 </div>
+               )}
              </div>
            </div>
            

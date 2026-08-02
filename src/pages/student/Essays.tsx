@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Save, Send, AlertCircle, Plus, CheckCircle2, Clock, MessageSquare, BookOpen, ChevronRight, Wand2 } from 'lucide-react';
+import { Search, Save, Send, AlertCircle, Plus, CheckCircle2, Clock, MessageSquare, BookOpen, ChevronRight, Wand2, Sparkles, Copy, Check, FileCheck, RefreshCw, X } from 'lucide-react';
+import Markdown from 'react-markdown';
 import { cn } from '@/lib/utils';
 import { useDatabase } from '@/context/DatabaseContext';
-import { Student, Essay, EssayVersion } from '@/types';
+import { Student, Essay, EssayVersion, Task, TaskStage } from '@/types';
 
 
 
@@ -101,6 +102,41 @@ export default function StudentEssays() {
   const student = students.find(s => s.id === currentUser.id || s.email === currentUser.email) || (currentUser as any);
   const essays = student?.essays || [];
   const [selectedEssay, setSelectedEssay] = useState<Essay | null>(null);
+  const [isProofreaderOpen, setIsProofreaderOpen] = useState(false);
+  const [proofreaderInitialText, setProofreaderInitialText] = useState('');
+
+  const syncTaskForEssay = (currentTasks: Task[] = [], essay: Essay, status: Essay['status']): Task[] => {
+    let stage: TaskStage = 'IN_PROGRESS';
+    if (status === 'Under Review') stage = 'SUBMITTED_FOR_REVIEW';
+    if (status === 'Needs Revision') stage = 'NEEDS_REVISION';
+    if (status === 'Approved') stage = 'COMPLETED';
+
+    const existingIdx = currentTasks.findIndex(t => 
+      t.relatedTo === essay.id || t.name.toLowerCase().includes(essay.prompt.toLowerCase().substring(0, 20))
+    );
+
+    if (existingIdx >= 0) {
+      const updated = [...currentTasks];
+      updated[existingIdx] = {
+        ...updated[existingIdx],
+        stage
+      };
+      return updated;
+    } else {
+      const newTask: Task = {
+        id: 'TASK-' + Math.floor(1000 + Math.random() * 9000),
+        name: `Essay: ${essay.university ? `${essay.university} - ` : ''}${essay.prompt.substring(0, 50)}${essay.prompt.length > 50 ? '...' : ''}`,
+        category: 'Administrative / College Prep',
+        dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        stage,
+        description: `University/Target: ${essay.university || 'General'}\nPrompt: ${essay.prompt}`,
+        assignedBy: 'Essay Writing Tool',
+        relatedTo: essay.id,
+        attachments: []
+      };
+      return [...currentTasks, newTask];
+    }
+  };
 
   const handleCreateNewDocument = () => {
     if (!student) return;
@@ -120,24 +156,19 @@ export default function StudentEssays() {
     };
 
     const updatedEssays = [newEssay, ...(student.essays || [])];
+    const updatedTasks = syncTaskForEssay(student.tasks || [], newEssay, 'In Progress');
+
     updateStudent({
       ...student,
       essays: updatedEssays,
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'SYSTEM',
-          description: `Started a new blank essay document`
-        },
-        ...(student.activities || [])
-      ]
+      tasks: updatedTasks
     });
     setSelectedEssay(newEssay);
   };
 
   const handleSaveDraft = (essayId: string, content: string) => {
     if (!student) return;
+    let targetEssay: Essay | null = null;
     const newEssays = essays.map(e => {
       if (e.id === essayId) {
         const newVersion: EssayVersion = {
@@ -146,51 +177,48 @@ export default function StudentEssays() {
           content,
           date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })
         };
-        return {
+        const updated = {
           ...e,
           status: 'Draft Saved' as const,
           versions: [newVersion, ...e.versions]
         };
+        targetEssay = updated;
+        return updated;
       }
       return e;
     });
     
+    const updatedTasks = targetEssay 
+      ? syncTaskForEssay(student.tasks || [], targetEssay, 'Draft Saved')
+      : (student.tasks || []);
+
     updateStudent({
       ...student,
       essays: newEssays,
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'UPDATE',
-          description: `Draft saved for ${newEssays.find(e => e.id === essayId)?.prompt}`
-        },
-        ...(student.activities || [])
-      ]
+      tasks: updatedTasks
     });
   };
 
   const handleSubmit = (essayId: string) => {
     if (!student) return;
+    let targetEssay: Essay | null = null;
     const newEssays = essays.map(e => {
       if (e.id === essayId) {
-        return { ...e, status: 'Under Review' as const };
+        const updated = { ...e, status: 'Under Review' as const };
+        targetEssay = updated;
+        return updated;
       }
       return e;
     });
     
+    const updatedTasks = targetEssay 
+      ? syncTaskForEssay(student.tasks || [], targetEssay, 'Under Review')
+      : (student.tasks || []);
+
     updateStudent({
       ...student,
       essays: newEssays,
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'UPLOAD',
-          description: `Essay submitted for review: ${newEssays.find(e => e.id === essayId)?.prompt}`
-        },
-        ...(student.activities || [])
-      ]
+      tasks: updatedTasks
     });
   };
 
@@ -215,12 +243,15 @@ export default function StudentEssays() {
             <option>Sort by Status</option>
           </select>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input type="text" placeholder="Search Prompt / University..." className="w-64 bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
           </div>
-          <Button onClick={handleCreateNewDocument} className="bg-blue-600 hover:bg-blue-700 text-white">
+          <Button onClick={() => { setProofreaderInitialText(''); setIsProofreaderOpen(true); }} className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold shadow-sm">
+            <Sparkles className="w-4 h-4 mr-2" /> AI SOP & Essay Proofreader
+          </Button>
+          <Button onClick={handleCreateNewDocument} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
             <Plus className="w-4 h-4 mr-2" /> New Document
           </Button>
         </div>
@@ -281,6 +312,13 @@ export default function StudentEssays() {
           </div>
         </Card>
       )}
+
+      {isProofreaderOpen && (
+        <AiProofreaderModal 
+          initialText={proofreaderInitialText}
+          onClose={() => setIsProofreaderOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -310,8 +348,55 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
   const grammarIssues = grammarErrors.length;
   const [activeErrorId, setActiveErrorId] = useState<string | null>(null);
   
-  const [aiTab, setAiTab] = useState<'checks' | 'dictionary'>('checks');
+  const [aiTab, setAiTab] = useState<'checks' | 'proofreader' | 'dictionary'>('checks');
   const [dictionarySearch, setDictionarySearch] = useState('');
+  const [aiProofreadResult, setAiProofreadResult] = useState('');
+  const [isAiProofreading, setIsAiProofreading] = useState(false);
+  const [aiProofreadError, setAiProofreadError] = useState('');
+  const [aiCopied, setAiCopied] = useState(false);
+
+  const handleRunAiMentor = async () => {
+    if (!content.trim()) return;
+    setIsAiProofreading(true);
+    setAiProofreadError('');
+    try {
+      const token = localStorage.getItem('auth_token') || 'custom_demo_token';
+      const res = await fetch('/api/ai/proofread-essay', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ essayText: content })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Proofreading failed');
+      setAiProofreadResult(data.result);
+    } catch (err: any) {
+      setAiProofreadError(err.message || 'An error occurred during proofreading.');
+    } finally {
+      setIsAiProofreading(false);
+    }
+  };
+
+  const extractPolishedTextFromMarkdown = (markdown: string) => {
+    const match = markdown.match(/###?\s*1\.\s*\*\*Polished Text:\*\*\s*([\s\S]*?)(?=###?\s*2\.\s*\*\*Correction Log:\*\*|$)/i);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+    if (markdown.includes('**Correction Log:**')) {
+      return markdown.split('**Correction Log:**')[0].replace(/###?\s*1\.\s*\*\*Polished Text:\*\*/i, '').trim();
+    }
+    return markdown;
+  };
+
+  const handleApplyPolishedToDraft = () => {
+    if (!aiProofreadResult) return;
+    const polished = extractPolishedTextFromMarkdown(aiProofreadResult);
+    if (window.confirm("Replace your current draft with the polished text?")) {
+      setContent(polished);
+    }
+  };
 
   const handleFixError = (err: GrammarError) => {
     if (!err.suggestion) return;
@@ -511,26 +596,17 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
                </div>
             </div>
             
-            <div className="flex-1 relative bg-white overflow-hidden">
-              <div 
-                id="highlight-overlay"
-                className="absolute inset-0 w-full h-full p-8 font-serif text-lg leading-relaxed text-slate-800 whitespace-pre-wrap break-words overflow-auto pointer-events-none z-10"
-                aria-hidden="true"
-                style={{ scrollbarWidth: 'none' /* hide scrollbar so it doesn't cover textarea scrollbar */ }}
-              >
-                {renderHighlightedText()}
-              </div>
+            <div className="flex-1 relative bg-white overflow-hidden p-2">
               <textarea
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                onScroll={handleScroll}
                 disabled={isReadOnly}
                 placeholder="Start writing your essay here..."
-                className={`absolute inset-0 w-full h-full p-8 resize-none focus:outline-none focus:ring-0 font-serif text-lg leading-relaxed disabled:bg-slate-50 disabled:text-slate-600 z-0 bg-transparent caret-slate-800 ${grammarErrors.length > 0 ? 'text-transparent' : 'text-slate-800'}`}
+                className="w-full h-full p-6 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 font-serif text-lg leading-relaxed text-slate-800 bg-white border border-slate-200 rounded-xl disabled:bg-slate-50 disabled:text-slate-600 shadow-inner"
               />
               {isReadOnly && (
-                <div className="absolute inset-0 bg-slate-50/50 flex items-center justify-center backdrop-blur-[1px] pointer-events-none">
-                  <div className="bg-white/90 px-4 py-2 rounded-lg shadow-sm border border-slate-200 text-sm font-bold text-slate-600 uppercase tracking-wider">
+                <div className="absolute inset-0 bg-slate-50/70 flex items-center justify-center backdrop-blur-[1px] pointer-events-none rounded-xl">
+                  <div className="bg-white px-4 py-2 rounded-lg shadow-md border border-slate-200 text-sm font-bold text-slate-700 uppercase tracking-wider">
                     Editor Locked ({essay.status})
                   </div>
                 </div>
@@ -587,14 +663,21 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
               <div className="flex bg-slate-200/60 p-0.5 rounded-lg text-xs font-semibold">
                 <button 
                   onClick={() => setAiTab('checks')} 
-                  className={cn("px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5", aiTab === 'checks' ? "bg-white text-blue-700 shadow-sm font-bold" : "text-slate-600 hover:text-slate-900")}
+                  className={cn("px-2.5 py-1.5 rounded-md transition-all flex items-center gap-1", aiTab === 'checks' ? "bg-white text-blue-700 shadow-sm font-bold" : "text-slate-600 hover:text-slate-900")}
                 >
                   <Wand2 className="w-3.5 h-3.5" />
-                  Live Checks ({grammarIssues})
+                  Checks ({grammarIssues})
+                </button>
+                <button 
+                  onClick={() => setAiTab('proofreader')} 
+                  className={cn("px-2.5 py-1.5 rounded-md transition-all flex items-center gap-1", aiTab === 'proofreader' ? "bg-white text-purple-700 shadow-sm font-bold" : "text-slate-600 hover:text-slate-900")}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-purple-600" />
+                  AI Mentor
                 </button>
                 <button 
                   onClick={() => setAiTab('dictionary')} 
-                  className={cn("px-3 py-1.5 rounded-md transition-all flex items-center gap-1.5", aiTab === 'dictionary' ? "bg-white text-indigo-700 shadow-sm font-bold" : "text-slate-600 hover:text-slate-900")}
+                  className={cn("px-2.5 py-1.5 rounded-md transition-all flex items-center gap-1", aiTab === 'dictionary' ? "bg-white text-indigo-700 shadow-sm font-bold" : "text-slate-600 hover:text-slate-900")}
                 >
                   <BookOpen className="w-3.5 h-3.5" />
                   Dictionary
@@ -673,6 +756,82 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
                     </div>
                   </div>
                 </div>
+              ) : aiTab === 'proofreader' ? (
+                <div className="space-y-3">
+                  <div className="p-3 bg-purple-50 border border-purple-100 rounded-xl space-y-2">
+                    <div className="flex items-center gap-2 text-purple-900 font-bold text-xs">
+                      <Sparkles className="w-4 h-4 text-purple-600" />
+                      <span>AI Academic Proofreader & Mentor</span>
+                    </div>
+                    <p className="text-[11px] text-purple-700 leading-relaxed">
+                      Corrects mechanical errors, run-ons & commas while strictly preserving your authentic student voice and narrative tone.
+                    </p>
+                    <Button 
+                      onClick={handleRunAiMentor} 
+                      disabled={isAiProofreading || !content.trim()} 
+                      className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold py-2 shadow-sm"
+                    >
+                      {isAiProofreading ? (
+                        <>
+                          <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                          Proofreading Draft...
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                          Run Proofreader on Draft
+                        </>
+                      )}
+                    </Button>
+                  </div>
+
+                  {aiProofreadError && (
+                    <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs">
+                      {aiProofreadError}
+                    </div>
+                  )}
+
+                  {aiProofreadResult ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Analysis Results</span>
+                        <div className="flex gap-1.5">
+                          <Button 
+                            size="sm" 
+                            variant="outline" 
+                            onClick={() => {
+                              navigator.clipboard.writeText(aiProofreadResult);
+                              setAiCopied(true);
+                              setTimeout(() => setAiCopied(false), 2000);
+                            }}
+                            className="h-6 text-[10px] px-2 font-bold"
+                          >
+                            {aiCopied ? <Check className="w-3 h-3 text-green-600 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+                            {aiCopied ? 'Copied' : 'Copy'}
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            onClick={handleApplyPolishedToDraft} 
+                            className="h-6 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                          >
+                            <FileCheck className="w-3 h-3 mr-1" /> Apply
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="max-h-[300px] overflow-y-auto p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2 prose prose-xs max-w-none text-slate-800">
+                        <Markdown>{aiProofreadResult}</Markdown>
+                      </div>
+                    </div>
+                  ) : (
+                    !isAiProofreading && (
+                      <div className="p-4 text-center text-slate-400 text-xs space-y-1">
+                        <p className="font-semibold text-slate-500">Ready to audit your essay draft.</p>
+                        <p className="text-[11px] text-slate-400">Click "Run Proofreader on Draft" to receive polished text & a detailed correction log.</p>
+                      </div>
+                    )
+                  )}
+                </div>
               ) : (
                 <div className="space-y-3">
                   <div className="relative">
@@ -721,6 +880,568 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
             </CardContent>
           </Card>
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface NarrativeOption {
+  title: string;
+  narrativeTurn: string;
+  profileConnection: string;
+  structuralOutline: string;
+  grammarAndToneAdvice: string;
+}
+
+export function AiProofreaderModal({ 
+  initialText = '', 
+  onClose, 
+  onApplyText 
+}: { 
+  initialText?: string; 
+  onClose: () => void; 
+  onApplyText?: (polishedText: string) => void;
+}) {
+  const { students, currentUser } = useDatabase();
+  const currentStudent = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0];
+
+  const [activeTab, setActiveTab] = useState<'narrative' | 'proofread'>('narrative');
+
+  // Narrative Strategist State (Sequential Setup)
+  const [essayCategory, setEssayCategory] = useState<'A Common App / Main Personal Essay' | 'A Supplementary Essay (e.g., "Why Us", Major Interest, Community)' | 'A General Essay / Article / Statement of Purpose' | ''>('');
+  const [promptTopic, setPromptTopic] = useState('');
+  const [targetWordCount, setTargetWordCount] = useState('650');
+  const [narrativeOptions, setNarrativeOptions] = useState<NarrativeOption[]>([]);
+  const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
+  const [generalAdvice, setGeneralAdvice] = useState('');
+  const [narrativeRawResult, setNarrativeRawResult] = useState('');
+  const [isNarrativeLoading, setIsNarrativeLoading] = useState(false);
+  const [narrativeError, setNarrativeError] = useState('');
+
+  // Proofreader State
+  const [inputText, setInputText] = useState(initialText);
+  const [isLoading, setIsLoading] = useState(false);
+  const [resultMarkdown, setResultMarkdown] = useState('');
+  const [errorMessage, setErrorMessage] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const handleGenerateNarrativeAngles = async () => {
+    if (!essayCategory || !targetWordCount.trim()) return;
+    setIsNarrativeLoading(true);
+    setNarrativeError('');
+    setNarrativeOptions([]);
+    setSelectedOptionIndex(null);
+    setNarrativeRawResult('');
+    try {
+      const token = localStorage.getItem('auth_token') || 'custom_demo_token';
+      const studentProfileContext = currentStudent ? {
+        name: currentStudent.name,
+        major: currentStudent.major1 || currentStudent.major2 || 'Undecided',
+        countries: currentStudent.countries,
+        activities: currentStudent.activities,
+        extracurriculars: currentStudent.extracurriculars
+      } : "High school senior aspiring for university study";
+
+      const res = await fetch('/api/ai/narrative-angles', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          essayType: essayCategory,
+          prompt: promptTopic,
+          wordCount: targetWordCount,
+          studentProfile: studentProfileContext
+        })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to generate narrative angles.');
+      
+      if (data.result && Array.isArray(data.result.options) && data.result.options.length > 0) {
+        setNarrativeOptions(data.result.options);
+        setSelectedOptionIndex(0);
+        if (data.result.generalAdvice) setGeneralAdvice(data.result.generalAdvice);
+      } else if (typeof data.result === 'string') {
+        setNarrativeRawResult(data.result);
+      } else if (data.result && data.result.rawText) {
+        setNarrativeRawResult(data.result.rawText);
+      }
+    } catch (err: any) {
+      setNarrativeError(err.message || 'Error formulating narrative strategy.');
+    } finally {
+      setIsNarrativeLoading(false);
+    }
+  };
+
+  const handleApplySelectedOption = (opt: NarrativeOption) => {
+    const formattedGuide = `/* NARRATIVE STRATEGY GUIDE */
+Category: ${essayCategory}
+Target Words: ${targetWordCount}
+Working Title: ${opt.title}
+
+SUGGESTED NARRATIVE TURN:
+${opt.narrativeTurn}
+
+PROFILE CONNECTION SUGGESTIONS:
+${opt.profileConnection}
+
+STRUCTURAL OUTLINE & PACING:
+${opt.structuralOutline}
+
+GRAMMAR & TONE GUIDELINES:
+${opt.grammarAndToneAdvice}
+
+--------------------------------------------------
+[Write your draft below using the strategy above]
+`;
+    if (onApplyText) {
+      onApplyText(formattedGuide);
+      onClose();
+    } else {
+      setInputText(formattedGuide);
+      setActiveTab('proofread');
+    }
+  };
+
+  const handleProofread = async () => {
+    if (!inputText.trim()) return;
+    setIsLoading(true);
+    setErrorMessage('');
+    try {
+      const token = localStorage.getItem('auth_token') || 'custom_demo_token';
+      const res = await fetch('/api/ai/proofread-essay', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ essayText: inputText })
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to proofread essay.');
+      }
+      setResultMarkdown(data.result);
+    } catch (err: any) {
+      setErrorMessage(err.message || 'An error occurred during AI proofreading.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const extractPolishedText = (markdown: string) => {
+    const match = markdown.match(/###?\s*1\.\s*\*\*Polished Text:\*\*\s*([\s\S]*?)(?=###?\s*2\.\s*\*\*Correction Log:\*\*|$)/i);
+    if (match && match[1]) {
+      return match[1].trim();
+    }
+    if (markdown.includes('**Correction Log:**')) {
+      return markdown.split('**Correction Log:**')[0].replace(/###?\s*1\.\s*\*\*Polished Text:\*\*/i, '').trim();
+    }
+    return markdown;
+  };
+
+  const handleApply = () => {
+    if (!onApplyText || !resultMarkdown) return;
+    const polished = extractPolishedText(resultMarkdown);
+    onApplyText(polished);
+    onClose();
+  };
+
+  const handleCopy = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm overflow-y-auto">
+      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl my-8 p-6 space-y-5 animate-in fade-in zoom-in-95 duration-200">
+        {/* Header */}
+        <div className="flex justify-between items-center border-b border-slate-100 pb-4">
+          <div className="flex items-center gap-3">
+            <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-2.5 rounded-xl text-white shadow-md">
+              <Sparkles className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-lg font-bold text-slate-900">Author's Compass: Elite AI Writing Environment & Mentor</h3>
+              <p className="text-xs text-slate-500">Formulate narrative strategies, connect profile details, and refine grammar without pre-generated AI text.</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Tab Selector */}
+        <div className="flex bg-slate-100 p-1 rounded-xl w-fit text-xs font-bold">
+          <button
+            onClick={() => setActiveTab('narrative')}
+            className={cn(
+              "px-4 py-2 rounded-lg transition-all flex items-center gap-2",
+              activeTab === 'narrative' ? "bg-white text-purple-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
+            )}
+          >
+            <Sparkles className="w-4 h-4 text-purple-600" />
+            1. Narrative Strategist (Setup & Angles)
+          </button>
+          <button
+            onClick={() => setActiveTab('proofread')}
+            className={cn(
+              "px-4 py-2 rounded-lg transition-all flex items-center gap-2",
+              activeTab === 'proofread' ? "bg-white text-indigo-700 shadow-sm" : "text-slate-600 hover:text-slate-900"
+            )}
+          >
+            <Wand2 className="w-4 h-4 text-indigo-600" />
+            2. Proofreader & Style Mentor
+          </button>
+        </div>
+
+        {/* Tab Content */}
+        {activeTab === 'narrative' ? (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+            {/* Sequential Setup Form */}
+            <div className="lg:col-span-5 space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-200">
+              <div className="border-b border-slate-200 pb-3 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-purple-600 uppercase tracking-wider bg-purple-50 px-2 py-0.5 rounded border border-purple-100">Draft Setup</span>
+                  <h4 className="text-sm font-bold text-slate-900 mt-1">Configure Essay Context</h4>
+                </div>
+              </div>
+
+              {/* Step 1: Draft Classification & Constraints (Mandatory) */}
+              <div className="space-y-3 p-3 bg-white border border-purple-100 rounded-xl shadow-xs">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-purple-900 flex items-center gap-1.5">
+                    <span className="bg-purple-600 text-white w-4 h-4 rounded-full flex items-center justify-center text-[10px]">1</span>
+                    Step 1: Draft Classification & Constraints
+                  </label>
+                  <span className="text-[10px] font-bold text-red-500 uppercase tracking-wider bg-red-50 px-1.5 py-0.5 rounded">Mandatory</span>
+                </div>
+
+                <div className="space-y-1.5">
+                  <span className="text-[11px] font-semibold text-slate-600">Select Classification:</span>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {[
+                      'A Common App / Main Personal Essay',
+                      'A Supplementary Essay (e.g., "Why Us", Major Interest, Community)',
+                      'A General Essay / Article / Statement of Purpose'
+                    ].map((cat) => (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => setEssayCategory(cat as any)}
+                        className={cn(
+                          "text-left p-2.5 rounded-lg text-xs font-semibold border transition-all flex items-center justify-between",
+                          essayCategory === cat 
+                            ? "border-purple-600 bg-purple-50 text-purple-900 shadow-xs" 
+                            : "border-slate-200 bg-slate-50/50 text-slate-700 hover:border-purple-200"
+                        )}
+                      >
+                        <span className="line-clamp-2">{cat}</span>
+                        {essayCategory === cat && <CheckCircle2 className="w-4 h-4 text-purple-600 shrink-0 ml-1" />}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="space-y-1.5 pt-1 border-t border-slate-100">
+                  <span className="text-[11px] font-semibold text-slate-600">Your target word count:</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={targetWordCount}
+                      onChange={(e) => setTargetWordCount(e.target.value)}
+                      placeholder="e.g., 650 words, 250 words"
+                      className="flex-1 p-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                    <div className="flex items-center gap-1 shrink-0">
+                      {['250', '500', '650'].map(wc => (
+                        <button
+                          key={wc}
+                          type="button"
+                          onClick={() => setTargetWordCount(`${wc} words`)}
+                          className={cn(
+                            "px-2 py-1 rounded text-[10px] font-bold border transition-colors",
+                            targetWordCount.includes(wc) 
+                              ? "bg-purple-600 text-white border-purple-600" 
+                              : "bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200"
+                          )}
+                        >
+                          {wc}w
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Step 2: Prompt (Optional) */}
+              <div className="space-y-2 p-3 bg-white border border-slate-200 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <span className="bg-slate-500 text-white w-4 h-4 rounded-full flex items-center justify-center text-[10px]">2</span>
+                    Step 2: Prompt
+                  </label>
+                  <span className="text-[10px] font-semibold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded">Optional</span>
+                </div>
+                <p className="text-[11px] text-slate-500 font-medium">Please share: The exact prompt or central topic you wish to address.</p>
+                <textarea
+                  value={promptTopic}
+                  onChange={(e) => setPromptTopic(e.target.value)}
+                  placeholder="Paste prompt or topic here (optional, e.g. 'Describe a topic, idea, or concept you find so engaging that it makes you lose all track of time...')"
+                  className="w-full h-20 p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
+                />
+              </div>
+
+              {/* Action */}
+              <Button
+                onClick={handleGenerateNarrativeAngles}
+                disabled={isNarrativeLoading || !essayCategory || !targetWordCount.trim()}
+                className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold py-2.5 shadow-md"
+              >
+                {isNarrativeLoading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Synthesizing Strategy...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 mr-2" /> Suggest Narrative Turns & Profile Connections
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {/* Narrative Angles Display & Selection */}
+            <div className="lg:col-span-7 space-y-3 flex flex-col">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Suggested Narrative Turns & Profile Connections
+                </label>
+                {selectedOptionIndex !== null && narrativeOptions[selectedOptionIndex] && (
+                  <Button 
+                    size="sm" 
+                    variant="outline" 
+                    onClick={() => {
+                      const opt = narrativeOptions[selectedOptionIndex];
+                      handleCopy(`TITLE: ${opt.title}\n\nNARRATIVE TURN:\n${opt.narrativeTurn}\n\nPROFILE CONNECTION:\n${opt.profileConnection}\n\nSTRUCTURAL OUTLINE:\n${opt.structuralOutline}\n\nGRAMMAR & TONE:\n${opt.grammarAndToneAdvice}`);
+                    }} 
+                    className="h-7 text-[11px] font-bold"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-green-600 mr-1" /> : <Copy className="w-3.5 h-3.5 mr-1" />}
+                    {copied ? 'Copied Strategy' : 'Copy Strategy'}
+                  </Button>
+                )}
+              </div>
+
+              <div className="w-full h-[460px] p-4 bg-slate-50 border border-slate-200 rounded-2xl overflow-y-auto space-y-4">
+                {isNarrativeLoading ? (
+                  <div className="h-full flex flex-col items-center justify-center space-y-3 text-purple-600">
+                    <Sparkles className="w-8 h-8 animate-pulse" />
+                    <p className="font-semibold text-slate-600 text-xs">Analyzing profile background & synthesizing narrative turns...</p>
+                  </div>
+                ) : narrativeError ? (
+                  <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs">
+                    {narrativeError}
+                  </div>
+                ) : narrativeOptions.length > 0 ? (
+                  <div className="space-y-4">
+                    {generalAdvice && (
+                      <div className="p-3 bg-purple-50/80 border border-purple-100 rounded-xl text-xs text-purple-900 flex items-start gap-2">
+                        <Sparkles className="w-4 h-4 text-purple-600 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold">Authorial Strategy Overview: </span>
+                          {generalAdvice}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-4">
+                      {narrativeOptions.map((opt, idx) => {
+                        const isSelected = selectedOptionIndex === idx;
+                        return (
+                          <div
+                            key={idx}
+                            onClick={() => setSelectedOptionIndex(idx)}
+                            className={cn(
+                              "p-4 rounded-xl border-2 transition-all cursor-pointer space-y-3 bg-white relative",
+                              isSelected 
+                                ? "border-purple-600 bg-purple-50/10 shadow-md ring-2 ring-purple-500/20" 
+                                : "border-slate-200 hover:border-purple-300 hover:bg-slate-50/50"
+                            )}
+                          >
+                            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                              <div className="flex items-center gap-2">
+                                <span className={cn(
+                                  "px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider",
+                                  isSelected ? "bg-purple-600 text-white" : "bg-slate-100 text-slate-700"
+                                )}>
+                                  Option {idx + 1}
+                                </span>
+                                <h5 className="font-bold text-sm text-slate-900">{opt.title}</h5>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedOptionIndex(idx);
+                                }}
+                                className={cn(
+                                  "text-xs font-bold px-3 py-1 rounded-lg flex items-center gap-1 transition-all",
+                                  isSelected 
+                                    ? "bg-purple-600 text-white shadow-xs" 
+                                    : "bg-slate-100 text-slate-600 hover:bg-purple-100 hover:text-purple-700"
+                                )}
+                              >
+                                {isSelected ? (
+                                  <>
+                                    <CheckCircle2 className="w-3.5 h-3.5" /> Selected Option
+                                  </>
+                                ) : (
+                                  "Select Option"
+                                )}
+                              </button>
+                            </div>
+
+                            {/* Narrative Turn */}
+                            <div className="p-3 bg-purple-50/70 border border-purple-100 rounded-lg text-xs text-purple-950">
+                              <span className="font-bold text-purple-900 block mb-1">💡 Suggested Narrative Turn:</span>
+                              <p className="leading-relaxed">{opt.narrativeTurn}</p>
+                            </div>
+
+                            {/* Profile Connection */}
+                            <div className="p-3 bg-blue-50/70 border border-blue-100 rounded-lg text-xs text-blue-950">
+                              <span className="font-bold text-blue-900 block mb-1">👤 Profile Details Connection:</span>
+                              <p className="leading-relaxed">{opt.profileConnection}</p>
+                            </div>
+
+                            {/* Outline */}
+                            <div className="text-xs text-slate-600">
+                              <span className="font-bold text-slate-800">Structural Outline & Pacing: </span>
+                              <div className="mt-1 p-2 bg-slate-50 border border-slate-100 rounded-lg font-mono text-[11px] whitespace-pre-line text-slate-700">
+                                {opt.structuralOutline}
+                              </div>
+                            </div>
+
+                            {/* Grammar & Tone Advice */}
+                            <div className="p-2.5 bg-amber-50/70 border border-amber-200/60 rounded-lg text-xs text-amber-900">
+                              <span className="font-bold text-amber-900 block mb-0.5">✍️ English Grammar & Style Notes:</span>
+                              <p className="leading-relaxed text-[11px]">{opt.grammarAndToneAdvice}</p>
+                            </div>
+
+                            {/* Apply Button */}
+                            <div className="pt-1 flex justify-end">
+                              <Button
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setSelectedOptionIndex(idx);
+                                  handleApplySelectedOption(opt);
+                                }}
+                                className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs h-8"
+                              >
+                                <FileCheck className="w-3.5 h-3.5 mr-1" /> Use Strategy & Start Writing
+                              </Button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : narrativeRawResult ? (
+                  <div className="prose prose-xs max-w-none text-slate-800 space-y-4">
+                    <Markdown>{narrativeRawResult}</Markdown>
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-6 space-y-2">
+                    <BookOpen className="w-8 h-8 text-slate-300" />
+                    <p className="font-medium text-slate-500">Complete Mandatory Step 1 on the left.</p>
+                    <p className="text-[11px] text-slate-400">Author's Compass will analyze your profile and synthesize 2–3 custom narrative turns and profile connections.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            {/* Input Side */}
+            <div className="space-y-3 flex flex-col">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Original SOP / Essay Text</label>
+                <span className="text-[11px] text-slate-400 font-medium">
+                  {inputText.trim().split(/\s+/).filter(Boolean).length} words
+                </span>
+              </div>
+              <textarea 
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                placeholder="Paste your Statement of Purpose (SOP) or personal essay draft here..."
+                className="w-full h-80 p-4 bg-slate-50 border border-slate-200 rounded-xl text-sm font-serif leading-relaxed focus:outline-none focus:ring-2 focus:ring-purple-500 resize-none"
+              />
+              <Button 
+                onClick={handleProofread} 
+                disabled={isLoading || !inputText.trim()} 
+                className="bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white font-bold py-2.5 w-full shadow-md"
+              >
+                {isLoading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Analyzing Mechanics & Voice...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 mr-2" /> Proofread & Mentoring Analysis
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {/* Output Side */}
+            <div className="space-y-3 flex flex-col">
+              <div className="flex justify-between items-center">
+                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">Polished Text & Correction Log</label>
+                {resultMarkdown && (
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => handleCopy(resultMarkdown)} className="h-7 text-[11px] font-bold">
+                      {copied ? <Check className="w-3.5 h-3.5 text-green-600 mr-1" /> : <Copy className="w-3.5 h-3.5 mr-1" />}
+                      {copied ? 'Copied' : 'Copy Response'}
+                    </Button>
+                    {onApplyText && (
+                      <Button size="sm" onClick={handleApply} className="h-7 text-[11px] bg-emerald-600 hover:bg-emerald-700 text-white font-bold">
+                        <FileCheck className="w-3.5 h-3.5 mr-1" /> Apply to Editor
+                      </Button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="w-full h-80 p-4 bg-slate-50 border border-slate-200 rounded-xl overflow-y-auto text-xs leading-relaxed text-slate-800">
+                {isLoading ? (
+                  <div className="h-full flex flex-col items-center justify-center space-y-3 text-purple-600">
+                    <Sparkles className="w-8 h-8 animate-pulse" />
+                    <p className="font-semibold text-slate-600">Reviewing grammar, punctuation & narrative voice...</p>
+                  </div>
+                ) : errorMessage ? (
+                  <div className="p-4 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs space-y-1">
+                    <p className="font-bold">Error Processing Request</p>
+                    <p>{errorMessage}</p>
+                  </div>
+                ) : resultMarkdown ? (
+                  <div className="prose prose-xs max-w-none text-slate-800 space-y-4">
+                    <Markdown>{resultMarkdown}</Markdown>
+                  </div>
+                ) : (
+                  <div className="h-full flex flex-col items-center justify-center text-center text-slate-400 p-6 space-y-2">
+                    <Sparkles className="w-8 h-8 text-slate-300" />
+                    <p className="font-medium text-slate-500">No proofreading results yet.</p>
+                    <p className="text-[11px] text-slate-400">Paste your text on the left and click "Proofread & Mentoring Analysis".</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

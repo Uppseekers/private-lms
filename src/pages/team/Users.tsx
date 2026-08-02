@@ -2,25 +2,26 @@ import React, { useState } from 'react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check } from 'lucide-react';
+import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Student, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage } from '@/types';
-
-
-
-
-
-
-
+import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage } from '@/types';
 
 export default function TeamUsers() {
-  const { students, setStudents, currentUser } = useDatabase();
+  const { students, setStudents, staff, setStaff, currentUser } = useDatabase();
+  const [activeViewTab, setActiveViewTab] = useState<'students' | 'staff'>('students');
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Selection state
+  const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
+  const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>([]);
+  
+  // Modals
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [isAddStaffModalOpen, setIsAddStaffModalOpen] = useState(false);
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
 
   const filteredStudents = students.filter(s => {
-    // If not SYSTEM_ADMIN or DEVELOPER, filter by counselor name
     if (currentUser.role !== 'SYSTEM_ADMIN' && currentUser.role !== 'DEVELOPER' && currentUser.role !== 'OPERATIONS_LEAD') {
       if (s.counselor !== currentUser.name) return false;
     }
@@ -28,6 +29,12 @@ export default function TeamUsers() {
            s.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
            s.id.toLowerCase().includes(searchQuery.toLowerCase());
   });
+
+  const filteredStaff = staff.filter(m => 
+    m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    m.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    m.role.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   const getReadinessColor = (percent: number) => {
     if (percent >= 90) return 'text-green-600';
@@ -46,73 +53,320 @@ export default function TeamUsers() {
     setSelectedStudent(updatedStudent);
   };
 
+  // Student Selection logic
+  const toggleSelectStudent = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedStudentIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllStudents = () => {
+    if (selectedStudentIds.length === filteredStudents.length && filteredStudents.length > 0) {
+      setSelectedStudentIds([]);
+    } else {
+      setSelectedStudentIds(filteredStudents.map(s => s.id));
+    }
+  };
+
+  const handleDeleteSelectedStudents = () => {
+    if (selectedStudentIds.length === 0) return;
+    if (window.confirm(`Are you sure you want to permanently delete ${selectedStudentIds.length} selected student(s) from the database?`)) {
+      setStudents(students.filter(s => !selectedStudentIds.includes(s.id)));
+      setSelectedStudentIds([]);
+    }
+  };
+
+  const handleDeleteSingleStudent = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm('Are you sure you want to delete this student from the database?')) {
+      setStudents(students.filter(s => s.id !== id));
+      if (selectedStudent?.id === id) setSelectedStudent(null);
+    }
+  };
+
+  // Staff Selection logic
+  const toggleSelectStaff = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedStaffIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const toggleSelectAllStaff = () => {
+    if (selectedStaffIds.length === filteredStaff.length && filteredStaff.length > 0) {
+      setSelectedStaffIds([]);
+    } else {
+      setSelectedStaffIds(filteredStaff.map(s => s.id));
+    }
+  };
+
+  const handleDeleteSelectedStaff = () => {
+    if (selectedStaffIds.length === 0) return;
+    if (window.confirm(`Are you sure you want to permanently delete ${selectedStaffIds.length} selected staff member(s) from the database?`)) {
+      setStaff(staff.filter(s => !selectedStaffIds.includes(s.id)));
+      setSelectedStaffIds([]);
+    }
+  };
+
+  const handleDeleteSingleStaff = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm('Are you sure you want to delete this staff user from the database?')) {
+      setStaff(staff.filter(s => s.id !== id));
+    }
+  };
+
   return (
     <div className="max-w-7xl mx-auto space-y-6">
-      <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight">Central Student Database</h2>
+      {/* Top Header & View Tabs */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+        <div className="flex items-center gap-3">
+          <div className="bg-blue-50 p-2 rounded-lg text-blue-600">
+            <UsersIcon className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-900 tracking-tight">User & Roster Database</h2>
+            <div className="flex gap-2 mt-1">
+              <button 
+                onClick={() => setActiveViewTab('students')}
+                className={cn(
+                  "text-xs font-bold px-3 py-1 rounded-md transition-colors",
+                  activeViewTab === 'students' ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                )}
+              >
+                Students ({students.length})
+              </button>
+              <button 
+                onClick={() => setActiveViewTab('staff')}
+                className={cn(
+                  "text-xs font-bold px-3 py-1 rounded-md transition-colors",
+                  activeViewTab === 'staff' ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                )}
+              >
+                Staff & Mentors ({staff.length})
+              </button>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-4">
+
+        <div className="flex flex-wrap items-center gap-3">
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input 
               type="text" 
-              placeholder="Search Name, Email, or Student ID..." 
+              placeholder={activeViewTab === 'students' ? "Search student name, email, ID..." : "Search staff name, email, role..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-80 bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-64 md:w-80 bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <Button variant="outline" className="bg-white text-slate-700">
-            <Filter className="w-4 h-4 mr-2" /> Filters
-          </Button>
-          <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => setIsAddModalOpen(true)}>
-            <Plus className="w-4 h-4 mr-2" /> Add New Student
-          </Button>
+
+          {/* Delete Selected Button */}
+          {activeViewTab === 'students' && selectedStudentIds.length > 0 && (
+            <Button 
+              onClick={handleDeleteSelectedStudents}
+              className="bg-red-600 hover:bg-red-700 text-white font-bold"
+            >
+              <Trash2 className="w-4 h-4 mr-2" /> Delete Selected ({selectedStudentIds.length})
+            </Button>
+          )}
+
+          {activeViewTab === 'staff' && selectedStaffIds.length > 0 && (
+            <Button 
+              onClick={handleDeleteSelectedStaff}
+              className="bg-red-600 hover:bg-red-700 text-white font-bold"
+            >
+              <Trash2 className="w-4 h-4 mr-2" /> Delete Selected ({selectedStaffIds.length})
+            </Button>
+          )}
+
+          {activeViewTab === 'students' && (
+            <>
+              <Button 
+                variant="outline" 
+                onClick={() => setIsImportModalOpen(true)}
+                className="bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100 font-bold"
+              >
+                <Upload className="w-4 h-4 mr-2 text-emerald-600" /> Import Students
+              </Button>
+              <Button className="bg-blue-600 hover:bg-blue-700 text-white font-bold" onClick={() => setIsAddModalOpen(true)}>
+                <Plus className="w-4 h-4 mr-2" /> Add Student
+              </Button>
+            </>
+          )}
+
+          {activeViewTab === 'staff' && (
+            <Button className="bg-blue-600 hover:bg-blue-700 text-white font-bold" onClick={() => setIsAddStaffModalOpen(true)}>
+              <Plus className="w-4 h-4 mr-2" /> Add Staff Member
+            </Button>
+          )}
         </div>
       </div>
 
-      <Card className="overflow-hidden border-slate-200 shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-              <tr>
-                <th className="px-6 py-4">ID</th>
-                <th className="px-6 py-4">Student Name</th>
-                <th className="px-6 py-4">Email & Phone</th>
-                <th className="px-6 py-4">Intake</th>
-                <th className="px-6 py-4">Target Countries</th>
-                <th className="px-6 py-4">Readiness</th>
-                <th className="px-6 py-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-              {filteredStudents.map(student => (
-                <tr key={student.id} className="hover:bg-slate-50 transition-colors cursor-pointer group" onClick={() => setSelectedStudent(student)}>
-                  <td className="px-6 py-4 font-mono text-xs text-slate-500">{student.id}</td>
-                  <td className="px-6 py-4 font-bold text-slate-900 group-hover:text-blue-600 transition-colors">{student.name}</td>
-                  <td className="px-6 py-4">
-                    <p className="text-slate-900 font-medium">{student.email}</p>
-                    <p className="text-xs text-slate-500">{student.phone}</p>
-                  </td>
-                  <td className="px-6 py-4 text-slate-600 font-medium">{student.intake}</td>
-                  <td className="px-6 py-4 text-slate-600">{(student.countries || []).join(', ')}</td>
-                  <td className="px-6 py-4 font-bold">
-                    <span className={getReadinessColor(student.readiness)}>{getReadinessIcon(student.readiness)} {student.readiness}%</span>
-                  </td>
-                  <td className="px-6 py-4 text-right space-x-2">
-                    <Button variant="ghost" size="sm" className="text-blue-600" onClick={(e) => { e.stopPropagation(); setSelectedStudent(student); }}>View</Button>
-                    <Button variant="ghost" size="sm" className="text-slate-400 p-1" onClick={(e) => e.stopPropagation()}><MoreVertical className="w-4 h-4" /></Button>
-                  </td>
+      {/* STUDENTS TABLE VIEW */}
+      {activeViewTab === 'students' && (
+        <Card className="overflow-hidden border-slate-200 shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm whitespace-nowrap">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                <tr>
+                  <th className="px-4 py-4 w-10 text-center">
+                    <input 
+                      type="checkbox"
+                      checked={selectedStudentIds.length === filteredStudents.length && filteredStudents.length > 0}
+                      onChange={toggleSelectAllStudents}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                    />
+                  </th>
+                  <th className="px-4 py-4">ID</th>
+                  <th className="px-6 py-4">Student Name</th>
+                  <th className="px-6 py-4">Email & Phone</th>
+                  <th className="px-6 py-4">Assigned Counselor & Mentors</th>
+                  <th className="px-6 py-4">Intake</th>
+                  <th className="px-6 py-4">Target Countries</th>
+                  <th className="px-6 py-4">Readiness</th>
+                  <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          {filteredStudents.length === 0 && (
-            <div className="p-8 text-center text-slate-500">No students found matching your search.</div>
-          )}
-        </div>
-      </Card>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {filteredStudents.map(student => (
+                  <tr 
+                    key={student.id} 
+                    className={cn(
+                      "hover:bg-slate-50 transition-colors cursor-pointer group",
+                      selectedStudentIds.includes(student.id) && "bg-blue-50/60"
+                    )}
+                    onClick={() => setSelectedStudent(student)}
+                  >
+                    <td className="px-4 py-4 text-center" onClick={(e) => e.stopPropagation()}>
+                      <input 
+                        type="checkbox"
+                        checked={selectedStudentIds.includes(student.id)}
+                        onChange={(e) => toggleSelectStudent(student.id, e as any)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                      />
+                    </td>
+                    <td className="px-4 py-4 font-mono text-xs text-slate-500">{student.id}</td>
+                    <td className="px-6 py-4 font-bold text-slate-900 group-hover:text-blue-600 transition-colors">{student.name}</td>
+                    <td className="px-6 py-4">
+                      <p className="text-slate-900 font-medium">{student.email}</p>
+                      <p className="text-xs text-slate-500">{student.phone}</p>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-xs space-y-0.5">
+                        <p className="font-semibold text-slate-800">Counselor: <span className="font-normal text-slate-600">{student.counselor || '—'}</span></p>
+                        {student.researchMentor && <p className="text-[11px] text-indigo-600 font-medium">Research: {student.researchMentor}</p>}
+                        {(student.satVerbalMentor || student.satMathMentor) && (
+                          <p className="text-[11px] text-amber-600 font-medium">
+                            SAT: {student.satVerbalMentor || '—'} (V) / {student.satMathMentor || '—'} (M)
+                          </p>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-slate-600 font-medium">{student.intake}</td>
+                    <td className="px-6 py-4 text-slate-600">{(student.countries || []).join(', ')}</td>
+                    <td className="px-6 py-4 font-bold">
+                      <span className={getReadinessColor(student.readiness)}>{getReadinessIcon(student.readiness)} {student.readiness}%</span>
+                    </td>
+                    <td className="px-6 py-4 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                      <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setSelectedStudent(student)}>
+                        View
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2"
+                        title="Delete Student"
+                        onClick={(e) => handleDeleteSingleStudent(student.id, e)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filteredStudents.length === 0 && (
+              <div className="p-8 text-center text-slate-500">No students found matching your search.</div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {/* STAFF / TEAM TABLE VIEW */}
+      {activeViewTab === 'staff' && (
+        <Card className="overflow-hidden border-slate-200 shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm whitespace-nowrap">
+              <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                <tr>
+                  <th className="px-4 py-4 w-10 text-center">
+                    <input 
+                      type="checkbox"
+                      checked={selectedStaffIds.length === filteredStaff.length && filteredStaff.length > 0}
+                      onChange={toggleSelectAllStaff}
+                      className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                    />
+                  </th>
+                  <th className="px-6 py-4">Name</th>
+                  <th className="px-6 py-4">Email</th>
+                  <th className="px-6 py-4">Role</th>
+                  <th className="px-6 py-4">Assigned Scope</th>
+                  <th className="px-6 py-4">Status</th>
+                  <th className="px-6 py-4 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 bg-white">
+                {filteredStaff.map(member => (
+                  <tr 
+                    key={member.id} 
+                    className={cn(
+                      "hover:bg-slate-50 transition-colors",
+                      selectedStaffIds.includes(member.id) && "bg-blue-50/60"
+                    )}
+                  >
+                    <td className="px-4 py-4 text-center">
+                      <input 
+                        type="checkbox"
+                        checked={selectedStaffIds.includes(member.id)}
+                        onChange={(e) => toggleSelectStaff(member.id, e as any)}
+                        className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
+                      />
+                    </td>
+                    <td className="px-6 py-4 font-bold text-slate-900">{member.name}</td>
+                    <td className="px-6 py-4 text-slate-600 font-medium">{member.email}</td>
+                    <td className="px-6 py-4">
+                      <span className="px-2.5 py-1 bg-blue-100 text-blue-800 rounded-md text-[10px] font-bold uppercase">
+                        {member.role}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-slate-600 text-xs">{member.students || 'All'}</td>
+                    <td className="px-6 py-4 font-bold text-xs">
+                      <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold uppercase">
+                        {member.status || 'Active'}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 text-right">
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2"
+                        title="Delete Staff User"
+                        onClick={(e) => handleDeleteSingleStaff(member.id, e)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {filteredStaff.length === 0 && (
+              <div className="p-8 text-center text-slate-500">No staff users found.</div>
+            )}
+          </div>
+        </Card>
+      )}
 
       {/* Slide-out Drawer for Student Details */}
       {selectedStudent && (
@@ -135,9 +389,258 @@ export default function TeamUsers() {
           </div>
         </div>
       )}
+
+      {/* Add Staff Member Modal */}
+      {isAddStaffModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-2xl w-full max-w-md shadow-xl my-8 p-6 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-900">Add New Staff / Mentor User</h3>
+              <button onClick={() => setIsAddStaffModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <AddStaffForm onClose={() => setIsAddStaffModalOpen(false)} onAdd={(newStaff) => {
+              setStaff([...staff, newStaff]);
+              setIsAddStaffModalOpen(false);
+            }} />
+          </div>
+        </div>
+      )}
+
+      {/* Import Students Modal */}
+      {isImportModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-2xl w-full max-w-xl shadow-xl my-8 p-6 space-y-4">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-emerald-600" /> Batch Import Students (CSV / Text)
+              </h3>
+              <button onClick={() => setIsImportModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
+            </div>
+            <ImportStudentsModal 
+              onClose={() => setIsImportModalOpen(false)} 
+              onImport={(newStudents) => {
+                setStudents([...newStudents, ...students]);
+                setIsImportModalOpen(false);
+              }}
+              counselorName={currentUser?.name || 'Admin'}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
+
+function AddStaffForm({ onClose, onAdd }: { onClose: () => void, onAdd: (s: StaffMember) => void }) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [role, setRole] = useState('COUNSELOR');
+  const [password, setPassword] = useState('Uppseekers@123');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!name || !email) return;
+    onAdd({
+      id: Math.random().toString(),
+      name,
+      email,
+      role,
+      students: 'All',
+      status: 'Active',
+      password
+    });
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Full Name</label>
+        <input 
+          type="text" 
+          required 
+          value={name} 
+          onChange={e => setName(e.target.value)} 
+          placeholder="e.g. Dr. Aris Thorne"
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Email Address</label>
+        <input 
+          type="email" 
+          required 
+          value={email} 
+          onChange={e => setEmail(e.target.value)} 
+          placeholder="e.g. aris@uppseekers.com"
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Role / Designation</label>
+        <select 
+          value={role} 
+          onChange={e => setRole(e.target.value)}
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option value="SYSTEM_ADMIN">System Admin</option>
+          <option value="COUNSELOR">Counselor</option>
+          <option value="SAT_MATH_FACULTY">SAT Math Faculty</option>
+          <option value="SAT_VERBAL_FACULTY">SAT Verbal Faculty</option>
+          <option value="RESEARCH_MENTOR">Research Mentor</option>
+          <option value="OPERATIONS_LEAD">Operations Lead</option>
+          <option value="DEVELOPER">Developer</option>
+        </select>
+      </div>
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Initial Password</label>
+        <input 
+          type="text" 
+          value={password} 
+          onChange={e => setPassword(e.target.value)} 
+          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 font-mono" 
+        />
+      </div>
+      <div className="flex justify-end gap-2 pt-2">
+        <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button type="submit" className="bg-blue-600 text-white font-bold">Create Staff User</Button>
+      </div>
+    </form>
+  );
+}
+
+function ImportStudentsModal({ onClose, onImport, counselorName }: { onClose: () => void, onImport: (students: Student[]) => void, counselorName: string }) {
+  const [csvText, setCsvText] = useState('');
+  const [importCount, setImportCount] = useState<number | null>(null);
+
+  const downloadSampleCSV = () => {
+    const sample = "Name, Email, Phone, Intake, Target Countries, High School\n" +
+                   "Aarav Sharma, aarav@example.com, +91 9876543210, Fall 2026, USA; UK, Delhi Public School\n" +
+                   "Emily Chen, emily.chen@example.com, +1 415 555 2671, Fall 2027, USA; Canada, St. Paul Academy\n" +
+                   "Rohan Gupta, rohan.g@example.com, +91 9123456789, Spring 2027, Singapore; Australia, Cathedral & John Connon";
+    const blob = new Blob([sample], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'students_import_template.csv';
+    a.click();
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        if (evt.target?.result) {
+          setCsvText(evt.target.result as string);
+        }
+      };
+      reader.readAsText(file);
+    }
+  };
+
+  const executeImport = () => {
+    const lines = csvText.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) return;
+
+    const startIndex = (lines[0].toLowerCase().includes('name') || lines[0].toLowerCase().includes('email')) ? 1 : 0;
+    const importedList: Student[] = [];
+
+    for (let i = startIndex; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim().replace(/^["']|["']$/g, ''));
+      if (cols.length >= 2) {
+        const name = cols[0] || 'Imported Student';
+        const email = cols[1] || `student${Math.floor(Math.random() * 10000)}@example.com`;
+        const phone = cols[2] || '+1 555-0100';
+        const intake = cols[3] || 'Fall 2026';
+        const countriesStr = cols[4] || 'USA, UK';
+        const school = cols[5] || 'High School';
+
+        importedList.push({
+          id: `STU-${Math.floor(1000 + Math.random() * 9000)}`,
+          name,
+          email,
+          phone,
+          counselor: counselorName,
+          school,
+          intake,
+          countries: countriesStr.split(';').map(s => s.trim()),
+          readiness: 10,
+          shortlist: [],
+          documents: [],
+          essays: [],
+          tasks: [],
+          activities: [
+            {
+              id: Math.random().toString(),
+              date: new Date().toLocaleDateString(),
+              type: 'SYSTEM',
+              description: 'Profile created via CSV Batch Import'
+            }
+          ]
+        });
+      }
+    }
+
+    if (importedList.length > 0) {
+      onImport(importedList);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 flex justify-between items-center">
+        <div>
+          <p className="font-bold">Format: CSV or Comma-Separated Values</p>
+          <p className="text-emerald-700">Columns: Name, Email, Phone, Intake, Target Countries, High School</p>
+        </div>
+        <Button size="sm" variant="outline" onClick={downloadSampleCSV} className="bg-white border-emerald-300 text-emerald-800 text-xs font-bold">
+          <Download className="w-3.5 h-3.5 mr-1" /> Template CSV
+        </Button>
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Upload CSV File</label>
+        <input 
+          type="file" 
+          accept=".csv,.txt,.json"
+          onChange={handleFileUpload}
+          className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+        />
+      </div>
+
+      <div>
+        <label className="block text-xs font-bold text-slate-700 mb-1">Or Paste CSV Data Directly</label>
+        <textarea 
+          value={csvText}
+          onChange={(e) => setCsvText(e.target.value)}
+          placeholder={`Name, Email, Phone, Intake, Target Countries, High School\nAarav Sharma, aarav@example.com, +91 9876543210, Fall 2026, USA; UK, DPS Delhi`}
+          className="w-full h-36 bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"
+        />
+      </div>
+
+      <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+        <Button variant="ghost" onClick={onClose}>Cancel</Button>
+        <Button 
+          onClick={executeImport} 
+          disabled={!csvText.trim()}
+          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+        >
+          <Upload className="w-4 h-4 mr-2" /> Import Students
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+
+
+
 
 function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student, onClose: () => void, onUpdate: (s: Student) => void }) {
   const [activeTab, setActiveTab] = useState('Profile Details');
@@ -662,6 +1165,9 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
     countries: [],
     school: '',
     counselor: '',
+    researchMentor: '',
+    satVerbalMentor: '',
+    satMathMentor: '',
     sendInvite: true,
     password: ''
   });
@@ -683,6 +1189,9 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
       countries: formData.countries,
       school: formData.school,
       counselor: formData.counselor,
+      researchMentor: formData.researchMentor,
+      satVerbalMentor: formData.satVerbalMentor,
+      satMathMentor: formData.satMathMentor,
       readiness: 0,
       password: generatedPassword,
       activities: [
@@ -820,18 +1329,54 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
         </section>
 
         <section>
-           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Assignments & Initial Access</h3>
+           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Counselor & Mentor Assignments</h3>
            <div className="space-y-4">
-             <div>
-               <label className="block text-sm font-bold text-slate-700 mb-1.5">Assigned Counselor</label>
-               <select value={formData.counselor} onChange={e => setFormData({...formData, counselor: e.target.value})} className="w-full sm:w-1/2 bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                 <option value="">Select Counselor</option>
-                 {staff.map(s => (
-                   <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
-                 ))}
-                 <option value="Unassigned">Unassigned</option>
-               </select>
+             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+               <div>
+                 <label className="block text-sm font-bold text-slate-700 mb-1.5">Assigned Counselor</label>
+                 <select value={formData.counselor} onChange={e => setFormData({...formData, counselor: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                   <option value="">Select Counselor</option>
+                   {staff.map(s => (
+                     <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
+                   ))}
+                   <option value="Unassigned">Unassigned</option>
+                 </select>
+               </div>
+
+               <div>
+                 <label className="block text-sm font-bold text-slate-700 mb-1.5">Research Mentor</label>
+                 <select value={formData.researchMentor} onChange={e => setFormData({...formData, researchMentor: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                   <option value="">Select Research Mentor</option>
+                   {staff.map(s => (
+                     <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
+                   ))}
+                   <option value="Unassigned">Unassigned</option>
+                 </select>
+               </div>
+
+               <div>
+                 <label className="block text-sm font-bold text-slate-700 mb-1.5">SAT Mentor (Verbal)</label>
+                 <select value={formData.satVerbalMentor} onChange={e => setFormData({...formData, satVerbalMentor: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                   <option value="">Select SAT Verbal Mentor</option>
+                   {staff.map(s => (
+                     <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
+                   ))}
+                   <option value="Unassigned">Unassigned</option>
+                 </select>
+               </div>
+
+               <div>
+                 <label className="block text-sm font-bold text-slate-700 mb-1.5">SAT Mentor (Maths)</label>
+                 <select value={formData.satMathMentor} onChange={e => setFormData({...formData, satMathMentor: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                   <option value="">Select SAT Maths Mentor</option>
+                   {staff.map(s => (
+                     <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
+                   ))}
+                   <option value="Unassigned">Unassigned</option>
+                 </select>
+               </div>
              </div>
+
              <div>
                <label className="flex items-start gap-3 cursor-pointer p-4 border border-blue-100 bg-blue-50 rounded-xl">
                  <input type="checkbox" checked={formData.sendInvite} onChange={e => setFormData({...formData, sendInvite: e.target.checked})} className="mt-0.5 w-4 h-4 text-blue-600 rounded border-blue-300 focus:ring-blue-500" />
@@ -992,25 +1537,31 @@ function EssaysView({ student, onUpdate }: { student: Student, onUpdate: (s: Stu
 
   const handleAssignPrompt = () => {
     if (!newPrompt) return;
+    const essayId = 'e' + Date.now();
     const newEssay: Essay = {
-      id: 'e' + Date.now(),
+      id: essayId,
       prompt: newPrompt,
       university: newUniversity,
       status: 'In Progress',
       versions: []
     };
+
+    const newTask: Task = {
+      id: 'TASK-' + Math.floor(1000 + Math.random() * 9000),
+      name: `Essay Prompt: ${newUniversity ? `${newUniversity} - ` : ''}${newPrompt.substring(0, 50)}${newPrompt.length > 50 ? '...' : ''}`,
+      category: 'Administrative / College Prep',
+      dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      stage: 'TO_DO',
+      description: `University/Target: ${newUniversity || 'General'}\nPrompt: ${newPrompt}`,
+      assignedBy: `Counselor (${student.counselor || 'Advisor'})`,
+      relatedTo: essayId,
+      attachments: []
+    };
+
     onUpdate({
       ...student,
       essays: [...essays, newEssay],
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'SYSTEM',
-          description: `Counselor assigned new prompt: ${newPrompt}`
-        },
-        ...student.activities
-      ]
+      tasks: [...(student.tasks || []), newTask]
     });
     setIsAssigning(false);
     setNewPrompt('');
@@ -1239,15 +1790,22 @@ const TASK_CATEGORIES: TaskCategory[] = [
 ];
 
 function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
+  const { batches, students, setStudents } = useDatabase();
   const tasks = student.tasks || [];
   const [isAssigning, setIsAssigning] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   
-  // New Task Form
+  // New Task / Assignment Form
   const [newTaskName, setNewTaskName] = useState('');
   const [newTaskCategory, setNewTaskCategory] = useState<TaskCategory>('Administrative / College Prep');
+  const [assignmentType, setAssignmentType] = useState('Essay Draft / Writing');
+  const [relatedTo, setRelatedTo] = useState('');
   const [newTaskDate, setNewTaskDate] = useState('');
   const [newTaskDesc, setNewTaskDesc] = useState('');
+  const [pdfFileName, setPdfFileName] = useState('');
+  const [pdfUrl, setPdfUrl] = useState('');
+  const [assignTarget, setAssignTarget] = useState<'student' | 'batch'>('student');
+  const [selectedBatchId, setSelectedBatchId] = useState('');
   
   // Feedback Form
   const [feedback, setFeedback] = useState('');
@@ -1263,28 +1821,61 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
       dueDate: newTaskDate || 'TBD',
       stage: 'TO_DO',
       description: newTaskDesc,
-      attachments: [],
-      assignedBy: 'Counselor (Team Portal)'
+      attachments: pdfFileName ? [{ id: '1', fileName: pdfFileName, fileUrl: pdfUrl || '#', uploadedAt: new Date().toLocaleDateString() }] : [],
+      assignedBy: 'Counselor / Mentor Portal',
+      assignmentType,
+      relatedTo,
+      pdfFileName,
+      pdfUrl,
+      assignedBatch: assignTarget === 'batch' ? selectedBatchId : undefined
     };
     
-    onUpdate({
-      ...student,
-      tasks: [...tasks, newTask],
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'UPDATE',
-          description: `New task assigned: \${newTask.name}`
-        },
-        ...student.activities
-      ]
-    });
+    if (assignTarget === 'student') {
+      onUpdate({
+        ...student,
+        tasks: [...tasks, newTask],
+        activities: [
+          {
+            id: Math.random().toString(),
+            date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+            type: 'UPDATE',
+            description: `New assignment created (${assignmentType}): ${newTask.name}`
+          },
+          ...student.activities
+        ]
+      });
+    } else {
+      const targetBatch = batches.find(b => b.id === selectedBatchId || b.name === selectedBatchId);
+      const studentIdsInBatch = targetBatch ? targetBatch.students : students.map(s => s.id);
+      
+      const updatedStudents = students.map(s => {
+        if (studentIdsInBatch.includes(s.id) || studentIdsInBatch.length === 0) {
+          return {
+            ...s,
+            tasks: [...(s.tasks || []), newTask],
+            activities: [
+              {
+                id: Math.random().toString(),
+                date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+                type: 'UPDATE' as const,
+                description: `Batch Assignment (${targetBatch?.name || 'All Students'}): ${newTask.name}`
+              },
+              ...s.activities
+            ]
+          };
+        }
+        return s;
+      });
+      setStudents(updatedStudents);
+    }
     
     setIsAssigning(false);
     setNewTaskName('');
     setNewTaskDate('');
     setNewTaskDesc('');
+    setRelatedTo('');
+    setPdfFileName('');
+    setPdfUrl('');
   };
   
   const handleReview = (stage: TaskStage) => {
@@ -1299,14 +1890,14 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
         id: Math.random().toString(),
         date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
         type: 'VERIFIED',
-        description: `Task verified and completed: \${updatedTask.name}`
+        description: `Task verified and completed: ${updatedTask.name}`
       });
     } else if (stage === 'NEEDS_REVISION') {
       newActivities.unshift({
         id: Math.random().toString(),
         date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
         type: 'UPDATE',
-        description: `Task needs revision: \${updatedTask.name}`
+        description: `Task needs revision: ${updatedTask.name}`
       });
     }
     
@@ -1323,25 +1914,84 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center mb-4">
-        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Tasks & Projects</h3>
+        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Tasks & Assignments</h3>
         <Button onClick={() => setIsAssigning(true)} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">
-          <Plus className="w-4 h-4 mr-2" /> Assign New Task
+          <Plus className="w-4 h-4 mr-2" /> Assign New Task / Assignment
         </Button>
       </div>
       
       {isAssigning && (
         <Card className="mb-6 border-blue-200 shadow-sm">
           <div className="p-4 bg-blue-50 border-b border-blue-100 flex justify-between items-center">
-            <h4 className="text-xs font-bold text-blue-800 uppercase tracking-wider">Assign New Task / Project</h4>
+            <h4 className="text-xs font-bold text-blue-800 uppercase tracking-wider">Assign New Task / Assignment</h4>
             <button onClick={() => setIsAssigning(false)} className="text-blue-400 hover:text-blue-600">
               <X className="w-4 h-4" />
             </button>
           </div>
           <CardContent className="p-4 space-y-4">
+            {/* Assign Target Toggle */}
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-6">
+              <span className="text-xs font-bold text-slate-700 uppercase">Assign Option:</span>
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-800">
+                <input 
+                  type="radio" 
+                  name="assignTarget" 
+                  checked={assignTarget === 'student'} 
+                  onChange={() => setAssignTarget('student')}
+                  className="text-blue-600 focus:ring-blue-500"
+                />
+                Individual Student ({student.name})
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-800">
+                <input 
+                  type="radio" 
+                  name="assignTarget" 
+                  checked={assignTarget === 'batch'} 
+                  onChange={() => setAssignTarget('batch')}
+                  className="text-blue-600 focus:ring-blue-500"
+                />
+                Entire Batch
+              </label>
+            </div>
+
+            {assignTarget === 'batch' && (
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Select Target Batch</label>
+                <select 
+                  value={selectedBatchId} 
+                  onChange={e => setSelectedBatchId(e.target.value)} 
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="">Select a batch...</option>
+                  {batches.map(b => (
+                    <option key={b.id} value={b.id}>{b.name} ({b.type} - {b.students.length} students)</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Task Name</label>
-                <input type="text" value={newTaskName} onChange={e => setNewTaskName(e.target.value)} placeholder="e.g. Complete Coursera Module" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <label className="block text-xs font-bold text-slate-700 mb-1">Assignment Title / Name</label>
+                <input type="text" value={newTaskName} onChange={e => setNewTaskName(e.target.value)} placeholder="e.g. Common App Essay First Draft" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Assignment Type</label>
+                <select value={assignmentType} onChange={e => setAssignmentType(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+                  <option value="Essay Draft / Writing">Essay Draft / Writing</option>
+                  <option value="SAT Prep Practice">SAT Prep Practice</option>
+                  <option value="Research Paper / Abstract">Research Paper / Abstract</option>
+                  <option value="Extracurricular Log">Extracurricular Log</option>
+                  <option value="Financial Document Proof">Financial Document Proof</option>
+                  <option value="General Assignment">General Assignment</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Related To (Text)</label>
+                <input type="text" value={relatedTo} onChange={e => setRelatedTo(e.target.value)} placeholder="e.g. Common App, Stanford Supplemental" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">Category</label>
@@ -1349,18 +1999,40 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
                   {TASK_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">Due Date</label>
+                <input type="date" value={newTaskDate} onChange={e => setNewTaskDate(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              </div>
             </div>
+
             <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Due Date</label>
-              <input type="date" value={newTaskDate} onChange={e => setNewTaskDate(e.target.value)} className="w-full max-w-[200px] bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+              <label className="block text-xs font-bold text-slate-700 mb-1">Assignment Details & Writing Instructions</label>
+              <textarea value={newTaskDesc} onChange={e => setNewTaskDesc(e.target.value)} placeholder="Provide detailed instructions, prompts, word limits, or guidelines..." className="w-full h-28 bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
             </div>
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Detailed Guidelines / Instructions</label>
-              <textarea value={newTaskDesc} onChange={e => setNewTaskDesc(e.target.value)} placeholder="Enter instructions, templates, or reference links..." className="w-full h-24 bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+              <label className="block text-xs font-bold text-slate-700">Attach Document / PDF</label>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <input 
+                  type="text" 
+                  value={pdfFileName} 
+                  onChange={e => setPdfFileName(e.target.value)} 
+                  placeholder="PDF Document Name (e.g. Essay_Prompt_Guide.pdf)" 
+                  className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <input 
+                  type="text" 
+                  value={pdfUrl} 
+                  onChange={e => setPdfUrl(e.target.value)} 
+                  placeholder="PDF Web URL / File Link" 
+                  className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
             </div>
+
             <div className="flex justify-end pt-2">
               <Button onClick={handleAssignTask} disabled={!newTaskName} className="bg-blue-600 hover:bg-blue-700 text-white">
-                Assign to Student
+                {assignTarget === 'batch' ? 'Assign to Entire Batch' : 'Assign to Student'}
               </Button>
             </div>
           </CardContent>
@@ -1518,7 +2190,7 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
 
 
 function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
-  const { currentUser } = useDatabase();
+  const { currentUser, staff } = useDatabase();
   const [isEditing, setIsEditing] = useState(false);
   
   const [formData, setFormData] = useState({
@@ -1527,7 +2199,11 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
     phone: student.phone,
     school: student.school,
     intake: student.intake,
-    countries: student.countries.join(', ')
+    countries: student.countries.join(', '),
+    counselor: student.counselor || '',
+    researchMentor: student.researchMentor || '',
+    satVerbalMentor: student.satVerbalMentor || '',
+    satMathMentor: student.satMathMentor || ''
   });
 
   const defaultScores = [
@@ -1550,6 +2226,10 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
       school: formData.school,
       intake: formData.intake,
       countries: formData.countries.split(',').map(s => s.trim()),
+      counselor: formData.counselor,
+      researchMentor: formData.researchMentor,
+      satVerbalMentor: formData.satVerbalMentor,
+      satMathMentor: formData.satMathMentor,
       academicScores: scores,
       extracurriculars: extracurriculars
     });
@@ -1626,6 +2306,81 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                 </div>
               </div>
             )}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="p-6">
+          <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-4 border-b border-slate-100 pb-2">Assigned Counselor & Mentors</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Primary Counselor</p>
+              {isEditing ? (
+                <select value={formData.counselor} onChange={e => setFormData({...formData, counselor: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm bg-white focus:ring-2 focus:ring-blue-500">
+                  <option value="">Select Counselor</option>
+                  {staff.map(s => (
+                    <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
+                  ))}
+                  <option value="Unassigned">Unassigned</option>
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-slate-900 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  {student.counselor || <span className="text-slate-400 italic">Unassigned</span>}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Research Mentor</p>
+              {isEditing ? (
+                <select value={formData.researchMentor} onChange={e => setFormData({...formData, researchMentor: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm bg-white focus:ring-2 focus:ring-blue-500">
+                  <option value="">Select Research Mentor</option>
+                  {staff.map(s => (
+                    <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
+                  ))}
+                  <option value="Unassigned">Unassigned</option>
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-slate-900 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  {student.researchMentor || <span className="text-slate-400 italic">Unassigned</span>}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">SAT Mentor (Verbal)</p>
+              {isEditing ? (
+                <select value={formData.satVerbalMentor} onChange={e => setFormData({...formData, satVerbalMentor: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm bg-white focus:ring-2 focus:ring-blue-500">
+                  <option value="">Select SAT Verbal Mentor</option>
+                  {staff.map(s => (
+                    <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
+                  ))}
+                  <option value="Unassigned">Unassigned</option>
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-slate-900 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  {student.satVerbalMentor || <span className="text-slate-400 italic">Unassigned</span>}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">SAT Mentor (Maths)</p>
+              {isEditing ? (
+                <select value={formData.satMathMentor} onChange={e => setFormData({...formData, satMathMentor: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm bg-white focus:ring-2 focus:ring-blue-500">
+                  <option value="">Select SAT Maths Mentor</option>
+                  {staff.map(s => (
+                    <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
+                  ))}
+                  <option value="Unassigned">Unassigned</option>
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-slate-900 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
+                  {student.satMathMentor || <span className="text-slate-400 italic">Unassigned</span>}
+                </p>
+              )}
+            </div>
           </div>
         </CardContent>
       </Card>
