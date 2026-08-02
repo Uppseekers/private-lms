@@ -132,7 +132,7 @@ export default function StudentProfile() {
       updated[editingActivityIdx] = newAct;
       setActivities(updated);
     } else {
-      if (activities.length < 10) {
+      if (activities.length < 16) {
         setActivities([...activities, newAct]);
       }
     }
@@ -345,6 +345,28 @@ export default function StudentProfile() {
             <p className="font-bold text-slate-900">Academic Mentor</p>
             <p className="text-xs text-slate-500 mt-1">Projects & Research Lead</p>
           </div>
+        </div>
+
+        {/* Task Sheet Link Field */}
+        <div className="mt-4 p-4 bg-emerald-50/70 rounded-xl border border-emerald-200 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          <div>
+            <span className="text-[10px] uppercase font-bold text-emerald-800 block mb-0.5">Task Sheet Link</span>
+            <p className="text-xs text-slate-600">Click below to open your master counselor task sheet and action items.</p>
+          </div>
+          {student?.taskSheetLink ? (
+            <a 
+              href={student.taskSheetLink.startsWith('http') ? student.taskSheetLink : `https://${student.taskSheetLink}`} 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition-colors shadow-sm"
+            >
+              Open Task Sheet <FileText className="w-3.5 h-3.5" />
+            </a>
+          ) : (
+            <span className="text-xs font-semibold text-amber-700 bg-amber-100/80 px-3 py-1.5 rounded-lg border border-amber-200">
+              Link not assigned by Counselor yet
+            </span>
+          )}
         </div>
       </Section>
 

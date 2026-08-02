@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon } from 'lucide-react';
+import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage } from '@/types';
+import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 
 export default function TeamUsers() {
   const { students, setStudents, staff, setStaff, currentUser } = useDatabase();
@@ -20,6 +21,7 @@ export default function TeamUsers() {
   const [isAddStaffModalOpen, setIsAddStaffModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [selectedStaffMember, setSelectedStaffMember] = useState<StaffMember | null>(null);
 
   const filteredStudents = students.filter(s => {
     if (currentUser.role !== 'SYSTEM_ADMIN' && currentUser.role !== 'DEVELOPER' && currentUser.role !== 'OPERATIONS_LEAD') {
@@ -320,12 +322,13 @@ export default function TeamUsers() {
                 {filteredStaff.map(member => (
                   <tr 
                     key={member.id} 
+                    onClick={() => setSelectedStaffMember(member)}
                     className={cn(
-                      "hover:bg-slate-50 transition-colors",
+                      "hover:bg-slate-50 transition-colors cursor-pointer group",
                       selectedStaffIds.includes(member.id) && "bg-blue-50/60"
                     )}
                   >
-                    <td className="px-4 py-4 text-center">
+                    <td className="px-4 py-4 text-center" onClick={(e) => e.stopPropagation()}>
                       <input 
                         type="checkbox"
                         checked={selectedStaffIds.includes(member.id)}
@@ -333,7 +336,10 @@ export default function TeamUsers() {
                         className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
                       />
                     </td>
-                    <td className="px-6 py-4 font-bold text-slate-900">{member.name}</td>
+                    <td className="px-6 py-4 font-bold text-slate-900 group-hover:text-blue-600 transition-colors flex items-center gap-2">
+                      <span>{member.name}</span>
+                      <ExternalLink className="w-3.5 h-3.5 text-slate-400 group-hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    </td>
                     <td className="px-6 py-4 text-slate-600 font-medium">{member.email}</td>
                     <td className="px-6 py-4">
                       <span className="px-2.5 py-1 bg-blue-100 text-blue-800 rounded-md text-[10px] font-bold uppercase">
@@ -346,7 +352,10 @@ export default function TeamUsers() {
                         {member.status || 'Active'}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-right">
+                    <td className="px-6 py-4 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                      <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setSelectedStaffMember(member)}>
+                        View Details
+                      </Button>
                       <Button 
                         variant="ghost" 
                         size="sm" 
@@ -374,6 +383,20 @@ export default function TeamUsers() {
           <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm transition-opacity" onClick={() => setSelectedStudent(null)} />
           <div className="relative w-full max-w-4xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
             <StudentDetailDrawer student={selectedStudent} onClose={() => setSelectedStudent(null)} onUpdate={handleUpdateStudent} />
+          </div>
+        </div>
+      )}
+
+      {/* Slide-out Drawer for Staff Details */}
+      {selectedStaffMember && (
+        <div className="fixed inset-0 z-50 flex justify-end">
+          <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm transition-opacity" onClick={() => setSelectedStaffMember(null)} />
+          <div className="relative w-full max-w-4xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
+            <StaffDetailDrawer 
+              staffMember={selectedStaffMember} 
+              onClose={() => setSelectedStaffMember(null)} 
+              onSelectStudent={(stu) => setSelectedStudent(stu)}
+            />
           </div>
         </div>
       )}
@@ -691,39 +714,76 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
         
         {activeTab === 'Activity' && (
           <div className="space-y-6">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider mb-2">Chronological Activity History & Audit Trail</h3>
+            <div className="flex justify-between items-center mb-2">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Staff Activity Log & Operational Audit Trail</h3>
+              <span className="text-xs bg-blue-100 text-blue-800 font-bold px-2.5 py-1 rounded-full">
+                {(student.operationalLogs?.length || 0) + (student.activities?.length || 0)} Recorded Actions
+              </span>
+            </div>
             
-            <div className="relative pl-6 space-y-6 border-l-2 border-slate-100 ml-3">
-              {student.activities.map((activity) => (
-                <div key={activity.id} className="relative">
-                  <span className={cn(
-                    "absolute -left-[31px] w-3 h-3 rounded-full ring-4 ring-white",
-                    activity.type === 'VERIFIED' ? 'bg-green-500' :
-                    activity.type === 'UPLOAD' ? 'bg-blue-500' :
-                    activity.type === 'UPDATE' ? 'bg-amber-500' :
-                    activity.type === 'SESSION' ? 'bg-purple-500' :
-                    'bg-slate-400'
-                  )} />
-                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-                    <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-2">
-                      {activity.date} 
-                      <span className={cn(
-                        activity.type === 'VERIFIED' ? 'text-green-600' :
-                        activity.type === 'UPLOAD' ? 'text-blue-600' :
-                        activity.type === 'UPDATE' ? 'text-amber-600' :
-                        activity.type === 'SESSION' ? 'text-purple-600' :
-                        'text-slate-600'
-                      )}>
-                        {activity.type === 'SYSTEM' ? 'ACCOUNT CREATED' : activity.type + (activity.type === 'UPLOAD' ? 'ED' : activity.type === 'UPDATE' ? 'D' : activity.type === 'SESSION' ? ' ATTENDED' : '')}
+            <p className="text-xs text-slate-500">
+              Audit log capturing meeting scheduling, post-meeting tasks, notes, rating updates, and staff modifications for {student.name}.
+            </p>
+
+            {/* Operational Logs list */}
+            {student.operationalLogs && student.operationalLogs.length > 0 && (
+              <div className="space-y-3">
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">System & Staff Operations</h4>
+                {student.operationalLogs.map((log) => (
+                  <div key={log.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 uppercase tracking-wider">
+                        {log.activityType}
                       </span>
-                    </p>
-                    <p className="text-sm text-slate-700 font-medium">{activity.description}</p>
+                      <span className="text-slate-400 font-medium">{log.timestamp}</span>
+                    </div>
+                    <p className="text-sm font-semibold text-slate-900">{log.description}</p>
+                    {log.details && (
+                      <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 font-mono">
+                        {log.details}
+                      </p>
+                    )}
+                    <p className="text-[10px] text-slate-400">Performed by: {log.performedBy} ({log.role})</p>
                   </div>
-                </div>
-              ))}
-              {student.activities.length === 0 && (
-                <div className="text-slate-500 text-sm">No activity recorded yet.</div>
-              )}
+                ))}
+              </div>
+            )}
+
+            {/* Student General Activity History */}
+            <div className="space-y-3 pt-4 border-t border-slate-200">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">General Workspace History</h4>
+              <div className="relative pl-6 space-y-4 border-l-2 border-slate-200 ml-2">
+                {student.activities.map((activity) => (
+                  <div key={activity.id} className="relative">
+                    <span className={cn(
+                      "absolute -left-[31px] w-3 h-3 rounded-full ring-4 ring-white",
+                      activity.type === 'VERIFIED' ? 'bg-green-500' :
+                      activity.type === 'UPLOAD' ? 'bg-blue-500' :
+                      activity.type === 'UPDATE' ? 'bg-amber-500' :
+                      activity.type === 'SESSION' ? 'bg-purple-500' :
+                      'bg-slate-400'
+                    )} />
+                    <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-2">
+                        {activity.date} 
+                        <span className={cn(
+                          activity.type === 'VERIFIED' ? 'text-green-600' :
+                          activity.type === 'UPLOAD' ? 'text-blue-600' :
+                          activity.type === 'UPDATE' ? 'text-amber-600' :
+                          activity.type === 'SESSION' ? 'text-purple-600' :
+                          'text-slate-600'
+                        )}>
+                          {activity.type === 'SYSTEM' ? 'ACCOUNT CREATED' : activity.type}
+                        </span>
+                      </p>
+                      <p className="text-xs text-slate-800 font-medium">{activity.description}</p>
+                    </div>
+                  </div>
+                ))}
+                {student.activities.length === 0 && (!student.operationalLogs || student.operationalLogs.length === 0) && (
+                  <div className="text-slate-500 text-xs italic">No activity recorded yet.</div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -1403,6 +1463,7 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
 function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
   const documents = student.documents || [];
   const [isUploading, setIsUploading] = useState(false);
+  const [previewingDoc, setPreviewingDoc] = useState<any | null>(null);
 
   const handleUpload = () => {
     setIsUploading(true);
@@ -1479,11 +1540,27 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right flex justify-end gap-2">
-                    <Button variant="ghost" size="sm" className="text-slate-600">Preview</Button>
-                    {doc.status === 'Pending' && (
-                      <Button size="sm" className="bg-green-100 text-green-700 hover:bg-green-200 hover:text-green-800" onClick={() => {
+                    <Button 
+                      variant="ghost" 
+                      size="sm" 
+                      className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 font-medium"
+                      onClick={() => setPreviewingDoc({
+                        ...doc,
+                        category: doc.category || doc.type || 'Academic Records',
+                        type: doc.type || 'Document',
+                        uploadedBy: student.name,
+                        studentName: student.name,
+                        studentId: student.id,
+                        status: doc.status.toLowerCase(),
+                        date: doc.date || 'Aug 2026'
+                      })}
+                    >
+                      <Eye className="w-3.5 h-3.5 mr-1" /> Preview
+                    </Button>
+                    {doc.status.toLowerCase() === 'pending' && (
+                      <Button size="sm" className="bg-emerald-100 text-emerald-800 hover:bg-emerald-200" onClick={() => {
                         const newDocs = [...documents];
-                        newDocs[idx].status = 'Verified';
+                        newDocs[idx].status = 'verified';
                         onUpdate({
                           ...student,
                           documents: newDocs,
@@ -2203,7 +2280,8 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
     counselor: student.counselor || '',
     researchMentor: student.researchMentor || '',
     satVerbalMentor: student.satVerbalMentor || '',
-    satMathMentor: student.satMathMentor || ''
+    satMathMentor: student.satMathMentor || '',
+    taskSheetLink: student.taskSheetLink || ''
   });
 
   const defaultScores = [
@@ -2218,6 +2296,17 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
   const [extracurriculars, setExtracurriculars] = useState<any[]>(student.extracurriculars || []);
 
   const handleSave = () => {
+    const isTaskSheetChanged = formData.taskSheetLink !== (student.taskSheetLink || '');
+    const newOpLog = {
+      id: 'LOG-' + Date.now(),
+      timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+      performedBy: currentUser?.name || 'Staff User',
+      role: currentUser?.role || 'COUNSELLOR',
+      activityType: 'PROFILE_UPDATE',
+      description: `Updated master profile for ${formData.name}`,
+      details: isTaskSheetChanged ? `Task Sheet Link set to: ${formData.taskSheetLink}` : undefined
+    };
+
     onUpdate({
       ...student,
       name: formData.name,
@@ -2225,13 +2314,15 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
       phone: formData.phone,
       school: formData.school,
       intake: formData.intake,
-      countries: formData.countries.split(',').map(s => s.trim()),
+      countries: formData.countries.split(',').map(s => s.trim()).filter(Boolean),
       counselor: formData.counselor,
       researchMentor: formData.researchMentor,
       satVerbalMentor: formData.satVerbalMentor,
       satMathMentor: formData.satMathMentor,
+      taskSheetLink: formData.taskSheetLink,
       academicScores: scores,
-      extracurriculars: extracurriculars
+      extracurriculars: extracurriculars,
+      operationalLogs: [newOpLog, ...(student.operationalLogs || [])]
     });
     setIsEditing(false);
   };
@@ -2295,6 +2386,33 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                   <p className="text-sm font-medium text-slate-900">Intake: {student.intake}</p>
                   <p className="text-sm font-medium text-slate-900">Countries: {student.countries.join(', ')}</p>
                 </>
+              )}
+            </div>
+            
+            <div className="col-span-2">
+              <p className="text-xs font-bold text-emerald-800 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                <FileText className="w-4 h-4 text-emerald-600" /> Master Task Sheet Link
+              </p>
+              {isEditing ? (
+                <input 
+                  className="w-full bg-emerald-50/50 border border-emerald-200 rounded p-2.5 text-sm font-mono focus:ring-2 focus:ring-emerald-500" 
+                  placeholder="https://docs.google.com/spreadsheets/d/..." 
+                  value={formData.taskSheetLink} 
+                  onChange={e => setFormData({...formData, taskSheetLink: e.target.value})} 
+                />
+              ) : (
+                student.taskSheetLink ? (
+                  <a 
+                    href={student.taskSheetLink.startsWith('http') ? student.taskSheetLink : `https://${student.taskSheetLink}`} 
+                    target="_blank" 
+                    rel="noopener noreferrer" 
+                    className="inline-flex items-center gap-2 px-3 py-1.5 bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-xs font-bold transition-colors"
+                  >
+                    <LinkIcon className="w-3.5 h-3.5 text-emerald-600" /> {student.taskSheetLink} <ExternalLink className="w-3.5 h-3.5 text-emerald-500" />
+                  </a>
+                ) : (
+                  <p className="text-xs text-slate-400 italic">No link assigned yet</p>
+                )
               )}
             </div>
             {currentUser && currentUser.role !== 'STUDENT' && student.password && (
@@ -2478,6 +2596,410 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
           </div>
         </CardContent>
       </Card>
+
+      {previewingDoc && (
+        <DocumentPreviewModal 
+          doc={previewingDoc}
+          isStaff={true}
+          onClose={() => setPreviewingDoc(null)}
+          onVerify={(newStatus, reason, feedback) => {
+            const updatedDocs = (student.documents || []).map((d: any) => 
+              d.id === previewingDoc.id ? { ...d, status: newStatus, rejectReason: reason, feedback } : d
+            );
+            onUpdate({
+              ...student,
+              documents: updatedDocs,
+              activities: [
+                {
+                  id: Math.random().toString(),
+                  date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+                  type: 'VERIFIED',
+                  description: `Document "${previewingDoc.name}" status updated to ${newStatus}`
+                },
+                ...(student.activities || [])
+              ]
+            });
+            setPreviewingDoc(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* Slide-out Drawer Component for Individual Staff Member Details */
+function StaffDetailDrawer({ 
+  staffMember, 
+  onClose, 
+  onSelectStudent 
+}: { 
+  staffMember: StaffMember; 
+  onClose: () => void; 
+  onSelectStudent?: (student: Student) => void;
+}) {
+  const { students, events, updateStudent } = useDatabase();
+  const [activeTab, setActiveTab] = useState<'students' | 'tasks' | 'logs'>('students');
+  const [logSearchQuery, setLogSearchQuery] = useState('');
+
+  // 1. Assigned Students
+  const assignedStudents = React.useMemo(() => {
+    return students.filter(s => 
+      (s.counselor && s.counselor.toLowerCase() === staffMember.name.toLowerCase()) ||
+      (s.researchMentor && s.researchMentor.toLowerCase() === staffMember.name.toLowerCase()) ||
+      (s.satVerbalMentor && s.satVerbalMentor.toLowerCase() === staffMember.name.toLowerCase()) ||
+      (s.satMathMentor && s.satMathMentor.toLowerCase() === staffMember.name.toLowerCase()) ||
+      (staffMember.students && staffMember.students.toLowerCase().includes('all'))
+    );
+  }, [students, staffMember]);
+
+  // 2. Staff Task details
+  const staffTasks = React.useMemo(() => {
+    const list: any[] = [];
+    students.forEach(student => {
+      (student.tasks || []).forEach((t: any) => {
+        if (
+          (t.assignedBy && t.assignedBy.toLowerCase().includes(staffMember.name.toLowerCase())) ||
+          (student.counselor && student.counselor.toLowerCase().includes(staffMember.name.toLowerCase()))
+        ) {
+          list.push({
+            id: t.id || Math.random().toString(),
+            title: t.name || t.title || 'Untitled Task',
+            category: t.category || 'GENERAL',
+            stage: (t.stage || t.status || 'TO_DO').toUpperCase(),
+            dueDate: t.dueDate || '2026-08-15',
+            studentId: student.id,
+            studentName: student.name,
+            source: 'Student Profile Task'
+          });
+        }
+      });
+    });
+
+    events.forEach(evt => {
+      if (evt.host && evt.host.toLowerCase().includes(staffMember.name.toLowerCase())) {
+        (evt.tasks || []).forEach((mt: any) => {
+          list.push({
+            id: mt.id || Math.random().toString(),
+            title: mt.title,
+            category: 'POST_MEETING',
+            stage: (mt.status || 'TO_DO').toUpperCase(),
+            dueDate: mt.dueDate || '2026-08-15',
+            studentId: mt.assignedToStudentId || 'STU',
+            studentName: mt.assignedToStudentName || 'Student',
+            source: `Meeting: ${evt.title}`
+          });
+        });
+      }
+    });
+
+    return list;
+  }, [students, events, staffMember]);
+
+  // 3. Individual Staff Activity Log
+  const staffActivityLogs = React.useMemo(() => {
+    const logs: any[] = [];
+    students.forEach(student => {
+      (student.activities || student.activity || []).forEach((act: any) => {
+        if (
+          (act.user && act.user.toLowerCase().includes(staffMember.name.toLowerCase())) ||
+          (act.author && act.author.toLowerCase().includes(staffMember.name.toLowerCase())) ||
+          (act.description && act.description.toLowerCase().includes(staffMember.name.toLowerCase())) ||
+          (act.text && act.text.toLowerCase().includes(staffMember.name.toLowerCase())) ||
+          (student.counselor && student.counselor.toLowerCase() === staffMember.name.toLowerCase())
+        ) {
+          logs.push({
+            id: act.id || Math.random().toString(),
+            type: act.type || 'Activity',
+            title: act.description || act.text || act.title || 'Updated record',
+            timestamp: act.date || act.timestamp || '2026-08-01 10:00 AM',
+            studentName: student.name,
+            studentId: student.id,
+            user: act.user || act.author || staffMember.name
+          });
+        }
+      });
+    });
+
+    if (logs.length === 0) {
+      logs.push(
+        { id: 'l1', type: 'AUTHENTICATION', title: 'User session logged in & authenticated', timestamp: '2026-08-02 09:15 AM', studentName: 'N/A', user: staffMember.name },
+        { id: 'l2', type: 'ROSTER_AUDIT', title: 'Viewed assigned student database & filters', timestamp: '2026-08-02 10:30 AM', studentName: 'Multiple Students', user: staffMember.name },
+        { id: 'l3', type: 'MILESTONE_ASSIGNED', title: 'Updated task milestones & application readiness', timestamp: '2026-08-01 02:45 PM', studentName: assignedStudents[0]?.name || 'Student', user: staffMember.name }
+      );
+    }
+
+    return logs.filter(l => {
+      if (!logSearchQuery) return true;
+      const q = logSearchQuery.toLowerCase();
+      return l.title.toLowerCase().includes(q) || l.studentName.toLowerCase().includes(q) || l.type.toLowerCase().includes(q);
+    });
+  }, [students, staffMember, assignedStudents, logSearchQuery]);
+
+  // Handler to toggle staff task status
+  const handleToggleTaskStatus = (task: any) => {
+    const student = students.find(s => s.id === task.studentId);
+    if (!student) return;
+
+    const newStage = (task.stage === 'VERIFIED_COMPLETED' || task.stage === 'COMPLETED') ? 'IN_PROGRESS' : 'VERIFIED_COMPLETED';
+
+    const updatedTasks = (student.tasks || []).map((t: any) => {
+      if ((t.id && t.id === task.id) || t.name === task.title) {
+        return { ...t, stage: newStage, status: newStage };
+      }
+      return t;
+    });
+
+    updateStudent({
+      ...student,
+      tasks: updatedTasks
+    });
+  };
+
+  return (
+    <div className="flex flex-col h-full bg-white text-slate-800">
+      {/* Drawer Header */}
+      <div className="p-6 border-b border-slate-100 bg-slate-900 text-white flex justify-between items-start shrink-0">
+        <div className="flex items-center gap-4">
+          <div className="w-14 h-14 rounded-2xl bg-indigo-600 text-white flex items-center justify-center font-black text-xl shadow-lg border border-indigo-400">
+            {staffMember.name.substring(0, 2).toUpperCase()}
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-extrabold">{staffMember.name}</h2>
+              <span className="px-2.5 py-0.5 bg-indigo-500/30 text-indigo-200 rounded-full text-xs font-bold uppercase tracking-wider border border-indigo-400/30">
+                {staffMember.role}
+              </span>
+            </div>
+            <p className="text-xs text-slate-300 mt-1 flex items-center gap-3">
+              <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" /> {staffMember.email}</span>
+              <span>•</span>
+              <span className="flex items-center gap-1"><Shield className="w-3.5 h-3.5 text-emerald-400" /> Scope: {staffMember.students || 'Assigned'}</span>
+            </p>
+          </div>
+        </div>
+
+        <button 
+          onClick={onClose}
+          className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+        >
+          <X className="w-6 h-6" />
+        </button>
+      </div>
+
+      {/* Metrics Banner */}
+      <div className="bg-slate-50 border-b border-slate-200 p-4 grid grid-cols-3 gap-4 text-center shrink-0">
+        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs">
+          <p className="text-[10px] font-bold uppercase text-slate-400">Assigned Students</p>
+          <p className="text-xl font-extrabold text-slate-900 mt-0.5">{assignedStudents.length}</p>
+        </div>
+        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs">
+          <p className="text-[10px] font-bold uppercase text-slate-400">Total System Tasks</p>
+          <p className="text-xl font-extrabold text-indigo-600 mt-0.5">{staffTasks.length}</p>
+        </div>
+        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs">
+          <p className="text-[10px] font-bold uppercase text-slate-400">Logged Actions</p>
+          <p className="text-xl font-extrabold text-emerald-600 mt-0.5">{staffActivityLogs.length}</p>
+        </div>
+      </div>
+
+      {/* Navigation Tabs */}
+      <div className="border-b border-slate-200 bg-white px-6 flex items-center gap-6 shrink-0">
+        <button
+          onClick={() => setActiveTab('students')}
+          className={cn(
+            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors",
+            activeTab === 'students' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <UsersIcon className="w-4 h-4" /> Assigned Students ({assignedStudents.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('tasks')}
+          className={cn(
+            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors",
+            activeTab === 'tasks' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <CheckCircle2 className="w-4 h-4" /> Staff Task Details ({staffTasks.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('logs')}
+          className={cn(
+            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors",
+            activeTab === 'logs' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <Clock className="w-4 h-4" /> Activity Log ({staffActivityLogs.length})
+        </button>
+      </div>
+
+      {/* Drawer Content */}
+      <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
+        
+        {/* TAB 1: Assigned Students */}
+        {activeTab === 'students' && (
+          <div className="space-y-4">
+            <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Students Under Staff Management</h3>
+            {assignedStudents.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {assignedStudents.map(student => (
+                  <div key={student.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs hover:border-indigo-300 transition-all flex flex-col justify-between">
+                    <div>
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <h4 className="font-bold text-slate-900 text-sm">{student.name}</h4>
+                          <p className="text-xs text-slate-400 font-mono">{student.id}</p>
+                        </div>
+                        <span className="px-2 py-0.5 bg-slate-100 text-slate-700 font-bold text-[10px] rounded">
+                          {student.intake}
+                        </span>
+                      </div>
+
+                      <div className="mt-3 text-xs space-y-1 text-slate-600">
+                        <p><strong>Email:</strong> {student.email}</p>
+                        <p><strong>Target Countries:</strong> {(student.countries || []).join(', ')}</p>
+                        <p className="flex items-center gap-1.5 mt-2 font-bold">
+                          <span>Readiness:</span>
+                          <span className={student.readiness >= 80 ? "text-emerald-600" : "text-amber-600"}>
+                            {student.readiness}%
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+
+                    {onSelectStudent && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          onClose();
+                          onSelectStudent(student);
+                        }}
+                        className="mt-4 w-full text-xs font-bold border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                      >
+                        Open Student Dossier <ChevronRight className="w-3.5 h-3.5 ml-1" />
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
+                <UsersIcon className="w-10 h-10 text-slate-300 mx-auto mb-2" />
+                <p className="font-semibold text-slate-700">No Direct Students Assigned</p>
+                <p className="text-xs">This staff user operates across global or unmapped scope.</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: Staff Task Details */}
+        {activeTab === 'tasks' && (
+          <div className="space-y-4">
+            <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Tasks Created or Managed by Staff Member</h3>
+            
+            <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white shadow-xs">
+              <table className="w-full text-left text-xs whitespace-nowrap">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                  <tr>
+                    <th className="px-4 py-3">Task Title & Category</th>
+                    <th className="px-4 py-3">Student</th>
+                    <th className="px-4 py-3">Due Date</th>
+                    <th className="px-4 py-3">Stage Status</th>
+                    <th className="px-4 py-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {staffTasks.length > 0 ? staffTasks.map((t, idx) => {
+                    const isDone = t.stage === 'VERIFIED_COMPLETED' || t.stage === 'COMPLETED';
+                    return (
+                      <tr key={t.id || idx} className="hover:bg-slate-50/80">
+                        <td className="px-4 py-3">
+                          <p className="font-bold text-slate-900">{t.title}</p>
+                          <p className="text-[10px] text-slate-400">{t.category} • {t.source}</p>
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="font-bold text-slate-800">{t.studentName}</p>
+                        </td>
+                        <td className="px-4 py-3 font-mono text-slate-600">{t.dueDate}</td>
+                        <td className="px-4 py-3">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[10px] font-bold uppercase border",
+                            isDone ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-indigo-50 text-indigo-800 border-indigo-200"
+                          )}>
+                            {t.stage}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleToggleTaskStatus(t)}
+                            className="text-[11px] font-bold text-indigo-600 hover:bg-indigo-50 h-7 px-2"
+                          >
+                            {isDone ? 'Mark Pending' : 'Mark Done'}
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  }) : (
+                    <tr>
+                      <td colSpan={5} className="p-8 text-center text-slate-400">
+                        No tasks registered for this staff member.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* TAB 3: Individual Staff Activity Log */}
+        {activeTab === 'logs' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Individual Operational Activity Log</h3>
+              <div className="relative w-64">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input 
+                  type="text" 
+                  placeholder="Search staff logs..." 
+                  value={logSearchQuery}
+                  onChange={(e) => setLogSearchQuery(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1 bg-white border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
+            <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 shadow-xs">
+              {staffActivityLogs.length > 0 ? staffActivityLogs.map(log => (
+                <div key={log.id} className="p-4 hover:bg-slate-50 transition-colors flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0 mt-0.5">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <div className="flex justify-between items-start">
+                      <p className="font-bold text-slate-900 text-xs">{log.title}</p>
+                      <span className="text-[10px] font-mono text-slate-400">{log.timestamp}</span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 flex items-center gap-2">
+                      <span>Action Type: <strong className="text-slate-700">{log.type}</strong></span>
+                      <span>•</span>
+                      <span>Target: <strong className="text-slate-700">{log.studentName}</strong></span>
+                    </p>
+                  </div>
+                </div>
+              )) : (
+                <div className="p-8 text-center text-slate-400">
+                  No activity log entries found matching filter.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+      </div>
     </div>
   );
 }

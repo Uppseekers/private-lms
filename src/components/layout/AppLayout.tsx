@@ -69,6 +69,21 @@ export default function AppLayout() {
   // Basic mock auth detection based on URL
   const isTeam = location.pathname.startsWith('/team');
   const role = isTeam ? Role.TEACHER : Role.STUDENT;
+
+  const accountName = isTeam 
+    ? (currentUser?.name || 'Team Member') 
+    : (currentUser?.name || students[0]?.name || 'Student');
+
+  const getUserInitials = (name: string) => {
+    if (!name) return 'ST';
+    const cleanName = name.replace(/\([^)]*\)/g, '').trim();
+    const parts = cleanName.split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return 'ST';
+    if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  };
+
+  const userInitials = getUserInitials(accountName);
   
   let navigation = isTeam ? teamNavigation : studentNavigation;
   
@@ -310,8 +325,18 @@ export default function AppLayout() {
               </div>
             </div>
 
-            <div className="w-8 h-8 rounded-full bg-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs relative cursor-pointer shadow-2xs border border-indigo-200 shrink-0">
-              {isTeam ? currentUser.name.substring(0, 2).toUpperCase() : 'ST'}
+            <div 
+              onClick={() => {
+                if (isTeam) {
+                  navigate('/team/users');
+                } else {
+                  navigate('/student/profile');
+                }
+              }}
+              title={`${accountName} - Click to view Profile`}
+              className="w-8 h-8 rounded-full bg-indigo-100 hover:bg-indigo-200 hover:scale-105 transition-all flex items-center justify-center text-indigo-700 font-bold text-xs relative cursor-pointer shadow-2xs border border-indigo-200 shrink-0"
+            >
+              {userInitials}
               <div className="absolute top-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></div>
             </div>
           </div>

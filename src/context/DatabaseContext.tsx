@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { Student, StaffMember, Batch } from '@/types';
+import { Student, StaffMember, Batch, MeetingMOM, SessionRating, MeetingResourceLink, MeetingTask, OperationalLog } from '@/types';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 
@@ -16,15 +16,21 @@ export interface EventItem {
   id: string;
   day: string;
   time: string;
-  duration: string;
+  duration?: string;
   stream: string;
   title: string;
   batch?: string;
   students: string;
+  studentId?: string;
   location: string;
   notes?: string;
   assignments?: string;
   host?: string;
+  status?: 'Scheduled' | 'Completed' | 'Cancelled';
+  moms?: MeetingMOM[];
+  ratings?: SessionRating[];
+  resources?: MeetingResourceLink[];
+  tasks?: MeetingTask[];
 }
 
 export interface PermissionCategory {
@@ -265,6 +271,110 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             shortlist: [],
             documents: [],
             essays: []
+          },
+          {
+            id: 'STU-103',
+            name: 'Qasim Khan',
+            email: 'qasim.khan@example.com',
+            phone: '+91 9988776655',
+            intake: 'Fall 2026',
+            school: 'St. Xavier High School',
+            counselor: 'Admin',
+            readiness: 85,
+            countries: ['USA', 'UK'],
+            password: 'Student@123',
+            activities: [],
+            shortlist: [
+              {
+                id: 'UNI-Q1',
+                name: 'Columbia University',
+                category: 'Reach',
+                deadline: '2026-11-01',
+                status: 'In Progress',
+                major: 'Computer Science & AI',
+                round: 'Early Decision (ED)'
+              }
+            ],
+            documents: [
+              {
+                id: 'DOC-Q1',
+                name: 'Qasim_Grade_11_Transcript.pdf',
+                category: 'Academic Records',
+                type: 'High School Transcript',
+                uploadedBy: 'Qasim Khan',
+                status: 'pending',
+                date: 'Aug 1, 2026',
+                fileExt: 'pdf'
+              },
+              {
+                id: 'DOC-Q2',
+                name: 'Qasim_SAT_Official_Scorecard.pdf',
+                category: 'Standardized Tests',
+                type: 'SAT Official Score Report',
+                uploadedBy: 'Qasim Khan',
+                status: 'verified',
+                date: 'Jul 28, 2026',
+                fileExt: 'pdf'
+              }
+            ],
+            essays: [
+              {
+                id: 'ESS-Q1',
+                title: 'Common App Personal Statement',
+                prompt: 'Discuss an accomplishment, event, or realization that sparked a period of personal growth and a new understanding of yourself or others.',
+                wordCount: 580,
+                targetCount: 650,
+                university: 'Common App / Columbia University',
+                status: 'Under Review',
+                counselor: 'Admin',
+                versions: [
+                  {
+                    versionNumber: 1,
+                    date: 'Aug 1, 2026',
+                    author: 'Qasim Khan',
+                    content: 'Growing up surrounded by the bustling energy of my city, I realized early on that technology is not just lines of code—it is an amplifier of human capability. My journey into algorithmic problem solving began when I noticed local small vendors struggling to manage inventory during peak festive seasons...'
+                  }
+                ]
+              },
+              {
+                id: 'ESS-Q2',
+                title: 'Why Columbia Supplemental Essay',
+                prompt: 'Why are you drawn to study at Columbia University and what unique perspectives will you contribute?',
+                wordCount: 235,
+                targetCount: 250,
+                university: 'Columbia University',
+                status: 'Needs Revision',
+                counselor: 'Admin',
+                versions: [
+                  {
+                    versionNumber: 1,
+                    date: 'Jul 30, 2026',
+                    author: 'Qasim Khan',
+                    content: 'Columbia\'s Core Curriculum offers a profound foundation in humanistic inquiry alongside cutting-edge computer science research at the Data Science Institute. I am particularly eager to participate in undergraduate research focused on scalable artificial intelligence for social impact...'
+                  }
+                ]
+              }
+            ],
+            tasks: [
+              {
+                id: 'TSK-Q1',
+                name: 'Complete Common App Personal Essay Draft 2',
+                category: 'ESSAY',
+                stage: 'IN_PROGRESS',
+                dueDate: '2026-08-10',
+                assignedBy: 'Admin (SYSTEM_ADMIN)',
+                description: 'Refine introduction and address counselor comments regarding local vendor story.'
+              },
+              {
+                id: 'TSK-Q2',
+                name: 'Upload Grade 12 Mid-Term Marksheet',
+                category: 'DOCUMENT_UPLOAD',
+                stage: 'TO_DO',
+                dueDate: '2026-08-15',
+                assignedBy: 'Admin (SYSTEM_ADMIN)',
+                description: 'Obtain stamped PDF transcript from high school administration.'
+              }
+            ]
           }
         ];
         setStudentsState(defaultStudents);

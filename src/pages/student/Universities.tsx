@@ -261,39 +261,39 @@ export default function StudentUniversities() {
       </div>
 
       {/* Application Readiness Engine */}
-      <Card className="overflow-hidden border-0 shadow-lg bg-gradient-to-br from-slate-900 to-slate-800 text-white">
-        <CardContent className="p-8">
-          <div className="flex flex-col md:flex-row items-center gap-8">
-            <div className="flex-1 space-y-6 w-full">
+      <Card className="border border-slate-200/80 shadow-sm bg-white rounded-2xl">
+        <CardContent className="p-6">
+          <div className="flex flex-col md:flex-row items-center gap-6">
+            <div className="flex-1 space-y-4 w-full">
               <div>
-                <h3 className="text-slate-400 font-bold uppercase tracking-wider text-xs mb-2">Overall Portfolio Readiness</h3>
-                <div className="flex items-end gap-3 mb-2">
-                  <span className={cn("text-5xl font-black tracking-tighter", getReadinessColor(overallReadiness))}>
+                <h3 className="text-slate-500 font-semibold uppercase tracking-wider text-[11px] mb-1">Overall Portfolio Readiness</h3>
+                <div className="flex items-baseline gap-2 mb-2">
+                  <span className={cn("text-3xl font-bold tracking-tight", getReadinessColor(overallReadiness))}>
                     {overallReadiness}%
                   </span>
-                  <span className="text-slate-300 font-medium pb-1.5">Complete</span>
+                  <span className="text-slate-500 text-xs font-medium">Completed</span>
                 </div>
-                <div className="h-3 w-full bg-slate-800/50 rounded-full overflow-hidden backdrop-blur-sm border border-slate-700/50">
+                <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
                   <div 
-                    className={cn("h-full rounded-full transition-all duration-1000", getReadinessBg(overallReadiness))}
+                    className={cn("h-full rounded-full transition-all duration-700", getReadinessBg(overallReadiness))}
                     style={{ width: `${overallReadiness}%` }}
                   />
                 </div>
               </div>
-              <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4 flex items-start gap-4">
-                <AlertCircle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-slate-200">
+              <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex items-center gap-3">
+                <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                <div className="text-xs">
+                  <span className="font-semibold text-slate-800">
                     {shortlist.length > 0 ? `Tracking ${shortlist.length} university application${shortlist.length > 1 ? 's' : ''}` : 'No active applications'}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-1">{totalDocsAttached} of {totalDocsNeeded} required documents attached</p>
+                  </span>
+                  <span className="text-slate-500 ml-1">({totalDocsAttached} of {totalDocsNeeded} documents attached)</span>
                 </div>
               </div>
             </div>
 
-            <div className="w-full md:w-1/2 space-y-4">
-              <h3 className="text-slate-400 font-bold uppercase tracking-wider text-xs border-b border-slate-700 pb-2">University Readiness Breakdown</h3>
-              <div className="space-y-3">
+            <div className="w-full md:w-1/2 space-y-3">
+              <h3 className="text-slate-500 font-semibold uppercase tracking-wider text-[11px] border-b border-slate-100 pb-1.5">Readiness Breakdown</h3>
+              <div className="space-y-2">
                 {shortlist.map(uni => {
                   const uniAttached = Object.keys(uni.attachedDocs).length;
                   const uniTotal = uni.requiredDocs.length;
@@ -302,12 +302,12 @@ export default function StudentUniversities() {
                   return (
                     <div key={uni.id}>
                       <div className="flex justify-between text-xs mb-1">
-                        <span className="font-semibold text-slate-200 truncate pr-4">{uni.name}</span>
+                        <span className="font-medium text-slate-700 truncate pr-2">{uni.name}</span>
                         <span className={cn("font-bold whitespace-nowrap", getReadinessColor(uniPercent))}>{uniPercent}%</span>
                       </div>
-                      <div className="h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                      <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
                         <div 
-                          className={cn("h-full rounded-full transition-all duration-1000", getReadinessBg(uniPercent))}
+                          className={cn("h-full rounded-full transition-all duration-700", getReadinessBg(uniPercent))}
                           style={{ width: `${uniPercent}%` }}
                         />
                       </div>

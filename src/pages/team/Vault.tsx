@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, CheckCircle2, AlertCircle, Clock, FileText, Check, X, ShieldAlert } from 'lucide-react';
+import { Search, Filter, CheckCircle2, AlertCircle, Clock, FileText, Check, X, ShieldAlert, Eye } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
+import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 
 interface DocumentInfo {
   id: string;
@@ -36,8 +37,9 @@ export default function TeamVault() {
   const [activeTab, setActiveTab] = useState('Pending Verification');
   const [searchQuery, setSearchQuery] = useState('');
   
-  // Review Drawer State
+  // Review Drawer & Full Preview Modal State
   const [selectedDoc, setSelectedDoc] = useState<DocumentInfo | null>(null);
+  const [fullPreviewDoc, setFullPreviewDoc] = useState<DocumentInfo | null>(null);
   const [reviewAction, setReviewAction] = useState<'approve' | 'reject' | 'internal' | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [feedback, setFeedback] = useState('');
@@ -224,12 +226,17 @@ export default function TeamVault() {
           </div>
           
           <div className="flex-1 overflow-y-auto">
-            {/* High-speed preview placeholder */}
-            <div className="h-64 bg-slate-900 flex flex-col items-center justify-center text-slate-400">
-               <FileText className="w-12 h-12 mb-4 opacity-50" />
-               <p className="text-sm font-medium">Document Preview Render</p>
-               <p className="text-xs">{selectedDoc.name}.{selectedDoc.fileExt}</p>
-               <Button variant="outline" size="sm" className="mt-4 border-slate-700 text-slate-300 hover:bg-slate-800">Expand Preview</Button>
+            {/* High-speed preview render */}
+            <div className="h-64 bg-slate-900 flex flex-col items-center justify-center text-slate-400 relative overflow-hidden group">
+               <FileText className="w-12 h-12 mb-3 text-blue-400 opacity-80" />
+               <p className="text-sm font-bold text-white">{selectedDoc.name}</p>
+               <p className="text-xs text-slate-400">{selectedDoc.type} • {selectedDoc.category}</p>
+               <Button 
+                 onClick={() => setFullPreviewDoc(selectedDoc)} 
+                 className="mt-4 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-lg flex items-center gap-2"
+               >
+                 <Eye className="w-4 h-4" /> Open Interactive Document Viewer
+               </Button>
             </div>
 
             <div className="p-6 space-y-6">
@@ -363,6 +370,41 @@ export default function TeamVault() {
             </div>
           )}
         </div>
+      )}
+
+      {/* Full Document Preview Modal */}
+      {fullPreviewDoc && (
+        <DocumentPreviewModal 
+          doc={fullPreviewDoc}
+          isStaff={true}
+          onClose={() => setFullPreviewDoc(null)}
+          onVerify={(newStatus, reason, feedback) => {
+            const studentToUpdate = students.find(s => s.id === fullPreviewDoc.studentId);
+            if (studentToUpdate) {
+              const updatedDocs = (studentToUpdate.documents || []).map((d: any) => 
+                d.id === fullPreviewDoc.id ? { ...d, status: newStatus, rejectReason: reason, feedback } : d
+              );
+              updateStudent({
+                ...studentToUpdate,
+                documents: updatedDocs,
+                operationalLogs: [
+                  {
+                    id: 'LOG-' + Date.now(),
+                    timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+                    performedBy: 'Counsellor Admin',
+                    role: 'COUNSELLOR',
+                    studentId: studentToUpdate.id,
+                    activityType: 'Document Verified',
+                    description: `Document "${fullPreviewDoc.name}" marked as ${newStatus.toUpperCase()}`
+                  },
+                  ...(studentToUpdate.operationalLogs || [])
+                ]
+              });
+            }
+            setFullPreviewDoc(null);
+            handleCloseReview();
+          }}
+        />
       )}
     </div>
   );

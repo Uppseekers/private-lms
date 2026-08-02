@@ -10,7 +10,7 @@ const CATEGORIES: TaskCategory[] = [
   'Internships', 'Research Projects', 'Competitions & Olympiads', 
   'Language Proficiency', 'MOOCs & Online Certifications', 
   'Passion Projects', 'Impact & Community Service Projects', 
-  'Administrative / College Prep'
+  'Administrative / College Prep', 'Post Meeting Action', 'Other'
 ];
 
 const STAGES: { id: TaskStage, label: string, color: string, icon: any }[] = [
@@ -27,6 +27,7 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
   const [category, setCategory] = useState<TaskCategory>('Passion Projects');
   const [dueDate, setDueDate] = useState('');
   const [description, setDescription] = useState('');
+  const [externalUrl, setExternalUrl] = useState('');
 
   const handleCreate = () => {
     if (!name.trim()) return;
@@ -37,6 +38,7 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
       dueDate: dueDate || new Date().toISOString().split('T')[0],
       stage: 'TO_DO',
       description,
+      externalUrl: externalUrl.trim() || undefined,
       attachments: [],
       assignedBy: 'Student (Self)'
     };
@@ -90,6 +92,16 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
               rows={3}
               placeholder="What needs to be done?"
               className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" 
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-2">Task Link / Document URL (Optional)</label>
+            <input 
+              type="url" 
+              value={externalUrl} 
+              onChange={e => setExternalUrl(e.target.value)} 
+              placeholder="https://docs.google.com/... or https://drive.google.com/..."
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" 
             />
           </div>
         </div>

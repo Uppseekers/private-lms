@@ -53,7 +53,9 @@ export type TaskCategory =
   | 'MOOCs & Online Certifications'
   | 'Passion Projects'
   | 'Impact & Community Service Projects'
-  | 'Administrative / College Prep';
+  | 'Administrative / College Prep'
+  | 'Post Meeting Action'
+  | 'Other';
 
 export interface TaskAttachment {
   id: string;
@@ -115,6 +117,64 @@ export interface DocumentInfo {
   fileUrl?: string;
 }
 
+export interface OperationalLog {
+  id: string;
+  timestamp: string;
+  performedBy: string;
+  role: string;
+  studentId?: string;
+  activityType: string;
+  description: string;
+  details?: string;
+  link?: string;
+  resourceName?: string;
+}
+
+export interface SessionRating {
+  id: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  rating: number;
+  comment?: string;
+  createdAt: string;
+}
+
+export interface MeetingMOM {
+  id: string;
+  authorName: string;
+  authorRole: string;
+  date: string;
+  keyPoints: string;
+  studentProgress?: string;
+  observations?: string;
+  nextSteps?: string;
+  followUpActions?: string;
+}
+
+export interface MeetingResourceLink {
+  id: string;
+  title: string;
+  description?: string;
+  url: string;
+  addedBy: string;
+  addedAt: string;
+}
+
+export interface MeetingTask {
+  id: string;
+  title: string;
+  description: string;
+  assignedBy: string;
+  assignedToStudentId: string;
+  assignedToStudentName: string;
+  dateAssigned: string;
+  dueDate?: string;
+  status: TaskStage;
+  externalUrl?: string;
+  verified?: boolean;
+}
+
 export interface Student {
   tasks?: Task[];
   id: string;
@@ -131,8 +191,10 @@ export interface Student {
   school: string;
   major1?: string;
   major2?: string;
+  taskSheetLink?: string;
   activities: Activity[];
   extracurriculars?: ExtracurricularActivity[];
+  operationalLogs?: OperationalLog[];
   academicScores?: AcademicScore[];
   shortlist: ShortlistUniversity[];
   documents: DocumentInfo[];
