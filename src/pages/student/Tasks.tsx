@@ -5,13 +5,17 @@ import { Button } from '@/components/ui/button';
 import { Task, TaskCategory, TaskStage, TaskAttachment } from '@/types';
 import { CheckCircle2, Clock, FileText, ChevronRight, Filter, Search, Plus, LayoutGrid, List, Paperclip, X, Upload, Link as LinkIcon, Save, Send } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { 
+  TASK_CATEGORIES, 
+  createTask, 
+  createTaskCreatedActivity, 
+  createTaskCompletionActivity, 
+  upsertTaskInStudentTasks, 
+  addActivityToStudent,
+  normalizeTask
+} from '@/lib/taskActivityUtils';
 
-const CATEGORIES: TaskCategory[] = [
-  'Internships', 'Research Projects', 'Competitions & Olympiads', 
-  'Language Proficiency', 'MOOCs & Online Certifications', 
-  'Passion Projects', 'Impact & Community Service Projects', 
-  'Administrative / College Prep', 'Post Meeting Action', 'Other'
-];
+const CATEGORIES: TaskCategory[] = TASK_CATEGORIES;
 
 const STAGES: { id: TaskStage, label: string, color: string, icon: any }[] = [
   { id: 'TO_DO', label: '📌 TO-DO', color: 'bg-slate-100 text-slate-700 border-slate-200', icon: Clock },
@@ -31,8 +35,7 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
 
   const handleCreate = () => {
     if (!name.trim()) return;
-    const newTask: Task = {
-      id: 'TASK-' + Math.floor(Math.random() * 10000),
+    const newTask = createTask({
       name,
       category,
       dueDate: dueDate || new Date().toISOString().split('T')[0],
@@ -41,7 +44,7 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
       externalUrl: externalUrl.trim() || undefined,
       attachments: [],
       assignedBy: 'Student (Self)'
-    };
+    });
     onCreate(newTask);
   };
 
@@ -138,17 +141,14 @@ export default function StudentTasks() {
   const getStageStyle = (stage: TaskStage) => STAGES.find(s => s.id === stage)?.color || 'bg-slate-100 text-slate-700';
 
   const updateTask = (updatedTask: Task) => {
-    const newTasks = tasks.map(t => t.id === updatedTask.id ? updatedTask : t);
+    const normalized = normalizeTask(updatedTask, { studentId: student.id, studentName: student.name });
+    const newTasks = upsertTaskInStudentTasks(tasks, normalized);
     
     // Add activity if completed
-    const newActivities = [...student.activities];
-    if (updatedTask.stage === 'COMPLETED' && (!selectedTask || selectedTask.stage !== 'COMPLETED')) {
-      newActivities.unshift({
-        id: Math.random().toString(),
-        date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-        type: 'VERIFIED',
-        description: `Task verified and completed: \${updatedTask.name}`
-      });
+    let newActivities = [...(student.activities || [])];
+    if (normalized.stage === 'COMPLETED' && (!selectedTask || selectedTask.stage !== 'COMPLETED')) {
+      const compAct = createTaskCompletionActivity(normalized, student.name);
+      newActivities = addActivityToStudent(newActivities, compAct);
     }
 
     updateStudent({
@@ -156,7 +156,7 @@ export default function StudentTasks() {
       tasks: newTasks,
       activities: newActivities
     });
-    setSelectedTask(updatedTask);
+    setSelectedTask(normalized);
   };
 
   return (
@@ -165,7 +165,11 @@ export default function StudentTasks() {
         <CreateTaskModal 
           onClose={() => setIsCreateModalOpen(false)} 
           onCreate={(newTask) => {
-            updateStudent({ ...student, tasks: [...tasks, newTask] });
+            const normalized = normalizeTask({ ...newTask, studentId: student.id, studentName: student.name });
+            const createdAct = createTaskCreatedActivity(normalized, student.name);
+            const updatedTasks = upsertTaskInStudentTasks(tasks, normalized);
+            const updatedActivities = addActivityToStudent(student.activities, createdAct);
+            updateStudent({ ...student, tasks: updatedTasks, activities: updatedActivities });
             setIsCreateModalOpen(false);
           }}
         />

@@ -1,7 +1,7 @@
 export interface Activity {
   id: string;
   date?: string;
-  type?: 'SESSION' | 'UPLOAD' | 'UPDATE' | 'SYSTEM' | 'VERIFIED';
+  type?: 'SESSION' | 'UPLOAD' | 'UPDATE' | 'SYSTEM' | 'VERIFIED' | 'EXTRACURRICULAR' | 'TASK_CREATED' | 'TASK_COMPLETED' | string;
   description?: string;
   title?: string;
   category?: string;
@@ -11,6 +11,11 @@ export interface Activity {
   hoursPerWeek?: string;
   weeksPerYear?: string;
   verified?: boolean;
+  author?: string;
+  user?: string;
+  studentId?: string;
+  studentName?: string;
+  link?: string;
 }
 
 export interface ShortlistUniversity {
@@ -18,27 +23,35 @@ export interface ShortlistUniversity {
   name: string;
   category: 'Reach' | 'Target' | 'Safety';
   deadline: string;
-  status: 'Applying' | 'Considering' | 'Not Applying' | 'Submitted';
+  status: 'Applying' | 'Considering' | 'Not Applying' | 'Submitted' | 'In Progress';
   major?: string;
   round?: string;
   portalLink?: string;
-  requiredDocs?: string[];
+  requiredDocs?: any[];
+  attachedDocs?: Record<string, any>;
 }
 
 export interface EssayVersion {
-  id: string;
-  version: string;
+  id?: string;
+  version?: string;
+  versionNumber?: number;
   content: string;
   date: string;
+  author?: string;
   feedback?: string;
   evaluations?: Record<string, 'Needs Work' | 'Satisfactory' | 'Excellent'>;
+  inlineComments?: any[];
 }
 
 export interface Essay {
   id: string;
+  title?: string;
   prompt: string;
   university?: string;
-  status: 'In Progress' | 'Draft Saved' | 'Under Review' | 'Needs Revision' | 'Approved';
+  counselor?: string;
+  targetCount?: number;
+  wordCount?: number;
+  status: 'In Progress' | 'Draft Saved' | 'Under Review' | 'Needs Revision' | 'Approved' | 'Draft';
   versions: EssayVersion[];
 }
 
@@ -55,6 +68,8 @@ export type TaskCategory =
   | 'Impact & Community Service Projects'
   | 'Administrative / College Prep'
   | 'Post Meeting Action'
+  | 'Essays & Applications'
+  | 'Document Upload'
   | 'Other';
 
 export interface TaskAttachment {
@@ -81,6 +96,10 @@ export interface Task {
   pdfUrl?: string;
   pdfFileName?: string;
   assignedBatch?: string;
+  studentId?: string;
+  studentName?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface AcademicScore {
@@ -138,6 +157,25 @@ export interface SessionRating {
   rating: number;
   comment?: string;
   createdAt: string;
+}
+
+export interface EventItem {
+  id?: string;
+  title?: string;
+  stream?: string;
+  type?: string;
+  category?: string;
+  date?: string;
+  day?: string;
+  time?: string;
+  duration?: string;
+  host?: string;
+  organiser?: string;
+  attendees?: any;
+  students?: any;
+  status?: string;
+  link?: string;
+  location?: string;
 }
 
 export interface MeetingMOM {

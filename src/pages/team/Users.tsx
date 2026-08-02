@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink } from 'lucide-react';
+import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage } from '@/types';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
@@ -952,84 +952,92 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">University Shortlist</h3>
+    <div className="space-y-4">
+      <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-200/80">
+        <div className="flex items-center gap-2">
+          <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">University Shortlist</h3>
+          <span className="text-[11px] font-semibold bg-white border border-slate-200 px-2 py-0.5 rounded-full text-slate-600">
+            {student.shortlist.length} Universities
+          </span>
+        </div>
+        <Button onClick={() => setIsModalOpen(true)} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-3 py-1.5 rounded-lg shrink-0">
+          <Plus className="w-3.5 h-3.5 mr-1" /> Add Target
+        </Button>
       </div>
       
-      <Card>
-        <CardContent className="p-4 flex justify-between items-center bg-slate-50 border-b border-slate-100">
-          <div className="flex gap-4 items-center">
-            <h4 className="text-sm font-semibold text-slate-700">Tracking {student.shortlist.length} Universities</h4>
-          </div>
-          <Button onClick={() => setIsModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white shrink-0">
-            <Plus className="w-4 h-4 mr-2" /> Add Target University
-          </Button>
-        </CardContent>
-        <div className="p-0">
-          <table className="w-full text-left text-sm whitespace-nowrap">
-            <thead className="bg-white border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-              <tr>
-                <th className="px-6 py-3">University</th>
-                <th className="px-6 py-3">Category</th>
-                <th className="px-6 py-3">Deadline</th>
-                <th className="px-6 py-3">Status</th>
-                <th className="px-6 py-3 text-right">Actions</th>
+      <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs overflow-hidden">
+        <table className="w-full text-left text-xs whitespace-nowrap">
+          <thead className="bg-slate-50/80 border-b border-slate-200/80 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
+            <tr>
+              <th className="px-4 py-2.5">University</th>
+              <th className="px-4 py-2.5">Category</th>
+              <th className="px-4 py-2.5">Deadline</th>
+              <th className="px-4 py-2.5">Status</th>
+              <th className="px-4 py-2.5 text-right">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100 bg-white">
+            {student.shortlist.map(uni => (
+              <tr key={uni.id} className="hover:bg-slate-50/60 transition-colors">
+                <td className="px-4 py-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <p className="font-bold text-slate-900 text-xs">{uni.name}</p>
+                    {uni.portalLink && (
+                      <a href={uni.portalLink} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700">
+                        <LinkIcon className="w-3 h-3" />
+                      </a>
+                    )}
+                  </div>
+                  {(uni.major || uni.round) && (
+                    <p className="text-[11px] text-slate-500 mt-0.5 font-medium">{uni.major}{uni.major && uni.round ? ' • ' : ''}{uni.round}</p>
+                  )}
+                  {uni.requiredDocs && uni.requiredDocs.length > 0 && (
+                    <p className="text-[10px] text-slate-400 mt-0.5 uppercase font-medium">{uni.requiredDocs.length} Docs Required</p>
+                  )}
+                </td>
+                <td className="px-4 py-2.5">
+                  <span className={cn(
+                    "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border",
+                    uni.category === 'Reach' ? 'bg-rose-50 text-rose-700 border-rose-200/80' :
+                    uni.category === 'Target' ? 'bg-amber-50 text-amber-700 border-amber-200/80' :
+                    'bg-emerald-50 text-emerald-700 border-emerald-200/80'
+                  )}>
+                    {uni.category}
+                  </span>
+                </td>
+                <td className="px-4 py-2.5 text-slate-600 font-medium">
+                  <div className="flex items-center gap-1 text-[11px]">
+                    <CalendarDays className="w-3 h-3 text-slate-400" /> 
+                    <span>{uni.deadline}</span>
+                  </div>
+                </td>
+                <td className="px-4 py-2.5">
+                  <span className={cn(
+                    "px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border",
+                    uni.status === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
+                    uni.status === 'Applying' ? 'bg-amber-50 text-amber-700 border-amber-200' :
+                    'bg-slate-50 text-slate-600 border-slate-200'
+                  )}>
+                    {uni.status || 'Drafting'}
+                  </span>
+                </td>
+                <td className="px-4 py-2.5 text-right">
+                  <button onClick={() => handleRemove(uni.id)} className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition-colors">
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </td>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 bg-white">
-              {student.shortlist.map(uni => (
-                <tr key={uni.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-6 py-3">
-                    <p className="font-bold text-slate-900 flex items-center gap-2">{uni.name} {uni.portalLink && <a href={uni.portalLink} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700"><LinkIcon className="w-3.5 h-3.5" /></a>}</p>
-                    {(uni.major || uni.round) && (
-                      <p className="text-xs text-slate-500 mt-1">{uni.major}{uni.major && uni.round ? ' • ' : ''}{uni.round}</p>
-                    )}
-                    {uni.requiredDocs && uni.requiredDocs.length > 0 && (
-                      <p className="text-[10px] text-slate-400 mt-1 uppercase font-semibold">{uni.requiredDocs.length} Docs Required</p>
-                    )}
-                  </td>
-                  <td className="px-6 py-3">
-                    <span className={cn(
-                      "px-2 py-1 rounded-full text-xs font-bold",
-                      uni.category === 'Reach' ? 'bg-red-100 text-red-700' :
-                      uni.category === 'Target' ? 'bg-blue-100 text-blue-700' :
-                      'bg-green-100 text-green-700'
-                    )}>
-                      {uni.category}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 text-slate-600 font-medium flex items-center gap-1">
-                    <CalendarDays className="w-3.5 h-3.5 text-slate-400" /> {uni.deadline}
-                  </td>
-                  <td className="px-6 py-3">
-                    <span className={cn(
-                      "text-xs font-bold uppercase tracking-wider",
-                      uni.status === 'Submitted' ? 'text-green-600' :
-                      uni.status === 'Applying' ? 'text-amber-600' :
-                      'text-slate-500'
-                    )}>
-                      {uni.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-3 text-right">
-                    <button onClick={() => handleRemove(uni.id)} className="text-slate-400 hover:text-red-500 p-1 rounded-full transition-colors">
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-              {student.shortlist.length === 0 && (
-                <tr>
-                  <td colSpan={5} className="px-6 py-8 text-center text-slate-500 text-sm">
-                    No universities added to shortlist yet.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+            ))}
+            {student.shortlist.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-4 py-6 text-center text-slate-400 text-xs">
+                  No universities added to shortlist yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
       
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
@@ -2596,33 +2604,6 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
           </div>
         </CardContent>
       </Card>
-
-      {previewingDoc && (
-        <DocumentPreviewModal 
-          doc={previewingDoc}
-          isStaff={true}
-          onClose={() => setPreviewingDoc(null)}
-          onVerify={(newStatus, reason, feedback) => {
-            const updatedDocs = (student.documents || []).map((d: any) => 
-              d.id === previewingDoc.id ? { ...d, status: newStatus, rejectReason: reason, feedback } : d
-            );
-            onUpdate({
-              ...student,
-              documents: updatedDocs,
-              activities: [
-                {
-                  id: Math.random().toString(),
-                  date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-                  type: 'VERIFIED',
-                  description: `Document "${previewingDoc.name}" status updated to ${newStatus}`
-                },
-                ...(student.activities || [])
-              ]
-            });
-            setPreviewingDoc(null);
-          }}
-        />
-      )}
     </div>
   );
 }
@@ -2699,7 +2680,7 @@ function StaffDetailDrawer({
   const staffActivityLogs = React.useMemo(() => {
     const logs: any[] = [];
     students.forEach(student => {
-      (student.activities || student.activity || []).forEach((act: any) => {
+      (student.activities || (student as any).activity || []).forEach((act: any) => {
         if (
           (act.user && act.user.toLowerCase().includes(staffMember.name.toLowerCase())) ||
           (act.author && act.author.toLowerCase().includes(staffMember.name.toLowerCase())) ||

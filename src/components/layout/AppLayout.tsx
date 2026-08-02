@@ -17,11 +17,13 @@ import {
   ChevronRight,
   Command,
   FileText,
-  Menu
+  Menu,
+  FileSpreadsheet
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Role } from '@/types';
 import { useDatabase } from '@/context/DatabaseContext';
+import { GoogleSheetsSyncModal } from '@/components/GoogleSheetsSyncModal';
 
 interface SidebarItem {
   name: string;
@@ -57,6 +59,7 @@ export default function AppLayout() {
   const [globalSearch, setGlobalSearch] = useState('');
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const { currentUser, permissionsMatrix, staff, students, setCurrentUser, setIsAuthenticated } = useDatabase();
@@ -306,6 +309,16 @@ export default function AppLayout() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
+            {/* Google Sheets Sync Button */}
+            <button
+              onClick={() => setIsSheetsModalOpen(true)}
+              title="Google Sheets Backup & Realtime Sync"
+              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 rounded-full py-1.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden md:inline">Sheets Sync</span>
+            </button>
+
             {/* Supersearch Trigger Button */}
             <div 
               onClick={() => {
@@ -573,6 +586,12 @@ export default function AppLayout() {
           </div>
           <div>Uppseekers v2.5.0</div>
         </footer>
+
+        {/* Google Sheets Sync & Backup Modal */}
+        <GoogleSheetsSyncModal 
+          isOpen={isSheetsModalOpen} 
+          onClose={() => setIsSheetsModalOpen(false)} 
+        />
       </main>
     </div>
   );

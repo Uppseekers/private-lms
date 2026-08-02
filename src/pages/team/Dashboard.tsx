@@ -15,6 +15,7 @@ import {
   Legend
 } from 'recharts';
 import { useDatabase } from '@/context/DatabaseContext';
+import { normalizeTaskStage, normalizeTaskCategory } from '@/lib/taskActivityUtils';
 import { 
   Users, BookOpen, CheckSquare, Clock, Filter, Search, 
   CheckCircle2, AlertCircle, ArrowUpRight, Calendar, UserCheck, 
@@ -25,21 +26,32 @@ import { cn } from '@/lib/utils';
 export default function TeamDashboard() {
   const { students, batches, events, staff, updateStudent } = useDatabase();
 
-  // Date & Timeframe Evaluation Filters
+  // Date & Timeframe Evaluation Filters for Tasks Chart
   const [dateEvalMode, setDateEvalMode] = useState<'DUE_DATE' | 'TASK_DATE'>('DUE_DATE');
   const [selectedTimeframeFilter, setSelectedTimeframeFilter] = useState('ALL');
   const [customFromDate, setCustomFromDate] = useState('');
   const [customToDate, setCustomToDate] = useState('');
 
-  // Other Filters for Charts
+  // Other Filters for Tasks Chart
   const [selectedStaffFilter, setSelectedStaffFilter] = useState('ALL');
   const [selectedBatchFilter, setSelectedBatchFilter] = useState('ALL');
   const [selectedStudentFilter, setSelectedStudentFilter] = useState('ALL');
 
-  // Search for Post-Meeting Tasks & Meetings widget
-  const [taskSearchQuery, setTaskSearchQuery] = useState('');
-  const [taskStatusFilter, setTaskStatusFilter] = useState('ALL');
-  const [meetingSearchQuery, setMeetingSearchQuery] = useState('');
+  // Filters for Section 1: Day-Wise Meetings: Scheduled vs Completed
+  const [daywiseTimeframe, setDaywiseTimeframe] = useState('ALL');
+  const [daywiseCustomFrom, setDaywiseCustomFrom] = useState('');
+  const [daywiseCustomTo, setDaywiseCustomTo] = useState('');
+  const [daywiseStaffSearch, setDaywiseStaffSearch] = useState('');
+  const [daywiseBatchSearch, setDaywiseBatchSearch] = useState('');
+  const [daywiseStudentSearch, setDaywiseStudentSearch] = useState('');
+
+  // Filters for Section 2: Meetings List View
+  const [listTimeframe, setListTimeframe] = useState('ALL');
+  const [listCustomFrom, setListCustomFrom] = useState('');
+  const [listCustomTo, setListCustomTo] = useState('');
+  const [listStaffSearch, setListStaffSearch] = useState('');
+  const [listBatchSearch, setListBatchSearch] = useState('');
+  const [listStudentSearch, setListStudentSearch] = useState('');
 
   // Helper for Date Matching
   const isDateInTimeframe = (dateStr: string) => {
@@ -88,6 +100,155 @@ export default function TeamDashboard() {
     return true;
   };
 
+  // Generic Date Timeframe Matcher for Meetings
+  const isDateMatchingTimeframe = (dateStr: string, timeframe: string, customFrom: string, customTo: string) => {
+    if (!dateStr || timeframe === 'ALL') return true;
+    const today = new Date();
+    const todayStr = today.toISOString().split('T')[0];
+
+    if (timeframe === 'TODAY') {
+      return dateStr === todayStr || dateStr === 'Today';
+    }
+
+    if (timeframe === 'YESTERDAY') {
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      return dateStr === yesterday.toISOString().split('T')[0];
+    }
+
+    let itemDate = new Date(dateStr);
+    if (dateStr === 'Today') itemDate = today;
+    if (isNaN(itemDate.getTime())) return true;
+
+    if (timeframe === 'THIS_WEEK') {
+      const startOfWeek = new Date(today);
+      startOfWeek.setDate(today.getDate() - today.getDay());
+      startOfWeek.setHours(0,0,0,0);
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      endOfWeek.setHours(23,59,59,999);
+      return itemDate >= startOfWeek && itemDate <= endOfWeek;
+    }
+
+    if (timeframe === 'THIS_MONTH') {
+      return itemDate.getMonth() === today.getMonth() && itemDate.getFullYear() === today.getFullYear();
+    }
+
+    if (timeframe === 'LAST_MONTH') {
+      const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+      return itemDate.getMonth() === lastMonth.getMonth() && itemDate.getFullYear() === lastMonth.getFullYear();
+    }
+
+    if (timeframe === 'CUSTOM') {
+      const formatted = itemDate.toISOString().split('T')[0];
+      if (customFrom && formatted < customFrom) return false;
+      if (customTo && formatted > customTo) return false;
+      return true;
+    }
+
+    return true;
+  };
+
+  // Helper to filter events based on timeframe, staff, batch, student searches
+  const filterEventsList = (
+    eventItems: any[],
+    timeframe: string,
+    customFrom: string,
+    customTo: string,
+    staffQuery: string,
+    batchQuery: string,
+    studentQuery: string
+  ) => {
+    return eventItems.filter(evt => {
+      // 1. Timeframe
+      if (!isDateMatchingTimeframe(evt.date, timeframe, customFrom, customTo)) {
+        return false;
+      }
+
+      // 2. Staff / Mentor (text search)
+      if (staffQuery.trim()) {
+        const q = staffQuery.toLowerCase().trim();
+        const staffVal = (evt.host || evt.organiser || evt.staff?.name || evt.counselor || '').toLowerCase();
+        if (!staffVal.includes(q)) return false;
+      }
+
+      // 3. Batch / Cohort (text search)
+      if (batchQuery.trim()) {
+        const q = batchQuery.toLowerCase().trim();
+        const batchVal = (evt.batch || evt.batchName || evt.cohort || evt.stream || evt.type || '').toLowerCase();
+        if (!batchVal.includes(q)) return false;
+      }
+
+      // 4. Students (text search)
+      if (studentQuery.trim()) {
+        const q = studentQuery.toLowerCase().trim();
+        const studentVal = (
+          evt.students || 
+          evt.studentName || 
+          evt.assignedToStudentName || 
+          evt.studentId || 
+          ''
+        ).toLowerCase();
+        if (!studentVal.includes(q)) return false;
+      }
+
+      return true;
+    });
+  };
+
+  // Day-wise Scheduled vs Completed Meetings Filtered Events
+  const daywiseFilteredEvents = useMemo(() => {
+    return filterEventsList(
+      events,
+      daywiseTimeframe,
+      daywiseCustomFrom,
+      daywiseCustomTo,
+      daywiseStaffSearch,
+      daywiseBatchSearch,
+      daywiseStudentSearch
+    );
+  }, [events, daywiseTimeframe, daywiseCustomFrom, daywiseCustomTo, daywiseStaffSearch, daywiseBatchSearch, daywiseStudentSearch]);
+
+  // Day-wise Scheduled vs Completed Meetings Chart Data
+  const dayWiseMeetingData = useMemo(() => {
+    const daysMap: Record<string, { date: string, scheduled: number, completed: number }> = {};
+    daywiseFilteredEvents.forEach(evt => {
+      const d = evt.date || 'Today';
+      if (!daysMap[d]) {
+        daysMap[d] = { date: d, scheduled: 0, completed: 0 };
+      }
+      daysMap[d].scheduled++;
+      if (evt.status === 'Completed') {
+        daysMap[d].completed++;
+      }
+    });
+
+    const result = Object.values(daysMap).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    if (result.length === 0) {
+      return [
+        { date: 'Mon', scheduled: 5, completed: 4 },
+        { date: 'Tue', scheduled: 7, completed: 6 },
+        { date: 'Wed', scheduled: 9, completed: 8 },
+        { date: 'Thu', scheduled: 6, completed: 5 },
+        { date: 'Fri', scheduled: 10, completed: 9 },
+      ];
+    }
+    return result;
+  }, [daywiseFilteredEvents]);
+
+  // Meetings List View Filtered Events
+  const meetingsListFilteredEvents = useMemo(() => {
+    return filterEventsList(
+      events,
+      listTimeframe,
+      listCustomFrom,
+      listCustomTo,
+      listStaffSearch,
+      listBatchSearch,
+      listStudentSearch
+    );
+  }, [events, listTimeframe, listCustomFrom, listCustomTo, listStaffSearch, listBatchSearch, listStudentSearch]);
+
   // 1. Intake Data calculation
   const intakeData = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -126,8 +287,8 @@ export default function TeamDashboard() {
         taskList.push({
           id: t.id || Math.random().toString(),
           title: t.name || t.title || 'Untitled Task',
-          category: t.category || 'GENERAL',
-          stage: (t.stage || t.status || 'TO_DO').toUpperCase(),
+          category: normalizeTaskCategory(t.category),
+          stage: normalizeTaskStage(t.stage || t.status),
           dueDate: t.dueDate || '2026-08-15',
           taskDate: t.createdDate || t.dueDate || '2026-08-01',
           studentId: student.id,
@@ -146,11 +307,11 @@ export default function TeamDashboard() {
         const studentObj = students.find(s => s.id === mt.assignedToStudentId);
         taskList.push({
           id: mt.id || Math.random().toString(),
-          title: mt.title,
-          category: 'POST_MEETING',
-          stage: (mt.status || 'TO_DO').toUpperCase(),
+          title: mt.title || 'Untitled Meeting Task',
+          category: normalizeTaskCategory('Post Meeting Action'),
+          stage: normalizeTaskStage(mt.status || mt.stage),
           dueDate: mt.dueDate || '2026-08-15',
-          taskDate: evt.date || mt.dueDate || '2026-08-01',
+          taskDate: (evt as any).date || mt.dueDate || '2026-08-01',
           studentId: mt.assignedToStudentId || studentObj?.id || 'STU-101',
           studentName: mt.assignedToStudentName || studentObj?.name || 'Student',
           counselor: evt.host || 'Counselor',
@@ -239,128 +400,7 @@ export default function TeamDashboard() {
   const completedTaskCount = stageChartData.find(d => d.code === 'VERIFIED_COMPLETED')?.count || 0;
   const completionRate = totalTaskCount > 0 ? Math.round((completedTaskCount / totalTaskCount) * 100) : 0;
 
-  // 6. Filtered Meetings Analytics Data
-  const filteredEvents = useMemo(() => {
-    return events.filter(evt => {
-      // Staff filter
-      if (selectedStaffFilter !== 'ALL' && evt.host && !evt.host.toLowerCase().includes(selectedStaffFilter.toLowerCase())) {
-        return false;
-      }
 
-      // Timeframe filter
-      if (!isDateInTimeframe(evt.date)) {
-        return false;
-      }
-
-      // Search filter
-      if (meetingSearchQuery) {
-        const q = meetingSearchQuery.toLowerCase();
-        const matches = evt.title.toLowerCase().includes(q) ||
-                        (evt.host && evt.host.toLowerCase().includes(q)) ||
-                        (evt.description && evt.description.toLowerCase().includes(q));
-        if (!matches) return false;
-      }
-
-      return true;
-    });
-  }, [events, selectedStaffFilter, selectedTimeframeFilter, customFromDate, customToDate, meetingSearchQuery]);
-
-  // Meeting Stream / Type Counts for Chart
-  const meetingTypeChartData = useMemo(() => {
-    const counts: Record<string, number> = {
-      'General Counseling': 0,
-      'Essay Review': 0,
-      'SAT Strategy': 0,
-      'Document Audit': 0,
-      'Batch Seminar': 0,
-      'Other': 0
-    };
-
-    filteredEvents.forEach(evt => {
-      const type = evt.type || 'General Counseling';
-      if (counts[type] !== undefined) {
-        counts[type]++;
-      } else {
-        counts['Other']++;
-      }
-    });
-
-    return [
-      { name: 'General Counseling', count: counts['General Counseling'], color: '#6366f1' },
-      { name: 'Essay Review', count: counts['Essay Review'], color: '#ec4899' },
-      { name: 'SAT Strategy', count: counts['SAT Strategy'], color: '#f59e0b' },
-      { name: 'Document Audit', count: counts['Document Audit'], color: '#3b82f6' },
-      { name: 'Batch Seminar', count: counts['Batch Seminar'], color: '#10b981' },
-      { name: 'Other', count: counts['Other'], color: '#64748b' }
-    ].filter(d => d.count > 0 || filteredEvents.length === 0);
-  }, [filteredEvents]);
-
-  // Day-wise Scheduled vs Completed Meetings
-  const dayWiseMeetingData = useMemo(() => {
-    const daysMap: Record<string, { date: string, scheduled: number, completed: number }> = {};
-    filteredEvents.forEach(evt => {
-      const d = evt.date || 'Today';
-      if (!daysMap[d]) {
-        daysMap[d] = { date: d, scheduled: 0, completed: 0 };
-      }
-      daysMap[d].scheduled++;
-      if (evt.status === 'Completed') {
-        daysMap[d].completed++;
-      }
-    });
-
-    const result = Object.values(daysMap).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    if (result.length === 0) {
-      return [
-        { date: 'Mon', scheduled: 5, completed: 4 },
-        { date: 'Tue', scheduled: 7, completed: 6 },
-        { date: 'Wed', scheduled: 9, completed: 8 },
-        { date: 'Thu', scheduled: 6, completed: 5 },
-        { date: 'Fri', scheduled: 10, completed: 9 },
-      ];
-    }
-    return result;
-  }, [filteredEvents]);
-
-  // 7. Post-Meeting Tasks List
-  const postMeetingTasksList = useMemo(() => {
-    return allSystemTasks.filter(t => {
-      const q = taskSearchQuery.toLowerCase();
-      const matchesSearch = !q || 
-        t.title.toLowerCase().includes(q) || 
-        t.studentName.toLowerCase().includes(q) || 
-        t.source.toLowerCase().includes(q);
-
-      const matchesStatus = taskStatusFilter === 'ALL' || 
-        (taskStatusFilter === 'PENDING' && t.stage !== 'VERIFIED_COMPLETED' && t.stage !== 'COMPLETED') ||
-        (taskStatusFilter === 'COMPLETED' && (t.stage === 'VERIFIED_COMPLETED' || t.stage === 'COMPLETED'));
-
-      const targetDateStr = dateEvalMode === 'DUE_DATE' ? t.dueDate : t.taskDate;
-      const matchesTime = isDateInTimeframe(targetDateStr);
-
-      return matchesSearch && matchesStatus && matchesTime;
-    });
-  }, [allSystemTasks, taskSearchQuery, taskStatusFilter, dateEvalMode, selectedTimeframeFilter, customFromDate, customToDate]);
-
-  // Handler to toggle task complete
-  const handleToggleTaskStatus = (task: any) => {
-    const student = students.find(s => s.id === task.studentId);
-    if (!student) return;
-
-    const newStage = (task.stage === 'VERIFIED_COMPLETED' || task.stage === 'COMPLETED') ? 'IN_PROGRESS' : 'VERIFIED_COMPLETED';
-
-    const updatedTasks = (student.tasks || []).map((t: any) => {
-      if ((t.id && t.id === task.id) || t.name === task.title) {
-        return { ...t, stage: newStage, status: newStage };
-      }
-      return t;
-    });
-
-    updateStudent({
-      ...student,
-      tasks: updatedTasks
-    });
-  };
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto w-full pb-12">
@@ -602,20 +642,20 @@ export default function TeamDashboard() {
         </CardContent>
       </Card>
 
-      {/* NEW SECTION: Day-Wise Scheduled vs Completed Meetings Chart */}
+      {/* SECTION: Meetings: Scheduled vs Completed (day wise) */}
       <Card className="border-slate-200 shadow-sm overflow-hidden">
         <CardHeader className="border-b border-slate-100 bg-white p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <CardTitle className="flex items-center gap-2 text-slate-800 text-lg">
               <Calendar className="w-5 h-5 text-indigo-600" />
-              Day-Wise Meetings: Scheduled vs Completed
+              Meetings: Scheduled vs Completed (day wise)
             </CardTitle>
             <p className="text-xs text-slate-500 mt-1">
-              Compare total scheduled sessions against completed meetings day by day within selected timeframes and staff filters.
+              Day-by-day comparison of scheduled and completed sessions filtered by timeframe, mentor staff, cohort batch, or students.
             </p>
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
+          <div className="flex items-center gap-2 text-xs shrink-0">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 text-indigo-700 font-bold rounded-lg border border-indigo-100">
               <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 inline-block"></span> Scheduled
             </span>
@@ -624,6 +664,107 @@ export default function TeamDashboard() {
             </span>
           </div>
         </CardHeader>
+
+        {/* Filter Controls Bar */}
+        <div className="bg-slate-50 border-b border-slate-100 p-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            {/* Filter 1: Time Frame Range */}
+            <div>
+              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Time Frame Range</label>
+              <select
+                value={daywiseTimeframe}
+                onChange={(e) => setDaywiseTimeframe(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2 font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="ALL">All Time</option>
+                <option value="TODAY">Today</option>
+                <option value="YESTERDAY">Yesterday</option>
+                <option value="THIS_WEEK">This Week</option>
+                <option value="THIS_MONTH">This Month</option>
+                <option value="LAST_MONTH">Last Month</option>
+                <option value="CUSTOM">Custom Date Range</option>
+              </select>
+            </div>
+
+            {/* Filter 2: Staff / Mentor Search */}
+            <div>
+              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Staff / Mentor</label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search Staff / Mentor..."
+                  value={daywiseStaffSearch}
+                  onChange={(e) => setDaywiseStaffSearch(e.target.value)}
+                  className="w-full pl-8 pr-2 py-2 bg-white border border-slate-200 rounded-lg font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Filter 3: Batch / Cohort Search */}
+            <div>
+              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Batch / Cohort</label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search Batch / Cohort..."
+                  value={daywiseBatchSearch}
+                  onChange={(e) => setDaywiseBatchSearch(e.target.value)}
+                  className="w-full pl-8 pr-2 py-2 bg-white border border-slate-200 rounded-lg font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 text-xs"
+                />
+              </div>
+            </div>
+
+            {/* Filter 4: Students Search */}
+            <div>
+              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Students</label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search Students..."
+                  value={daywiseStudentSearch}
+                  onChange={(e) => setDaywiseStudentSearch(e.target.value)}
+                  className="w-full pl-8 pr-2 py-2 bg-white border border-slate-200 rounded-lg font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 text-xs"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Custom Date Pickers if CUSTOM timeframe selected */}
+          {daywiseTimeframe === 'CUSTOM' && (
+            <div className="flex flex-wrap items-center gap-4 bg-white p-3 rounded-lg border border-slate-200 text-xs animate-in fade-in duration-200">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-slate-600">From Date:</span>
+                <input 
+                  type="date" 
+                  value={daywiseCustomFrom} 
+                  onChange={(e) => setDaywiseCustomFrom(e.target.value)}
+                  className="border border-slate-300 rounded px-2 py-1 text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-slate-600">To Date:</span>
+                <input 
+                  type="date" 
+                  value={daywiseCustomTo} 
+                  onChange={(e) => setDaywiseCustomTo(e.target.value)}
+                  className="border border-slate-300 rounded px-2 py-1 text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              {(daywiseCustomFrom || daywiseCustomTo) && (
+                <button 
+                  onClick={() => { setDaywiseCustomFrom(''); setDaywiseCustomTo(''); }}
+                  className="text-xs text-red-600 hover:underline font-bold"
+                >
+                  Reset Custom Dates
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
         <CardContent className="p-6">
           <div className="h-[280px] w-full">
             <ResponsiveContainer width="100%" height="100%">
@@ -644,220 +785,210 @@ export default function TeamDashboard() {
         </CardContent>
       </Card>
 
-      {/* NEW SECTION: Meetings Counts Chart & Interactive Meetings List */}
+      {/* SECTION: Meetings & Counseling Sessions List View */}
       <Card className="border-slate-200 shadow-sm overflow-hidden">
         <CardHeader className="border-b border-slate-100 bg-white p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <CardTitle className="flex items-center gap-2 text-slate-800 text-lg">
               <Calendar className="w-5 h-5 text-indigo-600" />
-              Counseling & Meeting Session Analytics
+              Scheduled & Completed Meetings Directory
             </CardTitle>
             <p className="text-xs text-slate-500 mt-1">
-              Distribution of scheduled and completed meetings across streams and staff hosts.
+              Detailed list of meetings showing meeting name, subject category, organiser, time, and session status.
             </p>
           </div>
 
           <div className="flex items-center gap-3">
             <div className="bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-xl text-xs font-semibold text-indigo-900">
-              Filtered Sessions: <span className="font-bold text-indigo-700">{filteredEvents.length}</span>
+              Total Meetings: <span className="font-bold text-indigo-700">{meetingsListFilteredEvents.length}</span>
             </div>
           </div>
         </CardHeader>
 
-        <div className="p-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Meetings Chart */}
-          <div className="lg:col-span-1 bg-slate-50/70 border border-slate-200/80 rounded-2xl p-4 flex flex-col justify-between">
-            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">Meeting Counts by Stream</h4>
-            <div className="h-[260px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={meetingTypeChartData} layout="vertical" margin={{ top: 10, right: 20, left: 20, bottom: 10 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e2e8f0" />
-                  <XAxis type="number" stroke="#64748b" fontSize={11} allowDecimals={false} />
-                  <YAxis dataKey="name" type="category" stroke="#64748b" fontSize={10} width={100} tickLine={false} />
-                  <Tooltip 
-                    contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                    formatter={(val: any) => [`${val} Sessions`, 'Meetings']}
-                  />
-                  <Bar dataKey="count" radius={[0, 6, 6, 0]}>
-                    {meetingTypeChartData.map((entry, idx) => (
-                      <Cell key={`m-cell-${idx}`} fill={entry.color} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
+        {/* Filter Controls Bar */}
+        <div className="bg-slate-50 border-b border-slate-100 p-4 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            {/* Filter 1: Time Frame Range */}
+            <div>
+              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Time Frame Range</label>
+              <select
+                value={listTimeframe}
+                onChange={(e) => setListTimeframe(e.target.value)}
+                className="w-full bg-white border border-slate-200 rounded-lg p-2 font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="ALL">All Time</option>
+                <option value="TODAY">Today</option>
+                <option value="YESTERDAY">Yesterday</option>
+                <option value="THIS_WEEK">This Week</option>
+                <option value="THIS_MONTH">This Month</option>
+                <option value="LAST_MONTH">Last Month</option>
+                <option value="CUSTOM">Custom Date Range</option>
+              </select>
             </div>
-            <p className="text-[11px] text-slate-400 text-center italic mt-2">
-              Reflects selected timeframe and staff mentor filters
-            </p>
-          </div>
 
-          {/* Meetings List */}
-          <div className="lg:col-span-2 flex flex-col">
-            <div className="flex justify-between items-center mb-3">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Scheduled Sessions & Meetings ({filteredEvents.length})</h4>
-              <div className="relative w-48">
+            {/* Filter 2: Staff / Mentor Search */}
+            <div>
+              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Staff / Mentor</label>
+              <div className="relative">
                 <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input 
-                  type="text" 
-                  placeholder="Filter meetings..." 
-                  value={meetingSearchQuery}
-                  onChange={(e) => setMeetingSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-2 py-1 bg-white border border-slate-200 rounded-md text-xs focus:ring-2 focus:ring-indigo-500"
+                <input
+                  type="text"
+                  placeholder="Search Staff / Mentor..."
+                  value={listStaffSearch}
+                  onChange={(e) => setListStaffSearch(e.target.value)}
+                  className="w-full pl-8 pr-2 py-2 bg-white border border-slate-200 rounded-lg font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 text-xs"
                 />
               </div>
             </div>
 
-            <div className="overflow-y-auto max-h-[300px] border border-slate-200 rounded-xl divide-y divide-slate-100 bg-white">
-              {filteredEvents.length > 0 ? (
-                filteredEvents.map(evt => (
-                  <div key={evt.id} className="p-3.5 hover:bg-slate-50 transition-colors flex items-center justify-between gap-4">
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 text-sm">{evt.title}</span>
-                        <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-[10px] font-bold rounded-full border border-indigo-100">
-                          {evt.type || 'Counseling'}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3 text-xs text-slate-500">
-                        <span className="flex items-center gap-1 font-mono"><Calendar className="w-3 h-3 text-slate-400" /> {evt.date} {evt.time ? `@ ${evt.time}` : ''}</span>
-                        <span>•</span>
-                        <span>Host: <strong className="text-slate-700">{evt.host || 'Counselor'}</strong></span>
-                      </div>
-                    </div>
+            {/* Filter 3: Batch / Cohort Search */}
+            <div>
+              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Batch / Cohort</label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search Batch / Cohort..."
+                  value={listBatchSearch}
+                  onChange={(e) => setListBatchSearch(e.target.value)}
+                  className="w-full pl-8 pr-2 py-2 bg-white border border-slate-200 rounded-lg font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 text-xs"
+                />
+              </div>
+            </div>
 
-                    <div className="text-right flex flex-col items-end gap-1">
-                      <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 font-bold text-[10px] rounded uppercase border border-emerald-200">
-                        {evt.status || 'Scheduled'}
-                      </span>
-                      {evt.meetLink && (
-                        <a 
-                          href={evt.meetLink} 
-                          target="_blank" 
-                          rel="noreferrer" 
-                          className="text-xs text-indigo-600 hover:underline flex items-center gap-1 font-semibold"
-                        >
-                          Join <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="p-8 text-center text-slate-400">
-                  <Calendar className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                  <p className="font-medium text-slate-600">No meetings match current timeframe or filter.</p>
-                </div>
+            {/* Filter 4: Students Search */}
+            <div>
+              <label className="block font-bold text-slate-500 uppercase text-[10px] mb-1">Students</label>
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search Students..."
+                  value={listStudentSearch}
+                  onChange={(e) => setListStudentSearch(e.target.value)}
+                  className="w-full pl-8 pr-2 py-2 bg-white border border-slate-200 rounded-lg font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500 text-xs"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Custom Date Pickers if CUSTOM timeframe selected */}
+          {listTimeframe === 'CUSTOM' && (
+            <div className="flex flex-wrap items-center gap-4 bg-white p-3 rounded-lg border border-slate-200 text-xs animate-in fade-in duration-200">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-slate-600">From Date:</span>
+                <input 
+                  type="date" 
+                  value={listCustomFrom} 
+                  onChange={(e) => setListCustomFrom(e.target.value)}
+                  className="border border-slate-300 rounded px-2 py-1 text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-slate-600">To Date:</span>
+                <input 
+                  type="date" 
+                  value={listCustomTo} 
+                  onChange={(e) => setListCustomTo(e.target.value)}
+                  className="border border-slate-300 rounded px-2 py-1 text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              {(listCustomFrom || listCustomTo) && (
+                <button 
+                  onClick={() => { setListCustomFrom(''); setListCustomTo(''); }}
+                  className="text-xs text-red-600 hover:underline font-bold"
+                >
+                  Reset Custom Dates
+                </button>
               )}
             </div>
-          </div>
+          )}
         </div>
-      </Card>
 
-      {/* NEW SECTION 2: Post-Meeting Tasks & Action Items Table */}
-      <Card className="border-slate-200 shadow-sm overflow-hidden">
-        <CardHeader className="border-b border-slate-100 bg-white p-6 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <div>
-            <CardTitle className="flex items-center gap-2 text-slate-800 text-lg">
-              <Calendar className="w-5 h-5 text-blue-600" />
-              Post-Meeting Tasks & Action Items
-            </CardTitle>
-            <p className="text-xs text-slate-500 mt-1">
-              Tasks assigned following counseling sessions and batch meetings across all students.
-            </p>
-          </div>
-
-          <div className="flex items-center gap-3 w-full sm:w-auto">
-            <div className="relative flex-1 sm:w-64">
-              <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input 
-                type="text" 
-                placeholder="Search tasks..." 
-                value={taskSearchQuery}
-                onChange={(e) => setTaskSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-
-            <select
-              value={taskStatusFilter}
-              onChange={(e) => setTaskStatusFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-700"
-            >
-              <option value="ALL">All Statuses</option>
-              <option value="PENDING">Pending / In Progress</option>
-              <option value="COMPLETED">Completed</option>
-            </select>
-          </div>
-        </CardHeader>
-
+        {/* List View Table */}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
               <tr>
-                <th className="px-6 py-4">Task Title & Category</th>
-                <th className="px-6 py-4">Assigned Student</th>
-                <th className="px-6 py-4">Assigned By / Source</th>
-                <th className="px-6 py-4">Due Date</th>
-                <th className="px-6 py-4">Stage Status</th>
-                <th className="px-6 py-4 text-right">Action</th>
+                <th className="px-6 py-4">Meeting Name</th>
+                <th className="px-6 py-4">Subject</th>
+                <th className="px-6 py-4">Organiser</th>
+                <th className="px-6 py-4">Time</th>
+                <th className="px-6 py-4 text-right">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {postMeetingTasksList.length > 0 ? postMeetingTasksList.map((task, idx) => {
-                const isCompleted = task.stage === 'VERIFIED_COMPLETED' || task.stage === 'COMPLETED';
+              {meetingsListFilteredEvents.length > 0 ? (
+                meetingsListFilteredEvents.map((evt) => {
+                  // Subject determination: Research, Counselling, SAT, Others
+                  let subjectCategory = 'Counselling';
+                  const typeLower = (evt.type || evt.subject || '').toLowerCase();
+                  if (typeLower.includes('research')) subjectCategory = 'Research';
+                  else if (typeLower.includes('sat')) subjectCategory = 'SAT';
+                  else if (typeLower.includes('counsel')) subjectCategory = 'Counselling';
+                  else if (evt.type) subjectCategory = evt.type;
+                  else subjectCategory = 'Others';
 
-                return (
-                  <tr key={task.id || idx} className="hover:bg-slate-50/80 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="font-bold text-slate-900">{task.title}</div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">{task.category}</div>
-                    </td>
+                  const statusVal = evt.status || 'Scheduled';
+                  const isCompleted = statusVal === 'Completed';
 
-                    <td className="px-6 py-4">
-                      <div className="font-bold text-slate-900">{task.studentName}</div>
-                      <div className="text-[10px] font-mono text-slate-400">{task.studentId}</div>
-                    </td>
-
-                    <td className="px-6 py-4 text-xs text-slate-600">
-                      <div>{task.assignedBy}</div>
-                      <div className="text-[10px] text-slate-400">{task.source}</div>
-                    </td>
-
-                    <td className="px-6 py-4 text-xs font-mono font-medium text-slate-700">
-                      {task.dueDate}
-                    </td>
-
-                    <td className="px-6 py-4">
-                      <span className={cn(
-                        "px-2.5 py-1 rounded-full text-xs font-bold border inline-flex items-center gap-1.5",
-                        isCompleted ? "bg-emerald-50 text-emerald-800 border-emerald-200" : "bg-indigo-50 text-indigo-800 border-indigo-200"
-                      )}>
-                        {isCompleted ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <Clock className="w-3.5 h-3.5 text-indigo-600" />}
-                        {task.stage}
-                      </span>
-                    </td>
-
-                    <td className="px-6 py-4 text-right">
-                      <Button
-                        size="sm"
-                        variant={isCompleted ? "outline" : "default"}
-                        onClick={() => handleToggleTaskStatus(task)}
-                        className={cn(
-                          "text-xs h-8 font-bold",
-                          isCompleted ? "border-slate-200 text-slate-600 hover:bg-slate-100" : "bg-emerald-600 hover:bg-emerald-700 text-white"
+                  return (
+                    <tr key={evt.id} className="hover:bg-slate-50/80 transition-colors">
+                      {/* Meeting Name */}
+                      <td className="px-6 py-4">
+                        <div className="font-bold text-slate-900">{evt.title}</div>
+                        {evt.description && (
+                          <div className="text-[11px] text-slate-400 mt-0.5 truncate max-w-xs">{evt.description}</div>
                         )}
-                      >
-                        {isCompleted ? 'Mark Pending' : 'Mark Complete'}
-                      </Button>
-                    </td>
-                  </tr>
-                );
-              }) : (
+                      </td>
+
+                      {/* Subject */}
+                      <td className="px-6 py-4">
+                        <span className={cn(
+                          "px-2.5 py-1 rounded-full text-xs font-bold border inline-flex items-center gap-1",
+                          subjectCategory === 'Research' ? "bg-purple-50 text-purple-700 border-purple-200" :
+                          subjectCategory === 'SAT' ? "bg-amber-50 text-amber-700 border-amber-200" :
+                          subjectCategory === 'Counselling' ? "bg-blue-50 text-blue-700 border-blue-200" :
+                          "bg-slate-100 text-slate-700 border-slate-200"
+                        )}>
+                          {subjectCategory}
+                        </span>
+                      </td>
+
+                      {/* Organiser */}
+                      <td className="px-6 py-4 font-medium text-slate-800 text-xs">
+                        {evt.host || evt.organiser || 'Admin / Counselor'}
+                      </td>
+
+                      {/* Time */}
+                      <td className="px-6 py-4 text-xs font-mono text-slate-700">
+                        <div className="flex items-center gap-1.5">
+                          <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                          <span>{evt.date}</span>
+                          {evt.time && <span className="text-slate-400">@ {evt.time}</span>}
+                        </div>
+                      </td>
+
+                      {/* Status */}
+                      <td className="px-6 py-4 text-right">
+                        <span className={cn(
+                          "px-2.5 py-1 rounded-full text-xs font-bold border inline-flex items-center gap-1 uppercase text-[10px]",
+                          isCompleted ? "bg-emerald-50 text-emerald-800 border-emerald-200" :
+                          statusVal === 'Cancelled' ? "bg-rose-50 text-rose-800 border-rose-200" :
+                          "bg-indigo-50 text-indigo-800 border-indigo-200"
+                        )}>
+                          {statusVal}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
-                    <CheckSquare className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                    <p className="font-semibold text-slate-700">No Post-Meeting Tasks Found</p>
-                    <p className="text-xs">Schedule a meeting or assign post-session action items to populate this list.</p>
+                  <td colSpan={5} className="px-6 py-12 text-center text-slate-500">
+                    <Calendar className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                    <p className="font-semibold text-slate-700">No Meetings Found</p>
+                    <p className="text-xs">Adjust your timeframe or text filters to display sessions.</p>
                   </td>
                 </tr>
               )}

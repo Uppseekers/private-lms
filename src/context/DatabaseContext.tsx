@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, ReactNode } from
 import { Student, StaffMember, Batch, MeetingMOM, SessionRating, MeetingResourceLink, MeetingTask, OperationalLog } from '@/types';
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import { normalizeTask, normalizeActivity } from '@/lib/taskActivityUtils';
 
 type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | null;
 
@@ -235,7 +236,16 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     const unsubStudents = onSnapshot(collection(db, 'students'), async (snapshot) => {
       if (!snapshot.empty) {
         const loaded: Student[] = [];
-        snapshot.forEach(docSnap => loaded.push(docSnap.data() as Student));
+        snapshot.forEach(docSnap => {
+          const s = docSnap.data() as Student;
+          if (s.tasks) {
+            s.tasks = s.tasks.map(t => normalizeTask(t, { studentId: s.id, studentName: s.name }));
+          }
+          if (s.activities) {
+            s.activities = s.activities.map(a => normalizeActivity(a, { studentId: s.id, studentName: s.name }));
+          }
+          loaded.push(s);
+        });
         setStudentsState(loaded);
         localStorage.setItem('uppseekers_students_v2', JSON.stringify(loaded));
       } else {
@@ -356,24 +366,24 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
               }
             ],
             tasks: [
-              {
+              normalizeTask({
                 id: 'TSK-Q1',
                 name: 'Complete Common App Personal Essay Draft 2',
-                category: 'ESSAY',
+                category: 'Essays & Applications',
                 stage: 'IN_PROGRESS',
                 dueDate: '2026-08-10',
                 assignedBy: 'Admin (SYSTEM_ADMIN)',
                 description: 'Refine introduction and address counselor comments regarding local vendor story.'
-              },
-              {
+              }, { studentId: 'STU-103', studentName: 'Qasim Khan' }),
+              normalizeTask({
                 id: 'TSK-Q2',
                 name: 'Upload Grade 12 Mid-Term Marksheet',
-                category: 'DOCUMENT_UPLOAD',
+                category: 'Document Upload',
                 stage: 'TO_DO',
                 dueDate: '2026-08-15',
                 assignedBy: 'Admin (SYSTEM_ADMIN)',
                 description: 'Obtain stamped PDF transcript from high school administration.'
-              }
+              }, { studentId: 'STU-103', studentName: 'Qasim Khan' })
             ]
           }
         ];
@@ -382,12 +392,19 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         for (const s of defaultStudents) {
           try {
             await setDoc(doc(db, 'students', s.id), JSON.parse(JSON.stringify(s)));
-          } catch (e) {
-            console.error('Error seeding student:', e);
+          } catch (e: any) {
+            // Ignore if database is not created in Firebase console
+            if (!e?.message?.includes('not found') && e?.code !== 'not-found') {
+              console.warn('Student seed sync skipped:', e?.message || e);
+            }
           }
         }
       }
-    }, (err) => console.warn('Firestore students error:', err));
+    }, (err) => {
+      if (!err?.message?.includes('not found') && (err as any)?.code !== 'not-found') {
+        console.warn('Firestore students listener:', err?.message || err);
+      }
+    });
 
     // 2. Listen for Staff from Firestore
     const unsubStaff = onSnapshot(collection(db, 'staff'), async (snapshot) => {
@@ -422,12 +439,18 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         for (const st of defaultStaff) {
           try {
             await setDoc(doc(db, 'staff', st.id), JSON.parse(JSON.stringify(st)));
-          } catch (e) {
-            console.error('Error seeding staff:', e);
+          } catch (e: any) {
+            if (!e?.message?.includes('not found') && e?.code !== 'not-found') {
+              console.warn('Staff seed sync skipped:', e?.message || e);
+            }
           }
         }
       }
-    }, (err) => console.warn('Firestore staff error:', err));
+    }, (err) => {
+      if (!err?.message?.includes('not found') && (err as any)?.code !== 'not-found') {
+        console.warn('Firestore staff listener:', err?.message || err);
+      }
+    });
 
     // 3. Listen for Batches from Firestore
     const unsubBatches = onSnapshot(collection(db, 'batches'), async (snapshot) => {
@@ -452,12 +475,18 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         for (const b of defaultBatches) {
           try {
             await setDoc(doc(db, 'batches', b.id), JSON.parse(JSON.stringify(b)));
-          } catch (e) {
-            console.error('Error seeding batch:', e);
+          } catch (e: any) {
+            if (!e?.message?.includes('not found') && e?.code !== 'not-found') {
+              console.warn('Batch seed sync skipped:', e?.message || e);
+            }
           }
         }
       }
-    }, (err) => console.warn('Firestore batches error:', err));
+    }, (err) => {
+      if (!err?.message?.includes('not found') && (err as any)?.code !== 'not-found') {
+        console.warn('Firestore batches listener:', err?.message || err);
+      }
+    });
 
     // 4. Listen for Events from Firestore
     const unsubEvents = onSnapshot(collection(db, 'events'), async (snapshot) => {
@@ -482,12 +511,18 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         for (const ev of defaultEvents) {
           try {
             await setDoc(doc(db, 'events', ev.id), JSON.parse(JSON.stringify(ev)));
-          } catch (e) {
-            console.error('Error seeding event:', e);
+          } catch (e: any) {
+            if (!e?.message?.includes('not found') && e?.code !== 'not-found') {
+              console.warn('Event seed sync skipped:', e?.message || e);
+            }
           }
         }
       }
-    }, (err) => console.warn('Firestore events error:', err));
+    }, (err) => {
+      if (!err?.message?.includes('not found') && (err as any)?.code !== 'not-found') {
+        console.warn('Firestore events listener:', err?.message || err);
+      }
+    });
 
     const checkAuth = async () => {
       const token = localStorage.getItem('auth_token');
@@ -593,6 +628,12 @@ function calculateReadiness(student: Student): number {
   const updateStudent = async (updatedStudent: Student) => {
     if (!updatedStudent.id) {
       updatedStudent.id = 'STU-1002';
+    }
+    if (updatedStudent.tasks) {
+      updatedStudent.tasks = updatedStudent.tasks.map(t => normalizeTask(t, { studentId: updatedStudent.id, studentName: updatedStudent.name }));
+    }
+    if (updatedStudent.activities) {
+      updatedStudent.activities = updatedStudent.activities.map(a => normalizeActivity(a, { studentId: updatedStudent.id, studentName: updatedStudent.name }));
     }
     updatedStudent.readiness = calculateReadiness(updatedStudent);
 

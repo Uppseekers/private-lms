@@ -90,9 +90,7 @@ const shortlist: University[] = [
       'doc3': { docId: 'doc3', status: 'verified', fileName: 'TOEFL_Report.pdf' },
     }
   }
-];
-
-export default function StudentUniversities() {
+];export default function StudentUniversities() {
   const { currentUser, students, updateStudent } = useDatabase();
   const student = students.find(s => s.id === currentUser.id || s.email === currentUser.email) || (currentUser as any);
   const rawShortlist = student?.shortlist || [];
@@ -101,6 +99,8 @@ export default function StudentUniversities() {
   const [attachModalOpen, setAttachModalOpen] = useState(false);
   const [selectedReq, setSelectedReq] = useState<{uniId: string, reqId: string, reqName: string} | null>(null);
   const [isAddUniModalOpen, setIsAddUniModalOpen] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState<'All' | 'Reach' | 'Target' | 'Safety'>('All');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // New Uni form state
   const [newUniName, setNewUniName] = useState('');
@@ -200,25 +200,36 @@ export default function StudentUniversities() {
     setSelectedReq(null);
   };
 
+  // Filtered universities
+  const filteredShortlist = shortlist.filter(uni => {
+    const matchesCategory = categoryFilter === 'All' || uni.category === categoryFilter;
+    const matchesSearch = !searchQuery.trim() || 
+      uni.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+      uni.major.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesCategory && matchesSearch;
+  });
+
   if (shortlist.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-4 max-w-lg mx-auto">
-        <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mb-2">
-          <GraduationCap className="h-8 w-8 text-blue-600" />
+      <div className="flex flex-col items-center justify-center min-h-[50vh] text-center p-6 max-w-md mx-auto">
+        <div className="w-14 h-14 bg-blue-50 border border-blue-100 rounded-2xl flex items-center justify-center mb-3 text-blue-600 shadow-2xs">
+          <GraduationCap className="h-7 w-7" />
         </div>
-        <h2 className="text-2xl font-bold text-slate-800">Your University Shortlist is Empty</h2>
-        <p className="text-slate-500 text-sm">
-          Target universities are shortlisted and managed in the database by your assigned lead counselor: <strong className="text-slate-800">{student?.counselor || 'Assigned Lead Counselor'}</strong>.
+        <h2 className="text-lg font-bold text-slate-900 tracking-tight">Your University Shortlist is Empty</h2>
+        <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
+          Target universities are shortlisted and managed by your lead counselor: <strong className="text-slate-800">{student?.counselor || 'Assigned Lead Counselor'}</strong>.
         </p>
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-xs text-slate-600 text-left space-y-2 w-full mt-2">
-          <span className="font-bold text-slate-800 uppercase block text-[10px] tracking-wider text-blue-600">Counselor Managed Database</span>
-          <p>Please consult with your assigned counselor to review your admissions strategy and add target Reach, Target, or Safety universities to your shortlist.</p>
-        </div>
+        <Button 
+          onClick={() => setIsAddUniModalOpen(true)}
+          className="mt-4 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2 rounded-xl"
+        >
+          <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Target University
+        </Button>
       </div>
     );
   }
 
-  // Overall readiness logic
+  // Stats calculation
   const totalDocsNeeded = shortlist.reduce((acc: number, uni: any) => acc + (uni.requiredDocs?.length || 0), 0);
   const totalDocsAttached = shortlist.reduce((acc: number, uni: any) => acc + (uni.attachedDocs ? Object.keys(uni.attachedDocs).length : 0), 0);
   const overallReadiness = totalDocsNeeded > 0 ? Math.round((totalDocsAttached / totalDocsNeeded) * 100) : 0;
@@ -227,16 +238,17 @@ export default function StudentUniversities() {
   const targetCount = shortlist.filter(u => u.category === 'Target').length;
   const safetyCount = shortlist.filter(u => u.category === 'Safety').length;
 
-  const getReadinessColor = (percent: number) => {
-    if (percent >= 90) return 'text-green-600';
-    if (percent >= 50) return 'text-amber-500';
-    return 'text-red-500';
-  };
-
-  const getReadinessBg = (percent: number) => {
-    if (percent >= 90) return 'bg-green-500';
-    if (percent >= 50) return 'bg-amber-500';
-    return 'bg-red-500';
+  const getCategoryBadge = (cat: 'Reach' | 'Target' | 'Safety') => {
+    switch (cat) {
+      case 'Reach':
+        return 'bg-rose-50 text-rose-700 border-rose-200/80';
+      case 'Target':
+        return 'bg-amber-50 text-amber-700 border-amber-200/80';
+      case 'Safety':
+        return 'bg-emerald-50 text-emerald-700 border-emerald-200/80';
+      default:
+        return 'bg-slate-50 text-slate-700 border-slate-200';
+    }
   };
 
   const openAttachModal = (uniId: string, reqId: string, reqName: string) => {
@@ -245,245 +257,351 @@ export default function StudentUniversities() {
   };
 
   return (
-    <div className="max-w-5xl mx-auto space-y-8 pb-12">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+    <div className="max-w-6xl mx-auto space-y-6 pb-12 animate-in fade-in duration-300">
+      
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200/80 pb-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">University Shortlist</h2>
-          <p className="text-sm text-slate-500 font-medium">Track your deadlines and application readiness.</p>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-bold tracking-tight text-slate-900">University Shortlist</h1>
+            <span className="text-[11px] font-semibold bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full border border-slate-200">
+              {shortlist.length} Listed
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 font-medium mt-0.5">
+            Admissions target pipeline, application deadlines & document readiness.
+          </p>
         </div>
-        <div className="bg-blue-50 border border-blue-200 rounded-xl px-3.5 py-2 flex items-center gap-2">
-          <GraduationCap className="w-4 h-4 text-blue-600" />
-          <div className="text-xs">
-            <span className="text-[10px] text-blue-600 font-bold uppercase block leading-none">Assigned Lead Counselor</span>
-            <span className="font-bold text-slate-900">{student?.counselor || 'Sarah Jenkins'}</span>
+
+        <div className="flex items-center gap-3 w-full sm:w-auto">
+          <div className="hidden sm:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
+            <GraduationCap className="w-4 h-4 text-blue-600" />
+            <div>
+              <span className="text-[10px] text-slate-400 font-bold uppercase block leading-none">Counselor</span>
+              <span className="font-semibold text-slate-800">{student?.counselor || 'Lead Counselor'}</span>
+            </div>
+          </div>
+
+          <Button 
+            onClick={() => setIsAddUniModalOpen(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-2xs ml-auto sm:ml-0"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Target</span>
+          </Button>
+        </div>
+      </div>
+
+      {/* Compact Portfolio KPI Bar */}
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        {/* Total Shortlist KPI */}
+        <div className="bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-2xs flex flex-col justify-between">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Total Shortlist</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <span className="text-2xl font-bold text-slate-900 tracking-tight">{shortlist.length}</span>
+            <span className="text-[11px] font-medium text-slate-500">Universities</span>
+          </div>
+        </div>
+
+        {/* Reach KPI */}
+        <div className="bg-rose-50/40 p-3.5 rounded-xl border border-rose-100/80 shadow-2xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700/80">Reach</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <span className="text-2xl font-bold text-rose-900 tracking-tight">{reachCount}</span>
+            <span className="text-[11px] font-semibold text-rose-600">
+              {shortlist.length > 0 ? Math.round((reachCount / shortlist.length) * 100) : 0}%
+            </span>
+          </div>
+        </div>
+
+        {/* Target KPI */}
+        <div className="bg-amber-50/40 p-3.5 rounded-xl border border-amber-100/80 shadow-2xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700/80">Target</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <span className="text-2xl font-bold text-amber-900 tracking-tight">{targetCount}</span>
+            <span className="text-[11px] font-semibold text-amber-600">
+              {shortlist.length > 0 ? Math.round((targetCount / shortlist.length) * 100) : 0}%
+            </span>
+          </div>
+        </div>
+
+        {/* Safety KPI */}
+        <div className="bg-emerald-50/40 p-3.5 rounded-xl border border-emerald-100/80 shadow-2xs flex flex-col justify-between">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-700/80">Safety</span>
+          <div className="flex items-baseline justify-between mt-2">
+            <span className="text-2xl font-bold text-emerald-900 tracking-tight">{safetyCount}</span>
+            <span className="text-[11px] font-semibold text-emerald-600">
+              {shortlist.length > 0 ? Math.round((safetyCount / shortlist.length) * 100) : 0}%
+            </span>
+          </div>
+        </div>
+
+        {/* Portfolio Readiness Meter */}
+        <div className="col-span-2 md:col-span-1 bg-white p-3.5 rounded-xl border border-slate-200/80 shadow-2xs flex flex-col justify-between">
+          <div className="flex justify-between items-center">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Readiness Score</span>
+            <span className="text-xs font-bold text-blue-600">{overallReadiness}%</span>
+          </div>
+          <div className="mt-2 space-y-1.5">
+            <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+              <div 
+                className="h-full bg-gradient-to-r from-blue-500 to-emerald-500 rounded-full transition-all duration-500"
+                style={{ width: `${overallReadiness}%` }}
+              />
+            </div>
+            <span className="text-[10px] text-slate-400 block text-right font-medium">
+              {totalDocsAttached} of {totalDocsNeeded} Docs Attached
+            </span>
           </div>
         </div>
       </div>
 
-      {/* Application Readiness Engine */}
-      <Card className="border border-slate-200/80 shadow-sm bg-white rounded-2xl">
-        <CardContent className="p-6">
-          <div className="flex flex-col md:flex-row items-center gap-6">
-            <div className="flex-1 space-y-4 w-full">
-              <div>
-                <h3 className="text-slate-500 font-semibold uppercase tracking-wider text-[11px] mb-1">Overall Portfolio Readiness</h3>
-                <div className="flex items-baseline gap-2 mb-2">
-                  <span className={cn("text-3xl font-bold tracking-tight", getReadinessColor(overallReadiness))}>
-                    {overallReadiness}%
-                  </span>
-                  <span className="text-slate-500 text-xs font-medium">Completed</span>
-                </div>
-                <div className="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
-                  <div 
-                    className={cn("h-full rounded-full transition-all duration-700", getReadinessBg(overallReadiness))}
-                    style={{ width: `${overallReadiness}%` }}
-                  />
-                </div>
-              </div>
-              <div className="bg-slate-50 border border-slate-100 rounded-xl p-3 flex items-center gap-3">
-                <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                <div className="text-xs">
-                  <span className="font-semibold text-slate-800">
-                    {shortlist.length > 0 ? `Tracking ${shortlist.length} university application${shortlist.length > 1 ? 's' : ''}` : 'No active applications'}
-                  </span>
-                  <span className="text-slate-500 ml-1">({totalDocsAttached} of {totalDocsNeeded} documents attached)</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="w-full md:w-1/2 space-y-3">
-              <h3 className="text-slate-500 font-semibold uppercase tracking-wider text-[11px] border-b border-slate-100 pb-1.5">Readiness Breakdown</h3>
-              <div className="space-y-2">
-                {shortlist.map(uni => {
-                  const uniAttached = Object.keys(uni.attachedDocs).length;
-                  const uniTotal = uni.requiredDocs.length;
-                  const uniPercent = uniTotal > 0 ? Math.round((uniAttached / uniTotal) * 100) : 0;
-                  
-                  return (
-                    <div key={uni.id}>
-                      <div className="flex justify-between text-xs mb-1">
-                        <span className="font-medium text-slate-700 truncate pr-2">{uni.name}</span>
-                        <span className={cn("font-bold whitespace-nowrap", getReadinessColor(uniPercent))}>{uniPercent}%</span>
-                      </div>
-                      <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
-                        <div 
-                          className={cn("h-full rounded-full transition-all duration-700", getReadinessBg(uniPercent))}
-                          style={{ width: `${uniPercent}%` }}
-                        />
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Target Strategy */}
-      <div className="flex items-center gap-3 mb-6">
-        <h3 className="text-sm font-bold text-slate-900">Target Strategy</h3>
-        <div className="flex gap-2">
-          <span className="px-2.5 py-1 bg-red-50 text-red-700 rounded-md text-xs font-bold border border-red-100">{reachCount} Reach</span>
-          <span className="px-2.5 py-1 bg-amber-50 text-amber-700 rounded-md text-xs font-bold border border-amber-100">{targetCount} Target</span>
-          <span className="px-2.5 py-1 bg-green-50 text-green-700 rounded-md text-xs font-bold border border-green-100">{safetyCount} Safety</span>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        {shortlist.map((uni) => (
-          <Card key={uni.id} className="overflow-hidden border-slate-200 transition-all hover:shadow-md">
-            <div 
-              className="p-5 flex flex-col md:flex-row items-start md:items-center justify-between cursor-pointer group gap-4"
-              onClick={() => setExpandedUniId(expandedUniId === uni.id ? null : uni.id)}
+      {/* Filter & Search Bar */}
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-2xs">
+        {/* Category Filters */}
+        <div className="flex items-center gap-1 bg-slate-100/80 p-1 rounded-lg">
+          {(['All', 'Reach', 'Target', 'Safety'] as const).map(cat => (
+            <button
+              key={cat}
+              onClick={() => setCategoryFilter(cat)}
+              className={cn(
+                "px-3 py-1 rounded-md text-xs font-semibold transition-all cursor-pointer",
+                categoryFilter === cat
+                  ? "bg-white text-slate-900 shadow-2xs"
+                  : "text-slate-500 hover:text-slate-900"
+              )}
             >
-              <div className="flex items-center gap-4 flex-1 min-w-0 pr-2 w-full md:w-auto">
-                <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center flex-shrink-0 text-slate-400 group-hover:text-blue-600 transition-colors">
-                  <GraduationCap className="w-6 h-6" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 mb-1 min-w-0">
-                    <span className={cn(
-                      "w-2 h-2 rounded-full shrink-0",
-                      uni.category === 'Reach' ? "bg-red-500" :
-                      uni.category === 'Target' ? "bg-amber-500" :
-                      "bg-green-500"
-                    )} />
-                    <h3 className="font-bold text-slate-900 text-base sm:text-lg group-hover:text-blue-600 transition-colors truncate" title={uni.name}>{uni.name}</h3>
-                  </div>
-                  <p className="text-sm text-slate-500 truncate">{uni.major}</p>
-                </div>
-              </div>
-              
-              <div className="flex items-center gap-4 sm:gap-6 shrink-0 w-full md:w-auto justify-between md:justify-end border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
-                <div className="text-left md:text-right shrink-0">
-                  <p className="text-sm font-bold text-slate-900">{uni.round}</p>
-                  <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5 justify-start md:justify-end">
-                    <Clock className="w-3.5 h-3.5" /> 
-                    {isNaN(new Date(uni.deadline).getTime()) ? uni.deadline : new Date(uni.deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
-                  </p>
-                </div>
-                
-                <div className="flex items-center gap-3 shrink-0">
-                  <div className="text-right hidden sm:block">
-                    <p className="text-xs font-bold text-slate-900">{Object.keys(uni.attachedDocs).length}/{uni.requiredDocs.length} Docs</p>
-                    <p className="text-[10px] text-slate-400 font-medium uppercase tracking-wider">Completed</p>
-                  </div>
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); handleRemoveUniversity(uni.id); }}
-                    className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                    title="Remove from shortlist"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                  <div className={cn(
-                    "p-2 rounded-full bg-slate-50 text-slate-400 transition-transform",
-                    expandedUniId === uni.id ? "rotate-90 bg-blue-50 text-blue-600" : "group-hover:bg-slate-100"
-                  )}>
-                    <ChevronRight className="w-5 h-5" />
-                  </div>
-                </div>
-              </div>
-            </div>
+              {cat}
+            </button>
+          ))}
+        </div>
 
-            {/* Expanded Drawer */}
-            {expandedUniId === uni.id && (
-              <div className="border-t border-slate-100 bg-slate-50/50 p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h4 className="font-bold text-slate-900 uppercase tracking-wider text-xs">Required Documents Checklist</h4>
-                  <a href={uni.portalLink} target="_blank" rel="noreferrer" className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 bg-blue-50 px-3 py-1.5 rounded-full">
-                    Go to Application Portal <LinkIcon className="w-3 h-3" />
-                  </a>
-                </div>
-                
-                <div className="space-y-4">
-                  {uni.requiredDocs.map((req: RequiredDoc, index: number) => {
-                    const attached = uni.attachedDocs[req.id];
-                    return (
-                      <div key={req.id || index} className="bg-white p-4 rounded-xl border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-4">
-                        <div className="flex items-start gap-3">
-                          <div className="mt-0.5 font-mono text-xs text-slate-400 font-bold w-5">{index + 1}.</div>
-                          <div>
-                            <p className="font-bold text-slate-900 text-sm mb-1">{req.name}</p>
-                            {attached ? (
-                              <div className="flex items-center gap-2">
-                                {attached.status === 'verified' ? (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-green-100 text-green-700"><CheckCircle2 className="w-3 h-3" /> Verified</span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-700"><Clock className="w-3 h-3" /> Draft Attached</span>
-                                )}
-                                <span className="text-xs text-slate-500 font-medium truncate max-w-[200px] flex items-center gap-1">
-                                  <FileText className="w-3 h-3" /> {attached.fileName}
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-red-100 text-red-700"><AlertCircle className="w-3 h-3" /> Missing / Required</span>
-                            )}
-                          </div>
-                        </div>
-                        
-                        <div className="ml-8 md:ml-0 flex-shrink-0">
-                          {attached ? (
-                            <Button variant="outline" size="sm" className="text-xs bg-white text-slate-600" onClick={() => openAttachModal(uni.id, req.id, req.name)}>
-                              <FileText className="w-3.5 h-3.5 mr-1.5" /> Change / Select File
-                            </Button>
-                          ) : (
-                            <Button size="sm" className="text-xs bg-blue-600 hover:bg-blue-700 text-white w-full md:w-auto" onClick={() => openAttachModal(uni.id, req.id, req.name)}>
-                              <UploadCloud className="w-3.5 h-3.5 mr-1.5" /> Attach / Upload
-                            </Button>
-                          )}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            )}
-          </Card>
-        ))}
+        {/* Search */}
+        <div className="relative flex-1 max-w-xs">
+          <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search university or major..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-slate-50/80 border border-slate-200 rounded-lg pl-8 pr-3 py-1 text-xs outline-none focus:bg-white focus:ring-1 focus:ring-blue-500 transition-all"
+          />
+        </div>
       </div>
 
-      {/* Modal for adding university */}
+      {/* Compact List of Universities */}
+      <div className="space-y-3">
+        {filteredShortlist.map((uni) => {
+          const uniAttached = Object.keys(uni.attachedDocs).length;
+          const uniTotal = uni.requiredDocs.length;
+          const uniPercent = uniTotal > 0 ? Math.round((uniAttached / uniTotal) * 100) : 0;
+          const isExpanded = expandedUniId === uni.id;
+
+          const formattedDeadline = isNaN(new Date(uni.deadline).getTime()) 
+            ? uni.deadline 
+            : new Date(uni.deadline).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+
+          return (
+            <div 
+              key={uni.id} 
+              className={cn(
+                "bg-white rounded-xl border transition-all duration-150 overflow-hidden shadow-2xs",
+                isExpanded ? "border-blue-300 ring-2 ring-blue-50/50" : "border-slate-200/90 hover:border-slate-300"
+              )}
+            >
+              {/* Card Main Row */}
+              <div 
+                className="p-4 flex flex-col md:flex-row md:items-center justify-between gap-3 cursor-pointer select-none"
+                onClick={() => setExpandedUniId(isExpanded ? null : uni.id)}
+              >
+                {/* Left Info */}
+                <div className="flex items-center gap-3.5 min-w-0">
+                  <div className="w-9 h-9 rounded-lg bg-slate-50 border border-slate-200/80 flex items-center justify-center shrink-0 text-slate-500">
+                    <GraduationCap className="w-4 h-4" />
+                  </div>
+                  
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-bold text-slate-900 text-sm tracking-tight truncate hover:text-blue-600 transition-colors">
+                        {uni.name}
+                      </h3>
+                      <span className={cn(
+                        "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border",
+                        getCategoryBadge(uni.category)
+                      )}>
+                        {uni.category}
+                      </span>
+                    </div>
+                    
+                    <p className="text-xs text-slate-500 truncate mt-0.5 font-medium">
+                      {uni.major} • <span className="text-slate-700">{uni.round}</span>
+                    </p>
+                  </div>
+                </div>
+
+                {/* Right Meta Info & Progress */}
+                <div className="flex items-center justify-between md:justify-end gap-4 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100">
+                  
+                  {/* Deadline Tag */}
+                  <div className="flex items-center gap-1.5 text-xs text-slate-600 bg-slate-50 px-2.5 py-1 rounded-lg border border-slate-200/60">
+                    <Clock className="w-3 h-3 text-slate-400" />
+                    <span className="font-medium">{formattedDeadline}</span>
+                  </div>
+
+                  {/* Document Completion Progress Pill */}
+                  <div className="flex items-center gap-2.5">
+                    <div className="text-right">
+                      <span className="text-xs font-bold text-slate-900 block">{uniAttached}/{uniTotal} Docs</span>
+                      <span className="text-[10px] text-slate-400 font-medium">{uniPercent}% Ready</span>
+                    </div>
+
+                    <div className="w-12 h-1.5 bg-slate-100 rounded-full overflow-hidden hidden sm:block">
+                      <div 
+                        className={cn("h-full rounded-full transition-all duration-300", uniPercent >= 100 ? "bg-emerald-500" : "bg-blue-600")}
+                        style={{ width: `${uniPercent}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1">
+                    <button 
+                      onClick={(e) => { e.stopPropagation(); handleRemoveUniversity(uni.id); }}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                      title="Remove from shortlist"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                    <div className={cn(
+                      "p-1.5 rounded-lg text-slate-400 transition-transform duration-200",
+                      isExpanded ? "rotate-90 text-blue-600 bg-blue-50" : "hover:bg-slate-100"
+                    )}>
+                      <ChevronRight className="w-4 h-4" />
+                    </div>
+                  </div>
+
+                </div>
+              </div>
+
+              {/* Compact Drawer for Documents Checklist */}
+              {isExpanded && (
+                <div className="border-t border-slate-200/80 bg-slate-50/70 p-4 space-y-3">
+                  <div className="flex items-center justify-between pb-1">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                      Required Documents Checklist ({uniAttached}/{uniTotal})
+                    </span>
+                    <a 
+                      href={uni.portalLink} 
+                      target="_blank" 
+                      rel="noreferrer" 
+                      className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
+                    >
+                      Application Portal <LinkIcon className="w-3 h-3" />
+                    </a>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {uni.requiredDocs.map((req: RequiredDoc, index: number) => {
+                      const attached = uni.attachedDocs[req.id];
+                      return (
+                        <div 
+                          key={req.id || index} 
+                          className="bg-white p-3 rounded-lg border border-slate-200/80 flex items-center justify-between gap-3 shadow-2xs"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="shrink-0">
+                              {attached ? (
+                                attached.status === 'verified' ? (
+                                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                ) : (
+                                  <Clock className="w-4 h-4 text-amber-500" />
+                                )
+                              ) : (
+                                <AlertCircle className="w-4 h-4 text-rose-500" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-xs font-semibold text-slate-800 truncate">{req.name}</p>
+                              <p className="text-[10px] text-slate-400 truncate">
+                                {attached ? (attached.fileName || 'Document attached') : 'Action required'}
+                              </p>
+                            </div>
+                          </div>
+
+                          <Button 
+                            size="sm" 
+                            variant={attached ? "outline" : "default"}
+                            onClick={() => openAttachModal(uni.id, req.id, req.name)}
+                            className={cn(
+                              "text-[11px] h-7 px-2.5 rounded-lg shrink-0 font-medium",
+                              attached 
+                                ? "border-slate-200 text-slate-600 hover:bg-slate-50" 
+                                : "bg-blue-600 hover:bg-blue-700 text-white"
+                            )}
+                          >
+                            {attached ? "Change" : "Attach"}
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {filteredShortlist.length === 0 && (
+          <div className="p-8 text-center bg-white rounded-xl border border-slate-200 text-xs text-slate-500">
+            No universities found matching your filter criteria.
+          </div>
+        )}
+      </div>
+
+      {/* Add University Modal */}
       {isAddUniModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
-            <div className="flex justify-between items-center mb-4 border-b pb-3">
-              <h3 className="font-bold text-lg text-slate-900">Add Target University</h3>
-              <button onClick={() => setIsAddUniModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl border border-slate-200">
+            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
+              <h3 className="font-bold text-base text-slate-900">Add Target University</h3>
+              <button onClick={() => setIsAddUniModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+                <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleAddUniversity} className="space-y-4">
+
+            <form onSubmit={handleAddUniversity} className="space-y-3.5">
               <div>
-                <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">University Name</label>
+                <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">University Name</label>
                 <input 
                   type="text" 
                   required 
                   placeholder="e.g. Stanford University" 
                   value={newUniName} 
                   onChange={e => setNewUniName(e.target.value)} 
-                  className="w-full border border-slate-200 rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  className="w-full border border-slate-200 rounded-xl p-2.5 text-xs focus:ring-2 focus:ring-blue-500 outline-none"
                 />
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Category</label>
+                  <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">Category</label>
                   <select 
                     value={newUniCategory} 
                     onChange={e => setNewUniCategory(e.target.value as any)}
-                    className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none"
+                    className="w-full border border-slate-200 rounded-xl p-2.5 text-xs outline-none bg-white"
                   >
                     <option value="Reach">Reach</option>
                     <option value="Target">Target</option>
                     <option value="Safety">Safety</option>
                   </select>
                 </div>
+
                 <div>
-                  <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Round</label>
+                  <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">Round</label>
                   <select 
                     value={newUniRound} 
                     onChange={e => setNewUniRound(e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none"
+                    className="w-full border border-slate-200 rounded-xl p-2.5 text-xs outline-none bg-white"
                   >
                     <option value="Early Decision (ED)">Early Decision (ED)</option>
                     <option value="Early Action (EA)">Early Action (EA)</option>
@@ -492,28 +610,35 @@ export default function StudentUniversities() {
                   </select>
                 </div>
               </div>
+
               <div>
-                <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Major / Program</label>
+                <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">Major / Program</label>
                 <input 
                   type="text" 
                   placeholder="e.g. B.S. in Computer Science" 
                   value={newUniMajor} 
                   onChange={e => setNewUniMajor(e.target.value)} 
-                  className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none"
+                  className="w-full border border-slate-200 rounded-xl p-2.5 text-xs outline-none"
                 />
               </div>
+
               <div>
-                <label className="text-xs font-bold text-slate-600 uppercase mb-1 block">Application Deadline</label>
+                <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">Deadline Date</label>
                 <input 
                   type="date" 
                   value={newUniDeadline} 
                   onChange={e => setNewUniDeadline(e.target.value)} 
-                  className="w-full border border-slate-200 rounded-lg p-2.5 text-sm outline-none"
+                  className="w-full border border-slate-200 rounded-xl p-2.5 text-xs outline-none bg-white"
                 />
               </div>
-              <div className="flex justify-end gap-3 pt-3">
-                <Button type="button" variant="ghost" onClick={() => setIsAddUniModalOpen(false)}>Cancel</Button>
-                <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white">Add University</Button>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <Button type="button" variant="ghost" size="sm" onClick={() => setIsAddUniModalOpen(false)} className="text-xs">
+                  Cancel
+                </Button>
+                <Button type="submit" size="sm" className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">
+                  Add University
+                </Button>
               </div>
             </form>
           </div>
@@ -522,79 +647,74 @@ export default function StudentUniversities() {
 
       {/* Attach Modal */}
       {attachModalOpen && selectedReq && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-900/40 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl flex flex-col">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50 rounded-t-3xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-xl border border-slate-200 overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
               <div>
-                <h3 className="text-lg font-bold text-slate-900">Attach Document</h3>
-                <p className="text-sm text-slate-500 font-medium mt-1">Requirement: <span className="text-slate-900">{selectedReq.reqName}</span></p>
+                <h3 className="text-sm font-bold text-slate-900">Attach Document</h3>
+                <p className="text-xs text-slate-500 font-medium">Requirement: <span className="text-slate-800 font-bold">{selectedReq.reqName}</span></p>
               </div>
-              <button onClick={() => setAttachModalOpen(false)} className="text-slate-400 hover:text-slate-600 bg-white p-2 rounded-full border border-slate-200">
-                 <X className="w-5 h-5" />
+              <button onClick={() => setAttachModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
+                <X className="w-4 h-4" />
               </button>
             </div>
-            
-            <div className="p-6 flex flex-col gap-6">
+
+            <div className="p-5 space-y-4">
               <div>
-                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 block">Option 1: Select from Existing Vault Files</h4>
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
-                  <div className="p-3 bg-slate-50 border-b border-slate-200 relative">
-                    <Search className="w-4 h-4 absolute left-6 top-1/2 -translate-y-1/2 text-slate-400" />
-                    <input type="text" placeholder="Search vault files..." className="w-full bg-white border border-slate-200 rounded-lg pl-9 pr-3 py-1.5 text-sm" />
-                  </div>
-                  <div className="max-h-48 overflow-y-auto p-2 space-y-1 bg-slate-50/50">
+                <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
+                  Select from Student Vault
+                </span>
+                <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
+                  <div className="max-h-40 overflow-y-auto p-2 space-y-1">
                     {['HS_Transcripts_Official.pdf', 'Columbia_Essay_v2.docx', 'Bank_Statement_Chase.pdf', 'TOEFL_Report.pdf'].map((file, i) => (
                       <button 
                         key={i} 
                         type="button"
                         onClick={() => handleAttachFile(file)}
-                        className="w-full flex items-center justify-between p-2 hover:bg-blue-50 rounded-lg cursor-pointer border border-transparent hover:border-blue-200 transition-all text-left"
+                        className="w-full flex items-center justify-between p-2 hover:bg-blue-50 rounded-lg text-left transition-colors border border-transparent hover:border-blue-200"
                       >
-                        <div className="flex items-center gap-3">
-                          <FileText className="w-4 h-4 text-blue-600" />
-                          <span className="text-sm font-medium text-slate-700">{file}</span>
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-3.5 h-3.5 text-blue-600" />
+                          <span className="text-xs font-medium text-slate-700">{file}</span>
                         </div>
-                        <span className="text-xs font-bold text-blue-600">Select</span>
+                        <span className="text-[11px] font-bold text-blue-600">Select</span>
                       </button>
                     ))}
                   </div>
                 </div>
               </div>
 
-              <div className="flex items-center gap-4">
-                <div className="h-px bg-slate-200 flex-1"></div>
-                <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">OR</span>
-                <div className="h-px bg-slate-200 flex-1"></div>
+              <div className="flex items-center gap-3">
+                <div className="h-px bg-slate-200 flex-1" />
+                <span className="text-[10px] font-bold text-slate-400 uppercase">OR UPLOAD</span>
+                <div className="h-px bg-slate-200 flex-1" />
               </div>
 
-              <div>
-                <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3 block">Option 2: Upload New Document</h4>
-                <label className="border-2 border-dashed border-slate-200 rounded-xl p-8 flex flex-col items-center justify-center bg-slate-50 hover:bg-blue-50 hover:border-blue-200 transition-colors cursor-pointer group">
-                  <input 
-                    type="file" 
-                    className="hidden" 
-                    onChange={(e) => {
-                      if (e.target.files?.[0]) {
-                        handleAttachFile(e.target.files[0].name);
-                      }
-                    }} 
-                  />
-                  <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center border border-slate-200 mb-3 group-hover:border-blue-200 group-hover:text-blue-600 shadow-sm">
-                    <UploadCloud className="w-6 h-6 text-slate-400 group-hover:text-blue-600 transition-colors" />
-                  </div>
-                  <p className="text-sm font-bold text-slate-700 group-hover:text-blue-700 mb-1">Click to browse or drag file here</p>
-                  <p className="text-xs text-slate-500">PDF, DOCX, JPG up to 10MB</p>
-                  <p className="text-[10px] font-semibold text-slate-400 mt-4 bg-white px-2 py-1 rounded border border-slate-100">Will be saved and auto-tagged</p>
-                </label>
-              </div>
+              <label className="border-2 border-dashed border-slate-200 rounded-xl p-5 flex flex-col items-center justify-center bg-slate-50/50 hover:bg-blue-50/50 hover:border-blue-200 cursor-pointer transition-colors group">
+                <input 
+                  type="file" 
+                  className="hidden" 
+                  onChange={(e) => {
+                    if (e.target.files?.[0]) {
+                      handleAttachFile(e.target.files[0].name);
+                    }
+                  }} 
+                />
+                <UploadCloud className="w-5 h-5 text-slate-400 group-hover:text-blue-600 mb-1 transition-colors" />
+                <p className="text-xs font-bold text-slate-700">Browse file or drag here</p>
+                <p className="text-[10px] text-slate-400">PDF, DOCX up to 10MB</p>
+              </label>
             </div>
 
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 rounded-b-3xl">
-              <Button variant="ghost" onClick={() => setAttachModalOpen(false)}>Cancel</Button>
+            <div className="p-3 bg-slate-50 border-t border-slate-100 flex justify-end">
+              <Button variant="ghost" size="sm" onClick={() => setAttachModalOpen(false)} className="text-xs">
+                Cancel
+              </Button>
             </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }

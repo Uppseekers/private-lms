@@ -3,6 +3,7 @@ import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import { google } from "googleapis";
 import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
 import { db } from "./src/db/index.ts";
 import { users, studentsData, staffData, batchesData, eventsData } from "./src/db/schema.ts";
@@ -375,6 +376,141 @@ async function startServer() {
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
+    }
+  });
+
+  // Google Sheets Real-Time Sync & Backup Endpoint
+  app.post("/api/sheets/sync", async (req, res) => {
+    try {
+      const { accessToken, spreadsheetId, students = [], staff = [], events = [] } = req.body;
+      
+      const studentRows = [
+        ['Student ID', 'Full Name', 'Email', 'Phone', 'Intake Batch', 'Counselor', 'School', 'Target Countries', 'Readiness Score (%)', 'Total Tasks', 'Completed Tasks'],
+        ...students.map((s: any) => [
+          s.id || '',
+          s.name || '',
+          s.email || '',
+          s.phone || '',
+          s.intake || 'Fall 2026',
+          s.counselor || 'Unassigned',
+          s.school || '',
+          Array.isArray(s.countries) ? s.countries.join(', ') : (s.countries || ''),
+          `${s.readiness || 0}%`,
+          String((s.tasks || []).length),
+          String((s.tasks || []).filter((t: any) => t.stage === 'COMPLETED' || t.stage === 'VERIFIED_COMPLETED').length)
+        ])
+      ];
+
+      const taskRows = [
+        ['Task ID', 'Task Name', 'Category', 'Student ID', 'Student Name', 'Stage / Status', 'Due Date', 'Assigned By'],
+        ...students.flatMap((s: any) => (s.tasks || []).map((t: any) => [
+          t.id || '',
+          t.name || '',
+          t.category || 'Other',
+          s.id || '',
+          s.name || '',
+          t.stage || 'TO_DO',
+          t.dueDate || '',
+          t.assignedBy || 'Admin'
+        ]))
+      ];
+
+      const eventRows = [
+        ['Meeting ID', 'Title', 'Subject / Type', 'Date', 'Time', 'Duration', 'Organiser / Host', 'Attendees', 'Status', 'Meeting Link'],
+        ...events.map((e: any) => [
+          e.id || '',
+          e.title || '',
+          e.type || e.stream || 'Counselling',
+          e.date || e.day || '',
+          e.time || '',
+          e.duration || '1 hr',
+          e.host || e.organiser || 'Counselor',
+          typeof e.attendees === 'string' ? e.attendees : (e.students || ''),
+          e.status || 'Scheduled',
+          e.link || e.location || ''
+        ])
+      ];
+
+      const staffRows = [
+        ['Staff ID', 'Name', 'Email', 'Role', 'Status', 'Assigned Students'],
+        ...staff.map((st: any) => [
+          st.id || '',
+          st.name || '',
+          st.email || '',
+          st.role || 'COUNSELOR',
+          st.status || 'Active',
+          st.students || 'All'
+        ])
+      ];
+
+      if (accessToken) {
+        const auth = new google.auth.OAuth2();
+        auth.setCredentials({ access_token: accessToken });
+        const sheets = google.sheets({ version: "v4", auth });
+
+        let currentSheetId = spreadsheetId;
+
+        if (!currentSheetId) {
+          const newSheet = await sheets.spreadsheets.create({
+            requestBody: {
+              properties: {
+                title: "Uppseekers Portal Database - Realtime Backup & Live Sync"
+              },
+              sheets: [
+                { properties: { title: "Students" } },
+                { properties: { title: "Tasks" } },
+                { properties: { title: "Meetings" } },
+                { properties: { title: "Staff" } },
+              ]
+            }
+          });
+          currentSheetId = newSheet.data.spreadsheetId || undefined;
+        }
+
+        if (currentSheetId) {
+          await sheets.spreadsheets.values.batchUpdate({
+            spreadsheetId: currentSheetId,
+            requestBody: {
+              valueInputOption: "USER_ENTERED",
+              data: [
+                { range: "Students!A1", values: studentRows },
+                { range: "Tasks!A1", values: taskRows },
+                { range: "Meetings!A1", values: eventRows },
+                { range: "Staff!A1", values: staffRows },
+              ]
+            }
+          });
+
+          return res.json({
+            success: true,
+            spreadsheetId: currentSheetId,
+            spreadsheetUrl: `https://docs.google.com/spreadsheets/d/${currentSheetId}/edit`,
+            timestamp: new Date().toISOString(),
+            counts: {
+              students: students.length,
+              staff: staff.length,
+              tasks: taskRows.length - 1,
+              events: events.length
+            }
+          });
+        }
+      }
+
+      res.json({
+        success: true,
+        spreadsheetId: spreadsheetId || "local-sync-active",
+        spreadsheetUrl: spreadsheetId ? `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit` : undefined,
+        timestamp: new Date().toISOString(),
+        counts: {
+          students: students.length,
+          staff: staff.length,
+          tasks: taskRows.length - 1,
+          events: events.length
+        }
+      });
+    } catch (err: any) {
+      console.error("Sheets sync error:", err);
+      res.status(500).json({ error: err.message || "Failed to sync with Google Sheets" });
     }
   });
 
