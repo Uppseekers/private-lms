@@ -369,7 +369,14 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
         },
         body: JSON.stringify({ essayText: content })
       });
-      const data = await res.json();
+      const contentType = res.headers.get('content-type');
+      let data: any = {};
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Server returned status ${res.status}`);
+      }
       if (!res.ok) throw new Error(data.error || 'Proofreading failed');
       setAiProofreadResult(data.result);
     } catch (err: any) {
@@ -956,7 +963,14 @@ export function AiProofreaderModal({
         })
       });
 
-      const data = await res.json();
+      const contentType = res.headers.get('content-type');
+      let data: any = {};
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Server returned status ${res.status}`);
+      }
       if (!res.ok) throw new Error(data.error || 'Failed to generate narrative angles.');
       
       if (data.result && Array.isArray(data.result.options) && data.result.options.length > 0) {
@@ -1020,7 +1034,14 @@ ${opt.grammarAndToneAdvice}
         body: JSON.stringify({ essayText: inputText })
       });
 
-      const data = await res.json();
+      const contentType = res.headers.get('content-type');
+      let data: any = {};
+      if (contentType && contentType.includes('application/json')) {
+        data = await res.json();
+      } else {
+        const text = await res.text();
+        throw new Error(text || `Server returned status ${res.status}`);
+      }
       if (!res.ok) {
         throw new Error(data.error || 'Failed to proofread essay.');
       }

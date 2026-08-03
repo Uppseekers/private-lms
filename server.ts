@@ -562,7 +562,7 @@ ${typeof studentProfile === 'string' ? studentProfile : JSON.stringify(studentPr
 `;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: 'gemini-2.5-flash',
         contents: [
           { role: 'user', parts: [{ text: userPrompt }] }
         ],
@@ -639,7 +639,7 @@ Provide your response in two clearly labeled sections using Markdown:
 2. **Correction Log:** A concise, bulleted list detailing every major correction made (spelling, comma/semicolon fix, tense adjustment) and a brief 5-word reason why it was changed, so the student can learn from it.`;
 
       const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
+        model: 'gemini-2.5-flash',
         contents: [
           { role: 'user', parts: [{ text: `Input text to edit:\n${essayText}` }] }
         ],
