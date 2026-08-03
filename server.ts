@@ -532,7 +532,7 @@ async function startServer() {
       const ai = new GoogleGenAI({ apiKey });
 
       const generateWithFallback = async (params: any) => {
-        const modelsToTry = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash-latest', 'gemini-2.5-flash'];
+        const modelsToTry = ['gemini-3.6-flash', 'gemini-2.0-flash'];
         let lastErr: any;
         for (const modelName of modelsToTry) {
           try {
@@ -642,7 +642,7 @@ ${typeof studentProfile === 'string' ? studentProfile : JSON.stringify(studentPr
       const ai = new GoogleGenAI({ apiKey });
 
       const generateWithFallback = async (params: any) => {
-        const modelsToTry = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash-latest', 'gemini-2.5-flash'];
+        const modelsToTry = ['gemini-3.6-flash', 'gemini-2.0-flash'];
         let lastErr: any;
         for (const modelName of modelsToTry) {
           try {

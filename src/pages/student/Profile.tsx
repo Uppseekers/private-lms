@@ -79,7 +79,8 @@ export default function StudentProfile() {
   
   // Activity form state
   const [actTitle, setActTitle] = useState('');
-  const [actCategory, setActCategory] = useState('Leadership & STEM');
+  const [actRole, setActRole] = useState('Core Member / Lead');
+  const [actCategory, setActCategory] = useState('Research & Academic');
   const [actOrg, setActOrg] = useState('');
   const [actDesc, setActDesc] = useState('');
   const [actYears, setActYears] = useState('11th, 12th Grade');
@@ -90,7 +91,8 @@ export default function StudentProfile() {
     if (activities.length >= 16) return;
     setEditingActivityIdx(null);
     setActTitle('');
-    setActCategory('Leadership & STEM');
+    setActRole('Core Member / Lead');
+    setActCategory('Research & Academic');
     setActOrg('');
     setActDesc('');
     setActYears('11th, 12th Grade');
@@ -103,7 +105,8 @@ export default function StudentProfile() {
     const act = activities[idx];
     setEditingActivityIdx(idx);
     setActTitle(act.title || act.description || '');
-    setActCategory(act.category || act.role || 'Leadership & STEM');
+    setActRole(act.role || 'Core Member / Lead');
+    setActCategory(act.category || 'Research & Academic');
     setActOrg(act.organization || '');
     setActDesc(act.description || '');
     setActYears(act.date || act.years || '11th, 12th Grade');
@@ -117,14 +120,14 @@ export default function StudentProfile() {
     const newAct = {
       id: editingActivityIdx !== null ? activities[editingActivityIdx].id : 'act_' + Date.now(),
       title: actTitle.trim(),
+      role: actRole,
       category: actCategory,
       organization: actOrg.trim(),
       description: actDesc.trim(),
       date: actYears,
       years: actYears,
       hoursPerWeek: actHoursPerWeek.trim(),
-      weeksPerYear: actWeeksPerYear.trim(),
-      role: actCategory
+      weeksPerYear: actWeeksPerYear.trim()
     };
 
     if (editingActivityIdx !== null) {
@@ -370,7 +373,7 @@ export default function StudentProfile() {
         </div>
       </Section>
 
-      <Section title="6. Extracurricular Activities & Honors" description="Your leadership roles, awards, projects, and achievements (Add up to 16 activities).">
+      <Section title="6. Extracurricular Activities & Honors (Profile Building)" description="Your leadership roles, awards, projects, and achievements (Add up to 16 activities). Synergizes directly with your Competency Radar Index.">
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h4 className="text-sm font-bold text-slate-900">
@@ -392,8 +395,17 @@ export default function StudentProfile() {
                 <div className="flex justify-between items-start gap-2">
                   <div>
                     <span className="font-bold text-slate-900 text-sm block">{act.title || act.description || `Activity #${idx + 1}`}</span>
-                    <span className="text-[11px] text-blue-600 font-semibold">{act.category || act.role || 'General'}</span>
-                    {act.organization && <span className="text-slate-500 block text-[11px]">{act.organization}</span>}
+                    <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                      <span className="text-[10px] bg-blue-50 text-blue-700 border border-blue-200 font-bold px-2 py-0.5 rounded-md">
+                        {act.category || 'General'}
+                      </span>
+                      {act.role && (
+                        <span className="text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold px-2 py-0.5 rounded-md">
+                          {act.role}
+                        </span>
+                      )}
+                    </div>
+                    {act.organization && <span className="text-slate-500 block text-[11px] mt-1">{act.organization}</span>}
                   </div>
                   <div className="flex items-center gap-1">
                     <button type="button" onClick={() => openEditActivityModal(idx)} className="p-1 text-slate-400 hover:text-blue-600 rounded">
@@ -444,37 +456,42 @@ export default function StudentProfile() {
                   type="text" 
                   value={actTitle} 
                   onChange={e => setActTitle(e.target.value)} 
-                  placeholder="e.g. Captain, Robotics Club" 
+                  placeholder="e.g. Captain, Robotics Club / Lead Researcher" 
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Category</label>
+                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Role Level *</label>
                   <select 
-                    value={actCategory} 
-                    onChange={e => setActCategory(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={actRole} 
+                    onChange={e => setActRole(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="Leadership & STEM">Leadership & STEM</option>
-                    <option value="Community Service">Community Service</option>
-                    <option value="Athletics & Sports">Athletics & Sports</option>
-                    <option value="Arts & Music">Arts & Music</option>
-                    <option value="Research & Academic">Research & Academic</option>
-                    <option value="Internship & Work">Internship & Work</option>
-                    <option value="Other">Other</option>
+                    <option value="Founder / Initiator">Founder / Initiator (+0.5 Bonus, 1.5× Multiplier)</option>
+                    <option value="Leadership / Officer">Leadership / Officer (+0.3 Bonus, 1.3× Multiplier)</option>
+                    <option value="Core Member / Lead">Core Member / Lead (+0.15 Bonus, 1.15× Multiplier)</option>
+                    <option value="Individual Participant">Individual Participant (1.0× Multiplier)</option>
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Participation Grade(s)</label>
-                  <input 
-                    type="text" 
-                    value={actYears} 
-                    onChange={e => setActYears(e.target.value)} 
-                    placeholder="e.g. 10th, 11th, 12th Grade" 
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
+                  <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Category Domain *</label>
+                  <select 
+                    value={actCategory} 
+                    onChange={e => setActCategory(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="Research & Academic">Research & Academic (Critical Thinking)</option>
+                    <option value="Leadership & STEM">Leadership & STEM (Problem Solving)</option>
+                    <option value="Coding & Engineering">Coding & Engineering (Technical Skills)</option>
+                    <option value="Writing, Media & Speaking">Writing, Media & Speaking (Communication)</option>
+                    <option value="Community Service & Clubs">Community Service & Clubs (Team Work)</option>
+                    <option value="Arts, Music & Design">Arts, Music & Design (Creativity)</option>
+                    <option value="Athletics & Sports">Athletics & Sports (Team Work)</option>
+                    <option value="Internship & Projects">Internship & Projects (Technical & Logic)</option>
+                    <option value="Other">Other Category</option>
+                  </select>
                 </div>
               </div>
 

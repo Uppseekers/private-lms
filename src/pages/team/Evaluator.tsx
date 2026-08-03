@@ -150,6 +150,39 @@ export default function Evaluator() {
     }, 600);
   };
 
+  const getSubmissionDate = (essay: ExtendedEssay) => {
+    if (essay.versions && essay.versions.length > 0) {
+      return essay.versions[0].date || 'Aug 1, 2026';
+    }
+    return (essay as any).submittedDate || (essay as any).lastUpdated || 'Aug 1, 2026';
+  };
+
+  const getPendingDays = (dateStr: string) => {
+    try {
+      const subDate = new Date(dateStr);
+      if (isNaN(subDate.getTime())) return 1;
+      const diffTime = Math.max(0, Date.now() - subDate.getTime());
+      const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+      return diffDays;
+    } catch (e) {
+      return 1;
+    }
+  };
+
+  const getStatusBadge = (status?: string) => {
+    const s = status || 'Under Review';
+    if (s === 'Approved') {
+      return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Approved</span>;
+    }
+    if (s === 'Needs Revision') {
+      return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-50 text-rose-700 border border-rose-200"><AlertCircle className="w-3.5 h-3.5 text-rose-600" /> Needs Revision</span>;
+    }
+    if (s === 'Draft') {
+      return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-100 text-slate-600 border border-slate-200"><FileText className="w-3.5 h-3.5 text-slate-500" /> Draft</span>;
+    }
+    return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200"><Clock className="w-3.5 h-3.5 text-amber-600" /> Under Review</span>;
+  };
+
   return (
     <div className="space-y-8 animate-in fade-in duration-500 max-w-7xl mx-auto w-full pb-12">
       {/* Header */}
@@ -230,31 +263,75 @@ export default function Evaluator() {
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
               <tr>
+                <th className="px-6 py-4">Student Name</th>
                 <th className="px-6 py-4">Assignment / Essay Title & Target</th>
+                <th className="px-6 py-4">Submission Date</th>
+                <th className="px-6 py-4">Pending Days</th>
+                <th className="px-6 py-4">Status</th>
                 <th className="px-6 py-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
-              {filteredEssays.length > 0 ? filteredEssays.map((essay, idx) => (
-                <tr key={essay.id || idx} className="hover:bg-slate-50/80 transition-colors">
-                  <td className="px-6 py-4">
-                    <div className="font-bold text-slate-900 text-base">{essay.title}</div>
-                    <div className="text-xs text-indigo-600 font-medium mt-0.5">{essay.university || 'College Application Essay'}</div>
-                    {essay.prompt && <div className="text-[11px] text-slate-400 truncate max-w-md mt-0.5">{essay.prompt}</div>}
-                  </td>
+              {filteredEssays.length > 0 ? filteredEssays.map((essay, idx) => {
+                const subDate = getSubmissionDate(essay);
+                const pendingDays = getPendingDays(subDate);
+                return (
+                  <tr key={essay.id || idx} className="hover:bg-slate-50/80 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-2.5">
+                        <div className="w-8 h-8 rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-700 font-bold text-xs shrink-0">
+                          {essay.studentName.charAt(0)}
+                        </div>
+                        <div>
+                          <div className="font-bold text-slate-900 text-xs">{essay.studentName}</div>
+                          <div className="text-[10px] text-slate-400 font-mono">{essay.studentId}</div>
+                        </div>
+                      </div>
+                    </td>
 
-                  <td className="px-6 py-4 text-right">
-                    <Button 
-                      onClick={() => handleOpenEditor(essay)}
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs h-8 shadow-sm flex items-center gap-1.5 ml-auto"
-                    >
-                      <Edit3 className="w-3.5 h-3.5" /> Open Editor <ArrowRight className="w-3.5 h-3.5" />
-                    </Button>
-                  </td>
-                </tr>
-              )) : (
+                    <td className="px-6 py-4 max-w-xs">
+                      <div className="font-bold text-slate-900 text-sm truncate">{essay.title}</div>
+                      <div className="text-xs text-indigo-600 font-medium mt-0.5">{essay.university || 'College Application Essay'}</div>
+                      {essay.prompt && <div className="text-[11px] text-slate-400 truncate max-w-xs mt-0.5">{essay.prompt}</div>}
+                    </td>
+
+                    <td className="px-6 py-4 text-xs font-medium text-slate-700">
+                      <div className="flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                        <span>{subDate}</span>
+                      </div>
+                    </td>
+
+                    <td className="px-6 py-4">
+                      <span className={cn(
+                        "inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold border",
+                        pendingDays > 5 
+                          ? "bg-rose-50 text-rose-700 border-rose-200" 
+                          : pendingDays > 2 
+                            ? "bg-amber-50 text-amber-700 border-amber-200" 
+                            : "bg-slate-50 text-slate-700 border-slate-200"
+                      )}>
+                        {pendingDays === 0 ? 'Submitted Today' : `${pendingDays} ${pendingDays === 1 ? 'day' : 'days'} pending`}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4">
+                      {getStatusBadge(essay.status)}
+                    </td>
+
+                    <td className="px-6 py-4 text-right">
+                      <Button 
+                        onClick={() => handleOpenEditor(essay)}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs h-8 shadow-sm flex items-center gap-1.5 ml-auto"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" /> Open Editor <ArrowRight className="w-3.5 h-3.5" />
+                      </Button>
+                    </td>
+                  </tr>
+                );
+              }) : (
                 <tr>
-                  <td colSpan={2} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
                     <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto mb-3 opacity-80" />
                     <p className="font-bold text-slate-800 text-base">No Matching Submissions</p>
                     <p className="text-xs text-slate-500 mt-1">Try resetting search filters or select a different student.</p>

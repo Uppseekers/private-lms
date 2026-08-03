@@ -337,6 +337,7 @@ export default function StudentEssays() {
         <AiProofreaderModal 
           initialText={proofreaderInitialText}
           onClose={() => setIsProofreaderOpen(false)}
+          essay={selectedEssay}
         />
       )}
     </div>
@@ -938,11 +939,13 @@ interface NarrativeOption {
 export function AiProofreaderModal({ 
   initialText = '', 
   onClose, 
-  onApplyText 
+  onApplyText,
+  essay
 }: { 
   initialText?: string; 
   onClose: () => void; 
   onApplyText?: (polishedText: string) => void;
+  essay?: Essay | null;
 }) {
   const { students, currentUser } = useDatabase();
   const currentStudent = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0];
@@ -1156,7 +1159,20 @@ ${opt.grammarAndToneAdvice}
         </div>
 
         {/* Tab Content */}
-        {activeTab === 'narrative' ? (
+        {essay && !isCounselorAssignedEssay(essay) ? (
+          <div className="p-6 bg-amber-50/90 border border-amber-200 rounded-2xl text-slate-800 space-y-3 my-2 shadow-2xs">
+            <div className="flex items-center gap-2 font-bold text-amber-900 text-sm">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+              <span>AI Mentor & Author's Compass Locked for Independent Documents</span>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              The <strong>Author's Compass Narrative Strategist</strong> and <strong>AI Academic Proofreader</strong> features are enabled exclusively for <strong>Counselor-Assigned Essays</strong>.
+            </p>
+            <div className="p-3 bg-white/90 rounded-xl border border-amber-200 text-xs text-slate-500">
+              💡 Independent drafts created via "New Document" are for unassisted personal writing. To use AI narrative suggestions and proofreading, please open an essay assigned to you by your counselor.
+            </div>
+          </div>
+        ) : activeTab === 'narrative' ? (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Sequential Setup Form */}
             <div className="lg:col-span-5 space-y-4 bg-slate-50 p-5 rounded-2xl border border-slate-200">

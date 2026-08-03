@@ -18,7 +18,8 @@ import {
   Command,
   FileText,
   Menu,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Target
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Role } from '@/types';
@@ -36,6 +37,7 @@ interface SidebarItem {
 const studentNavigation: SidebarItem[] = [
   { name: 'Dashboard', href: '/student/dashboard', icon: LayoutDashboard },
   { name: 'Profile', href: '/student/profile', icon: User },
+  { name: 'Competency Radar', href: '/student/competency-radar', icon: Target },
   { name: 'Universities', href: '/student/universities', icon: GraduationCap },
   { name: 'Schedules', href: '/student/schedules', icon: CalendarDays },
   { name: 'Document Vault', href: '/student/vault', icon: FolderLock },
@@ -309,15 +311,17 @@ export default function AppLayout() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-4 shrink-0">
-            {/* Google Sheets Sync Button */}
-            <button
-              onClick={() => setIsSheetsModalOpen(true)}
-              title="Google Sheets Backup & Realtime Sync"
-              className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 rounded-full py-1.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
-            >
-              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="hidden md:inline">Sheets Sync</span>
-            </button>
+            {/* Google Sheets Sync Button (ADMIN ONLY) */}
+            {isTeam && (currentUser?.role?.toUpperCase().includes('ADMIN') || currentUser?.role === 'ADMIN' || currentUser?.role === 'SUPER_ADMIN') && (
+              <button
+                onClick={() => setIsSheetsModalOpen(true)}
+                title="Google Sheets Backup & Realtime Sync"
+                className="bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/80 rounded-full py-1.5 px-3 text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                <span className="hidden md:inline">Sheets Sync</span>
+              </button>
+            )}
 
             {/* Supersearch Trigger Button */}
             <div 

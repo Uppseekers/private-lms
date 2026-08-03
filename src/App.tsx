@@ -17,6 +17,7 @@ import Batches from './pages/team/Batches';
 import Evaluator from './pages/team/Evaluator';
 import StudentEssays from './pages/student/Essays';
 import StudentTasks from './pages/student/Tasks';
+import CompetencyRadar from './pages/student/CompetencyRadar';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useDatabase();
@@ -43,6 +44,7 @@ export default function App() {
           <Route path="vault" element={<StudentVault />} />
           <Route path="essays" element={<StudentEssays />} />
           <Route path="tasks" element={<StudentTasks />} />
+          <Route path="competency-radar" element={<CompetencyRadar />} />
         </Route>
 
         {/* Team Routes */}

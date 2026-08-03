@@ -6,6 +6,7 @@ import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, G
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage } from '@/types';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
+import CompetencyRadar from '@/pages/student/CompetencyRadar';
 
 export default function TeamUsers() {
   const { students, setStudents, staff, setStaff, currentUser } = useDatabase();
@@ -681,7 +682,7 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
       </div>
 
       <div className="flex border-b border-slate-200 px-6 bg-white shrink-0 overflow-x-auto scrollbar-hide">
-        {['Profile Details', 'Shortlists', 'Document Vault', 'Essays', 'Tasks & Projects', 'Activity'].map((tab) => (
+        {['Profile Details', 'Competency Radar', 'Shortlists', 'Document Vault', 'Essays', 'Tasks & Projects', 'Activity'].map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -701,6 +702,12 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
         
 {activeTab === 'Profile Details' && (
   <ProfileDetailsView student={student} onUpdate={onUpdate} />
+)}
+
+{activeTab === 'Competency Radar' && (
+  <div className="space-y-6">
+    <CompetencyRadar student={student} isTeamView={true} />
+  </div>
 )}
 
 
