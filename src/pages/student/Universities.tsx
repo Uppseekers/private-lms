@@ -219,12 +219,6 @@ const shortlist: University[] = [
         <p className="text-xs text-slate-500 mt-1.5 leading-relaxed">
           Target universities are shortlisted and managed by your lead counselor: <strong className="text-slate-800">{student?.counselor || 'Assigned Lead Counselor'}</strong>.
         </p>
-        <Button 
-          onClick={() => setIsAddUniModalOpen(true)}
-          className="mt-4 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4 py-2 rounded-xl"
-        >
-          <Plus className="w-3.5 h-3.5 mr-1.5" /> Add Target University
-        </Button>
       </div>
     );
   }
@@ -274,21 +268,13 @@ const shortlist: University[] = [
         </div>
 
         <div className="flex items-center gap-3 w-full sm:w-auto">
-          <div className="hidden sm:flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs">
             <GraduationCap className="w-4 h-4 text-blue-600" />
             <div>
               <span className="text-[10px] text-slate-400 font-bold uppercase block leading-none">Counselor</span>
               <span className="font-semibold text-slate-800">{student?.counselor || 'Lead Counselor'}</span>
             </div>
           </div>
-
-          <Button 
-            onClick={() => setIsAddUniModalOpen(true)}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs px-3.5 py-2 rounded-xl flex items-center gap-1.5 shadow-2xs ml-auto sm:ml-0"
-          >
-            <Plus className="w-3.5 h-3.5" />
-            <span>Add Target</span>
-          </Button>
         </div>
       </div>
 

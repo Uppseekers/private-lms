@@ -531,6 +531,24 @@ async function startServer() {
 
       const ai = new GoogleGenAI({ apiKey });
 
+      const generateWithFallback = async (params: any) => {
+        const modelsToTry = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash-latest', 'gemini-2.5-flash'];
+        let lastErr: any;
+        for (const modelName of modelsToTry) {
+          try {
+            return await ai.models.generateContent({ ...params, model: modelName });
+          } catch (err: any) {
+            lastErr = err;
+            if (err?.message?.includes('no longer available') || err?.message?.includes('not found') || err?.status === 404 || err?.code === 404) {
+              console.warn(`Model ${modelName} returned 404/unavailable, attempting fallback...`);
+              continue;
+            }
+            throw err;
+          }
+        }
+        throw lastErr;
+      };
+
       const systemInstruction = `You are Author's Compass, an elite AI writing environment and narrative strategist for aspiring authors, students, and essayists.
 
 CRITICAL INSTRUCTIONS:
@@ -561,8 +579,7 @@ STUDENT PROFILE CONTEXT:
 ${typeof studentProfile === 'string' ? studentProfile : JSON.stringify(studentProfile, null, 2)}
 `;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+      const response = await generateWithFallback({
         contents: [
           { role: 'user', parts: [{ text: userPrompt }] }
         ],
@@ -623,6 +640,24 @@ ${typeof studentProfile === 'string' ? studentProfile : JSON.stringify(studentPr
       }
 
       const ai = new GoogleGenAI({ apiKey });
+
+      const generateWithFallback = async (params: any) => {
+        const modelsToTry = ['gemini-3.6-flash', 'gemini-flash-latest', 'gemini-2.5-flash-latest', 'gemini-2.5-flash'];
+        let lastErr: any;
+        for (const modelName of modelsToTry) {
+          try {
+            return await ai.models.generateContent({ ...params, model: modelName });
+          } catch (err: any) {
+            lastErr = err;
+            if (err?.message?.includes('no longer available') || err?.message?.includes('not found') || err?.status === 404 || err?.code === 404) {
+              console.warn(`Model ${modelName} returned 404/unavailable, attempting fallback...`);
+              continue;
+            }
+            throw err;
+          }
+        }
+        throw lastErr;
+      };
       
       const systemInstruction = `You are an expert academic proofreader and writing mentor specializing in Statements of Purpose (SOPs) and personal student essays. Your core mission is to correct mechanical errors while fiercely protecting the user's authentic tone, personal voice, and narrative originality.
 
@@ -638,8 +673,7 @@ Provide your response in two clearly labeled sections using Markdown:
 1. **Polished Text:** The fully corrected text with proper grammar, spelling, and punctuation, maintaining the exact original style and flow.
 2. **Correction Log:** A concise, bulleted list detailing every major correction made (spelling, comma/semicolon fix, tense adjustment) and a brief 5-word reason why it was changed, so the student can learn from it.`;
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
+      const response = await generateWithFallback({
         contents: [
           { role: 'user', parts: [{ text: `Input text to edit:\n${essayText}` }] }
         ],

@@ -97,6 +97,14 @@ const ACADEMIC_DICTIONARY = [
   { word: "Empower", pos: "verb", def: "Give someone the authority or confidence to do something.", synonyms: ["Enable", "Foster", "Bolster"], example: "We sought to empower underprivileged youths through coding workshops." }
 ];
 
+export function isCounselorAssignedEssay(essay: Essay | null | undefined): boolean {
+  if (!essay) return false;
+  if ((essay as any).isNewDocument) return false;
+  if (essay.counselor || (essay as any).counselorAssigned || (essay as any).assignedBy) return true;
+  if (essay.id && (essay.id.startsWith('ESS-') || !essay.id.startsWith('e_'))) return true;
+  return false;
+}
+
 export default function StudentEssays() {
   const { currentUser, students, updateStudent } = useDatabase();
   const student = students.find(s => s.id === currentUser.id || s.email === currentUser.email) || (currentUser as any);
@@ -145,6 +153,7 @@ export default function StudentEssays() {
       prompt: 'Untitled Essay / Blank Document',
       university: 'General',
       status: 'In Progress',
+      isNewDocument: true,
       versions: [
         {
           id: 'v1.0',
@@ -153,7 +162,7 @@ export default function StudentEssays() {
           date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })
         }
       ]
-    };
+    } as any;
 
     const updatedEssays = [newEssay, ...(student.essays || [])];
     const updatedTasks = syncTaskForEssay(student.tasks || [], newEssay, 'In Progress');
@@ -284,8 +293,19 @@ export default function StudentEssays() {
                   const words = currentContent.trim().split(/\s+/).filter(w => w.length > 0).length;
                   return (
                     <tr key={essay.id} className="hover:bg-slate-50 transition-colors cursor-pointer group" onClick={() => setSelectedEssay(essay)}>
-                      <td className="px-6 py-4 max-w-xs truncate font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
-                        {essay.prompt}
+                      <td className="px-6 py-4 max-w-xs font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
+                        <div className="flex flex-col gap-1">
+                          <span className="truncate">{essay.prompt}</span>
+                          {isCounselorAssignedEssay(essay) ? (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-100 w-fit">
+                              <Sparkles className="w-3 h-3 text-purple-600" /> Counselor Assigned (AI Enabled)
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 w-fit">
+                              Independent Draft (No AI)
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="px-6 py-4 text-slate-600">
                         {essay.university || 'Common App (General)'}
@@ -764,81 +784,96 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
                   </div>
                 </div>
               ) : aiTab === 'proofreader' ? (
-                <div className="space-y-3">
-                  <div className="p-3 bg-purple-50 border border-purple-100 rounded-xl space-y-2">
-                    <div className="flex items-center gap-2 text-purple-900 font-bold text-xs">
-                      <Sparkles className="w-4 h-4 text-purple-600" />
-                      <span>AI Academic Proofreader & Mentor</span>
+                !isCounselorAssignedEssay(essay) ? (
+                  <div className="p-4 bg-amber-50/90 border border-amber-200 rounded-xl space-y-2.5 text-slate-800 text-xs shadow-2xs">
+                    <div className="flex items-center gap-2 font-bold text-amber-900">
+                      <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>AI Mentor Locked for Independent Documents</span>
                     </div>
-                    <p className="text-[11px] text-purple-700 leading-relaxed">
-                      Corrects mechanical errors, run-ons & commas while strictly preserving your authentic student voice and narrative tone.
+                    <p className="text-[11px] text-slate-600 leading-relaxed">
+                      The <strong>AI Mentor, Narrative Strategist, and Proofreader</strong> features are available exclusively on <strong>Counselor-Assigned Essays</strong>.
                     </p>
-                    <Button 
-                      onClick={handleRunAiMentor} 
-                      disabled={isAiProofreading || !content.trim()} 
-                      className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold py-2 shadow-sm"
-                    >
-                      {isAiProofreading ? (
-                        <>
-                          <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                          Proofreading Draft...
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                          Run Proofreader on Draft
-                        </>
-                      )}
-                    </Button>
-                  </div>
-
-                  {aiProofreadError && (
-                    <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs">
-                      {aiProofreadError}
+                    <div className="p-2.5 bg-white/90 rounded-lg border border-amber-200/80 text-[11px] text-slate-500">
+                      💡 Independent drafts created using "New Document" do not have access to AI mentoring options. To use AI mentoring, please work on an essay assigned to you by your counselor.
                     </div>
-                  )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div className="p-3 bg-purple-50 border border-purple-100 rounded-xl space-y-2">
+                      <div className="flex items-center gap-2 text-purple-900 font-bold text-xs">
+                        <Sparkles className="w-4 h-4 text-purple-600" />
+                        <span>AI Academic Proofreader & Mentor</span>
+                      </div>
+                      <p className="text-[11px] text-purple-700 leading-relaxed">
+                        Corrects mechanical errors, run-ons & commas while strictly preserving your authentic student voice and narrative tone.
+                      </p>
+                      <Button 
+                        onClick={handleRunAiMentor} 
+                        disabled={isAiProofreading || !content.trim()} 
+                        className="w-full bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold py-2 shadow-sm"
+                      >
+                        {isAiProofreading ? (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                            Proofreading Draft...
+                          </>
+                        ) : (
+                          <>
+                            <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                            Run Proofreader on Draft
+                          </>
+                        )}
+                      </Button>
+                    </div>
 
-                  {aiProofreadResult ? (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Analysis Results</span>
-                        <div className="flex gap-1.5">
-                          <Button 
-                            size="sm" 
-                            variant="outline" 
-                            onClick={() => {
-                              navigator.clipboard.writeText(aiProofreadResult);
-                              setAiCopied(true);
-                              setTimeout(() => setAiCopied(false), 2000);
-                            }}
-                            className="h-6 text-[10px] px-2 font-bold"
-                          >
-                            {aiCopied ? <Check className="w-3 h-3 text-green-600 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
-                            {aiCopied ? 'Copied' : 'Copy'}
-                          </Button>
-                          <Button 
-                            size="sm" 
-                            onClick={handleApplyPolishedToDraft} 
-                            className="h-6 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
-                          >
-                            <FileCheck className="w-3 h-3 mr-1" /> Apply
-                          </Button>
+                    {aiProofreadError && (
+                      <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-xs">
+                        {aiProofreadError}
+                      </div>
+                    )}
+
+                    {aiProofreadResult ? (
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Analysis Results</span>
+                          <div className="flex gap-1.5">
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              onClick={() => {
+                                navigator.clipboard.writeText(aiProofreadResult);
+                                setAiCopied(true);
+                                setTimeout(() => setAiCopied(false), 2000);
+                              }}
+                              className="h-6 text-[10px] px-2 font-bold"
+                            >
+                              {aiCopied ? <Check className="w-3 h-3 text-green-600 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+                              {aiCopied ? 'Copied' : 'Copy'}
+                            </Button>
+                            <Button 
+                              size="sm" 
+                              onClick={handleApplyPolishedToDraft} 
+                              className="h-6 text-[10px] px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold"
+                            >
+                              <FileCheck className="w-3 h-3 mr-1" /> Apply
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="max-h-[300px] overflow-y-auto p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2 prose prose-xs max-w-none text-slate-800">
+                          <Markdown>{aiProofreadResult}</Markdown>
                         </div>
                       </div>
-
-                      <div className="max-h-[300px] overflow-y-auto p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs space-y-2 prose prose-xs max-w-none text-slate-800">
-                        <Markdown>{aiProofreadResult}</Markdown>
-                      </div>
-                    </div>
-                  ) : (
-                    !isAiProofreading && (
-                      <div className="p-4 text-center text-slate-400 text-xs space-y-1">
-                        <p className="font-semibold text-slate-500">Ready to audit your essay draft.</p>
-                        <p className="text-[11px] text-slate-400">Click "Run Proofreader on Draft" to receive polished text & a detailed correction log.</p>
-                      </div>
-                    )
-                  )}
-                </div>
+                    ) : (
+                      !isAiProofreading && (
+                        <div className="p-4 text-center text-slate-400 text-xs space-y-1">
+                          <p className="font-semibold text-slate-500">Ready to audit your essay draft.</p>
+                          <p className="text-[11px] text-slate-400">Click "Run Proofreader on Draft" to receive polished text & a detailed correction log.</p>
+                        </div>
+                      )
+                    )}
+                  </div>
+                )
               ) : (
                 <div className="space-y-3">
                   <div className="relative">
