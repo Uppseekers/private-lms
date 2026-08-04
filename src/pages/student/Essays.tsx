@@ -970,6 +970,17 @@ export function AiProofreaderModal({
   const [errorMessage, setErrorMessage] = useState('');
   const [copied, setCopied] = useState(false);
 
+  // Escape key listener to close modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onClose]);
+
   const handleGenerateNarrativeAngles = async () => {
     if (!essayCategory || !targetWordCount.trim()) return;
     setIsNarrativeLoading(true);
@@ -1116,25 +1127,32 @@ ${opt.grammarAndToneAdvice}
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm overflow-y-auto">
-      <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl my-8 p-6 space-y-5 animate-in fade-in zoom-in-95 duration-200">
-        {/* Header */}
-        <div className="flex justify-between items-center border-b border-slate-100 pb-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/60 backdrop-blur-sm overflow-hidden">
+      <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[92vh] shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-200 border border-slate-100">
+        {/* Header - Sticky & prominent close button */}
+        <div className="flex justify-between items-center border-b border-slate-100 p-5 bg-white rounded-t-2xl shrink-0">
           <div className="flex items-center gap-3">
             <div className="bg-gradient-to-r from-purple-600 to-indigo-600 p-2.5 rounded-xl text-white shadow-md">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-lg font-bold text-slate-900">Author's Compass: Elite AI Writing Environment & Mentor</h3>
+              <h3 className="text-base sm:text-lg font-bold text-slate-900">Author's Compass: Elite AI Writing Environment & Mentor</h3>
               <p className="text-xs text-slate-500">Formulate narrative strategies, connect profile details, and refine grammar without pre-generated AI text.</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100">
-            <X className="w-5 h-5" />
+          <button 
+            onClick={onClose} 
+            title="Close (Press Esc)" 
+            className="text-slate-500 hover:text-slate-900 p-2 rounded-xl hover:bg-slate-100 transition-colors bg-slate-100/80 border border-slate-200 flex items-center gap-1.5 text-xs font-bold"
+          >
+            <span className="text-[10px] text-slate-400 font-mono hidden sm:inline">ESC</span>
+            <X className="w-5 h-5 text-slate-700" />
           </button>
         </div>
 
-        {/* Tab Selector */}
+        {/* Modal Scrollable Body */}
+        <div className="p-6 space-y-5 overflow-y-auto flex-1">
+          {/* Tab Selector */}
         <div className="flex bg-slate-100 p-1 rounded-xl w-fit text-xs font-bold">
           <button
             onClick={() => setActiveTab('narrative')}
@@ -1514,6 +1532,7 @@ ${opt.grammarAndToneAdvice}
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

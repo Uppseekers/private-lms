@@ -1,50 +1,74 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { 
   PieChart, 
   Pie, 
   Cell, 
   ResponsiveContainer, 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip,
-  Legend,
-  RadialBarChart,
-  RadialBar
+  RadialBarChart, 
+  RadialBar 
 } from 'recharts';
+import { 
+  Bell, 
+  Calendar, 
+  CheckCircle2, 
+  Clock, 
+  FileText, 
+  FolderKanban, 
+  MessageSquare, 
+  AlertCircle, 
+  UserCheck, 
+  Filter, 
+  ArrowRight,
+  ShieldCheck,
+  Award,
+  BookOpen
+} from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
+import { cn } from '@/lib/utils';
+
+interface ActivityItem {
+  id: string;
+  category: 'MEETING' | 'TASK' | 'ESSAY' | 'DOCUMENT' | 'COUNSELOR_LOG' | 'STATUS';
+  title: string;
+  description: string;
+  timestamp: string;
+  dateObj?: Date;
+  statusBadge?: string;
+  statusColor?: string;
+  meta?: string;
+  performedBy?: string;
+}
+
+interface NotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  type: 'URGENT' | 'COUNSELOR' | 'SYSTEM' | 'SUCCESS';
+  timestamp: string;
+  read: boolean;
+  linkTab?: string;
+}
 
 export default function StudentDashboard() {
   const { currentUser, events, batches } = useDatabase();
-  
+  const [activityFilter, setActivityFilter] = useState<'ALL' | 'MEETING' | 'TASK' | 'ESSAY' | 'COUNSELOR_LOG'>('ALL');
+  const [notificationFilter, setNotificationFilter] = useState<'ALL' | 'UNREAD' | 'URGENT'>('ALL');
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
+
   const student = currentUser as any;
   const tasks = student?.tasks || [];
   const shortlist = student?.shortlist || [];
   const essays = student?.essays || [];
-  
+  const documents = student?.documents || [];
+  const operationalLogs = student?.operationalLogs || [];
+  const profileActivities = student?.activities || [];
+
   const studentBatches = batches.filter(b => b.students?.includes(student?.id));
   const studentEvents = events.filter(e => studentBatches.some(b => b.id === e.batch) || e.students?.includes(student?.id));
 
-  const hasData = tasks.length > 0 || shortlist.length > 0 || essays.length > 0 || studentBatches.length > 0 || studentEvents.length > 0;
-
-  if (!hasData) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[60vh] text-center space-y-4">
-        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
-          <span className="text-2xl text-slate-400">📊</span>
-        </div>
-        <h2 className="text-2xl font-semibold text-slate-800">Welcome to your Dashboard</h2>
-        <p className="text-slate-500 max-w-md">
-          Your dashboard is currently empty. Once tasks, universities, or meetings are assigned to you, they will appear here.
-        </p>
-      </div>
-    );
-  }
-
-  // Calculate task statistics
+  // --- 1. TASK BREAKDOWN DATA ---
   const completedTasks = tasks.filter((t: any) => t.stage === 'COMPLETED').length;
   const inProgressTasks = tasks.filter((t: any) => t.stage === 'IN_PROGRESS').length;
   const pendingTasks = tasks.filter((t: any) => t.stage === 'TO_DO').length;
@@ -56,38 +80,25 @@ export default function StudentDashboard() {
   if (pendingTasks > 0) taskData.push({ name: 'Pending', value: pendingTasks, color: '#f59e0b' });
   if (needsRevisionTasks > 0) taskData.push({ name: 'Needs Revision', value: needsRevisionTasks, color: '#ef4444' });
 
-  // Fallback for empty pie chart
   if (taskData.length === 0) {
     taskData.push({ name: 'No Tasks', value: 1, color: '#e2e8f0' });
   }
 
-  // Chart 2: Mock journey data since we don't have historical grades easily available
-  const journeyData = [
-    { week: 'W1', attendance: 100, grade: 85, uploads: 2 },
-    { week: 'W2', attendance: 100, grade: 88, uploads: 3 },
-    { week: 'W3', attendance: 80, grade: 82, uploads: 1 },
-    { week: 'W4', attendance: 100, grade: 90, uploads: 4 },
-  ];
-
-  // Calculate dynamic deadline countdown
+  // --- 2. DEADLINE COUNTDOWN DATA ---
   const now = new Date();
   const upcomingDeadlines: { date: Date; name: string }[] = [];
 
   shortlist.forEach((uni: any) => {
     if (uni.deadline) {
       const d = new Date(uni.deadline);
-      if (!isNaN(d.getTime())) {
-        upcomingDeadlines.push({ date: d, name: uni.name });
-      }
+      if (!isNaN(d.getTime())) upcomingDeadlines.push({ date: d, name: uni.name });
     }
   });
 
   tasks.forEach((t: any) => {
     if (t.dueDate && t.stage !== 'COMPLETED') {
       const d = new Date(t.dueDate);
-      if (!isNaN(d.getTime())) {
-        upcomingDeadlines.push({ date: d, name: t.name });
-      }
+      if (!isNaN(d.getTime())) upcomingDeadlines.push({ date: d, name: t.name });
     }
   });
 
@@ -102,9 +113,6 @@ export default function StudentDashboard() {
     const diffMs = closest.date.getTime() - now.getTime();
     daysLeft = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
     targetLabel = `Next: ${closest.name}`;
-  } else if (upcomingDeadlines.length > 0) {
-    daysLeft = 0;
-    targetLabel = 'All current deadlines reached';
   } else {
     daysLeft = 30;
     targetLabel = 'Target Intake Prep';
@@ -116,55 +124,254 @@ export default function StudentDashboard() {
   ];
 
   const currentBatch = studentBatches.length > 0 ? studentBatches[0].name : 'Not Assigned';
-  const avgEssayScore = 'N/A'; // Mocked
-  const attendance = '100%'; // Mocked
+
+  // --- 3. CONSOLIDATED ACTIVITY FEED ---
+  const consolidatedActivities: ActivityItem[] = useMemo(() => {
+    const feed: ActivityItem[] = [];
+
+    // Counselor & Staff Operational Logs
+    operationalLogs.forEach((log: any) => {
+      feed.push({
+        id: log.id || 'log_' + Math.random(),
+        category: 'COUNSELOR_LOG',
+        title: log.activityType || 'Counselor Log',
+        description: log.description || 'Counselor recorded an activity.',
+        timestamp: log.timestamp || 'Recent',
+        performedBy: log.performedBy || 'Counselor',
+        statusBadge: log.attendees || log.role || 'Staff',
+        statusColor: 'bg-indigo-100 text-indigo-800'
+      });
+    });
+
+    // Profile activities
+    profileActivities.forEach((act: any) => {
+      if (act.type === 'Whatsapp Chat' || act.type === 'Audio Call' || act.type === 'Zoho/Zoom Call' || act.type === 'Task' || act.type === 'Essay') {
+        feed.push({
+          id: act.id || 'act_' + Math.random(),
+          category: 'COUNSELOR_LOG',
+          title: `${act.type} (${act.attendees || 'Counselor Log'})`,
+          description: act.description,
+          timestamp: act.timestamp || act.date || 'Recently',
+          performedBy: act.performedBy || 'Counselor',
+          statusBadge: act.attendees || 'Logged',
+          statusColor: 'bg-purple-100 text-purple-800'
+        });
+      }
+    });
+
+    // Meetings
+    studentEvents.forEach((evt: any) => {
+      feed.push({
+        id: evt.id,
+        category: 'MEETING',
+        title: evt.title || 'Counseling Session',
+        description: `${evt.date || 'Scheduled'} at ${evt.time || 'TBD'} (${evt.location || 'Zoom'})`,
+        timestamp: evt.date || 'Upcoming Meeting',
+        performedBy: evt.host || 'Counselor',
+        statusBadge: evt.status || 'Scheduled',
+        statusColor: 'bg-blue-100 text-blue-800'
+      });
+    });
+
+    // Tasks Stages
+    tasks.forEach((t: any) => {
+      feed.push({
+        id: t.id,
+        category: 'TASK',
+        title: `Task: ${t.name}`,
+        description: `Stage: ${t.stage?.replace('_', ' ')} | Category: ${t.category || 'General'}`,
+        timestamp: t.dueDate ? `Due: ${t.dueDate}` : 'Active Task',
+        statusBadge: t.stage,
+        statusColor: t.stage === 'COMPLETED' ? 'bg-emerald-100 text-emerald-800' :
+                     t.stage === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-800' :
+                     t.stage === 'NEEDS_REVISION' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+      });
+    });
+
+    // Essays Activity
+    essays.forEach((e: any) => {
+      feed.push({
+        id: e.id,
+        category: 'ESSAY',
+        title: `Essay: ${e.title}`,
+        description: `Status: ${e.status} | Versions: ${e.versions?.length || 1} draft(s)`,
+        timestamp: e.updatedAt || 'Recent Essay',
+        statusBadge: e.status || 'Drafting',
+        statusColor: 'bg-purple-100 text-purple-800'
+      });
+    });
+
+    // Documents Vault
+    documents.forEach((d: any) => {
+      feed.push({
+        id: d.id,
+        category: 'DOCUMENT',
+        title: `Document: ${d.name}`,
+        description: `Verification Status: ${d.status || 'Uploaded'}`,
+        timestamp: d.uploadedAt || 'Uploaded',
+        statusBadge: d.status || 'Uploaded',
+        statusColor: d.status === 'VERIFIED' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-800'
+      });
+    });
+
+    return feed;
+  }, [operationalLogs, profileActivities, studentEvents, tasks, essays, documents]);
+
+  const filteredActivities = consolidatedActivities.filter(a => {
+    if (activityFilter === 'ALL') return true;
+    if (activityFilter === 'COUNSELOR_LOG') return a.category === 'COUNSELOR_LOG';
+    return a.category === activityFilter;
+  });
+
+  // --- 4. GENERATE REAL-TIME NOTIFICATIONS ---
+  const generatedNotifications: NotificationItem[] = useMemo(() => {
+    const list: NotificationItem[] = [];
+
+    // Task alerts
+    tasks.forEach((t: any) => {
+      if (t.stage === 'NEEDS_REVISION') {
+        list.push({
+          id: 'notif_task_rev_' + t.id,
+          title: 'Task Revision Required',
+          message: `Counselor requested revision on "${t.name}". Please review comments.`,
+          type: 'URGENT',
+          timestamp: 'Action Required',
+          read: readNotificationIds.includes('notif_task_rev_' + t.id)
+        });
+      } else if (t.dueDate) {
+        const d = new Date(t.dueDate);
+        const diffDays = Math.ceil((d.getTime() - now.getTime()) / (1000 * 3600 * 24));
+        if (diffDays >= 0 && diffDays <= 5 && t.stage !== 'COMPLETED') {
+          list.push({
+            id: 'notif_task_due_' + t.id,
+            title: `Task Due in ${diffDays} Day(s)`,
+            message: `Task "${t.name}" is due on ${t.dueDate}. Complete and submit to stay on track.`,
+            type: 'URGENT',
+            timestamp: `Due ${t.dueDate}`,
+            read: readNotificationIds.includes('notif_task_due_' + t.id)
+          });
+        }
+      }
+    });
+
+    // Counselor recent logs
+    operationalLogs.slice(0, 5).forEach((log: any) => {
+      list.push({
+        id: 'notif_log_' + log.id,
+        title: `Counselor Update (${log.activityType || 'Activity'})`,
+        message: log.description,
+        type: 'COUNSELOR',
+        timestamp: log.timestamp || 'Recently',
+        read: readNotificationIds.includes('notif_log_' + log.id)
+      });
+    });
+
+    // Upcoming meetings
+    studentEvents.forEach((evt: any) => {
+      list.push({
+        id: 'notif_evt_' + evt.id,
+        title: 'Scheduled Meeting Alert',
+        message: `Meeting "${evt.title}" on ${evt.date || 'Upcoming'} at ${evt.time || 'TBD'}.`,
+        type: 'SYSTEM',
+        timestamp: evt.date || 'Scheduled',
+        read: readNotificationIds.includes('notif_evt_' + evt.id)
+      });
+    });
+
+    return list;
+  }, [tasks, operationalLogs, studentEvents, readNotificationIds, now]);
+
+  const filteredNotifications = generatedNotifications.filter(n => {
+    if (notificationFilter === 'UNREAD') return !n.read;
+    if (notificationFilter === 'URGENT') return n.type === 'URGENT';
+    return true;
+  });
+
+  const unreadCount = generatedNotifications.filter(n => !n.read).length;
+
+  const markAllAsRead = () => {
+    setReadNotificationIds(generatedNotifications.map(n => n.id));
+  };
+
+  const toggleRead = (id: string) => {
+    if (readNotificationIds.includes(id)) {
+      setReadNotificationIds(readNotificationIds.filter(i => i !== id));
+    } else {
+      setReadNotificationIds([...readNotificationIds, id]);
+    }
+  };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 max-w-7xl mx-auto">
+      {/* HEADER BAR */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+            Welcome back, {student?.name || 'Student'}! 👋
+          </h1>
+          <p className="text-sm text-slate-500 mt-1">
+            Track your tasks, counselor meetings, essay reviews, document verifications, and application timeline.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <div className="text-right hidden sm:block">
+            <span className="text-xs text-slate-400 font-bold uppercase block">Counselor Assigned</span>
+            <span className="text-sm font-semibold text-slate-800">{student?.counselor || 'Assigned Staff'}</span>
+          </div>
+          <div className="w-10 h-10 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 font-bold border border-indigo-100">
+            {student?.name ? student.name.charAt(0) : 'S'}
+          </div>
+        </div>
+      </div>
+
+      {/* TOP ROW STATS & CHARTS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        
-        {/* Chart 1: Task Live & Status */}
-        <Card className="flex flex-col">
-          <CardHeader>
-            <CardTitle>Task Status Breakdown</CardTitle>
-            {tasks.length === 0 && <CardDescription>No tasks assigned yet</CardDescription>}
+        {/* Task Breakdown Chart */}
+        <Card className="flex flex-col border-slate-200 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <FolderKanban className="w-4 h-4 text-indigo-600" /> Task Stage Breakdown
+            </CardTitle>
+            <CardDescription className="text-xs">Active task distribution by stage</CardDescription>
           </CardHeader>
-          <CardContent className="flex-1 min-h-[250px]">
+          <CardContent className="flex-1 min-h-[220px] flex items-center justify-center">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
                   data={taskData}
                   cx="50%"
                   cy="50%"
-                  innerRadius={60}
-                  outerRadius={80}
-                  paddingAngle={5}
+                  innerRadius={55}
+                  outerRadius={75}
+                  paddingAngle={4}
                   dataKey="value"
                 >
                   {taskData.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.color} />
                   ))}
                 </Pie>
-                <Tooltip />
-                <Legend verticalAlign="bottom" height={36}/>
               </PieChart>
             </ResponsiveContainer>
           </CardContent>
         </Card>
 
-        {/* Chart 3: Application Countdown */}
-        <Card className="flex flex-col">
-          <CardHeader>
-            <CardTitle>Deadline Countdown</CardTitle>
+        {/* Deadline Countdown Chart */}
+        <Card className="flex flex-col border-slate-200 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <Clock className="w-4 h-4 text-blue-600" /> Application Countdown
+            </CardTitle>
+            <CardDescription className="text-xs">Days remaining until nearest milestone</CardDescription>
           </CardHeader>
-          <CardContent className="flex-1 min-h-[250px] flex flex-col items-center justify-center relative">
+          <CardContent className="flex-1 min-h-[220px] flex flex-col items-center justify-center relative">
             <ResponsiveContainer width="100%" height="100%">
               <RadialBarChart 
                 cx="50%" 
                 cy="50%" 
                 innerRadius="70%" 
                 outerRadius="100%" 
-                barSize={20} 
+                barSize={18} 
                 data={countdownData}
                 startAngle={180}
                 endAngle={0}
@@ -176,90 +383,227 @@ export default function StudentDashboard() {
                 />
               </RadialBarChart>
             </ResponsiveContainer>
-            <div className="absolute inset-0 flex flex-col items-center justify-center mt-8 text-center px-4">
-              <span className="text-4xl font-bold text-slate-800">{daysLeft}</span>
-              <span className="text-sm text-slate-500 font-medium">Days Left</span>
-              <span className="text-xs text-blue-600 font-semibold truncate max-w-[180px] mt-1">{targetLabel}</span>
+            <div className="absolute inset-0 flex flex-col items-center justify-center mt-6 text-center px-4">
+              <span className="text-3xl font-extrabold text-slate-900">{daysLeft}</span>
+              <span className="text-xs text-slate-500 font-medium">Days Left</span>
+              <span className="text-[11px] text-blue-600 font-bold truncate max-w-[180px] mt-0.5">{targetLabel}</span>
             </div>
           </CardContent>
         </Card>
 
-        {/* Info Card or Placeholder for consistency */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Quick Stats</CardTitle>
+        {/* Summary Quick Metrics */}
+        <Card className="border-slate-200 shadow-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-600" /> Application Summary
+            </CardTitle>
+            <CardDescription className="text-xs">Quick status overview</CardDescription>
           </CardHeader>
-          <CardContent className="space-y-4">
-             <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
-                <span className="text-slate-500 font-medium text-sm">Current Batch</span>
-                <span className="font-semibold text-slate-900">{currentBatch}</span>
-             </div>
-             <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
-                <span className="text-slate-500 font-medium text-sm">Tasks</span>
-                <span className="font-semibold text-slate-900">{tasks.length} Total</span>
-             </div>
-             <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
-                <span className="text-slate-500 font-medium text-sm">Shortlisted Univs</span>
-                <span className="font-semibold text-slate-900">{shortlist.length}</span>
-             </div>
-             <div className="flex justify-between items-center p-3 bg-slate-50 rounded-xl">
-                <span className="text-slate-500 font-medium text-sm">Essays</span>
-                <span className="font-semibold text-emerald-600">{essays.length}</span>
-             </div>
+          <CardContent className="space-y-2.5 pt-1">
+            <div className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+              <span className="text-slate-600 font-medium text-xs flex items-center gap-1.5">
+                <BookOpen className="w-3.5 h-3.5 text-slate-400" /> Current Batch
+              </span>
+              <span className="font-bold text-xs text-slate-900">{currentBatch}</span>
+            </div>
+            <div className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+              <span className="text-slate-600 font-medium text-xs flex items-center gap-1.5">
+                <FolderKanban className="w-3.5 h-3.5 text-slate-400" /> Tasks
+              </span>
+              <span className="font-bold text-xs text-slate-900">{tasks.length} Total ({completedTasks} Done)</span>
+            </div>
+            <div className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+              <span className="text-slate-600 font-medium text-xs flex items-center gap-1.5">
+                <Award className="w-3.5 h-3.5 text-slate-400" /> Shortlisted Univs
+              </span>
+              <span className="font-bold text-xs text-slate-900">{shortlist.length} Universities</span>
+            </div>
+            <div className="flex justify-between items-center p-2.5 bg-slate-50 rounded-xl border border-slate-100">
+              <span className="text-slate-600 font-medium text-xs flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 text-slate-400" /> Essays
+              </span>
+              <span className="font-bold text-xs text-emerald-600">{essays.length} Tracked</span>
+            </div>
           </CardContent>
         </Card>
       </div>
 
-      {/* Chart 2: Class Journey & Impact (Full Width) */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Class Journey & Performance Impact</CardTitle>
-          {tasks.length === 0 && <CardDescription>Start completing tasks to see performance metrics</CardDescription>}
-        </CardHeader>
-        <CardContent className="h-[350px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={journeyData} margin={{ top: 10, right: 30, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="colorGrade" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
-                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0}/>
-                </linearGradient>
-                <linearGradient id="colorAttendance" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.3}/>
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
-              <XAxis dataKey="week" stroke="#64748b" />
-              <YAxis yAxisId="left" stroke="#64748b" domain={[0, 100]} />
-              <YAxis yAxisId="right" orientation="right" stroke="#64748b" />
-              <Tooltip 
-                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-              />
-              <Legend />
-              <Area 
-                yAxisId="left"
-                type="monotone" 
-                dataKey="grade" 
-                name="Essay Grade (%)"
-                stroke="#8b5cf6" 
-                fillOpacity={1} 
-                fill="url(#colorGrade)" 
-              />
-              <Area 
-                yAxisId="left"
-                type="monotone" 
-                dataKey="attendance" 
-                name="Attendance (%)"
-                stroke="#10b981" 
-                fillOpacity={1} 
-                fill="url(#colorAttendance)" 
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </CardContent>
-      </Card>
+      {/* NOTIFICATION CENTER & ACTIVITY FEED GRID */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        
+        {/* NOTIFICATION CENTER CARD (1 Column) */}
+        <Card className="border-slate-200 shadow-sm flex flex-col h-full">
+          <CardHeader className="pb-3 border-b border-slate-100">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+                  <Bell className="w-4 h-4" />
+                </div>
+                <div>
+                  <CardTitle className="text-base font-bold text-slate-900">Notification Center</CardTitle>
+                  <CardDescription className="text-xs">Real-time alerts & action items</CardDescription>
+                </div>
+              </div>
+              {unreadCount > 0 && (
+                <span className="bg-rose-500 text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full">
+                  {unreadCount} New
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between mt-3 pt-2">
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setNotificationFilter('ALL')}
+                  className={cn("px-2.5 py-1 text-xs font-bold rounded-lg transition-colors", notificationFilter === 'ALL' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}
+                >
+                  All
+                </button>
+                <button
+                  onClick={() => setNotificationFilter('UNREAD')}
+                  className={cn("px-2.5 py-1 text-xs font-bold rounded-lg transition-colors", notificationFilter === 'UNREAD' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}
+                >
+                  Unread
+                </button>
+                <button
+                  onClick={() => setNotificationFilter('URGENT')}
+                  className={cn("px-2.5 py-1 text-xs font-bold rounded-lg transition-colors", notificationFilter === 'URGENT' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}
+                >
+                  Urgent
+                </button>
+              </div>
+
+              {unreadCount > 0 && (
+                <button 
+                  onClick={markAllAsRead} 
+                  className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
+                >
+                  Mark all as read
+                </button>
+              )}
+            </div>
+          </CardHeader>
+
+          <CardContent className="p-4 flex-1 space-y-3 max-h-[480px] overflow-y-auto">
+            {filteredNotifications.length === 0 ? (
+              <div className="text-center py-8 text-slate-400 text-xs italic">
+                No notifications matching filter.
+              </div>
+            ) : (
+              filteredNotifications.map(n => (
+                <div 
+                  key={n.id} 
+                  onClick={() => toggleRead(n.id)}
+                  className={cn(
+                    "p-3 rounded-xl border transition-all cursor-pointer space-y-1 relative",
+                    n.read ? "bg-slate-50 border-slate-200 opacity-75" : "bg-white border-indigo-200 shadow-sm hover:border-indigo-300"
+                  )}
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span className={cn(
+                      "font-bold text-[10px] uppercase px-2 py-0.5 rounded tracking-wider",
+                      n.type === 'URGENT' ? "bg-rose-100 text-rose-800" :
+                      n.type === 'COUNSELOR' ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
+                    )}>
+                      {n.type}
+                    </span>
+                    <span className="text-[10px] text-slate-400">{n.timestamp}</span>
+                  </div>
+                  <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between">
+                    {n.title}
+                    {!n.read && <span className="w-2 h-2 rounded-full bg-indigo-600" />}
+                  </h4>
+                  <p className="text-xs text-slate-600 leading-snug">{n.message}</p>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+
+        {/* ACTIVITIES FEED STREAM (2 Columns) */}
+        <Card className="border-slate-200 shadow-sm lg:col-span-2 flex flex-col h-full">
+          <CardHeader className="pb-3 border-b border-slate-100">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Clock className="w-4 h-4 text-indigo-600" /> Student Activities & Counselor Updates
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Real-time activity trail covering meetings, task stages, essay progress, document status, and counselor logs.
+                </CardDescription>
+              </div>
+
+              {/* Activity Filter Buttons */}
+              <div className="flex flex-wrap gap-1">
+                {(['ALL', 'MEETING', 'TASK', 'ESSAY', 'COUNSELOR_LOG'] as const).map(f => (
+                  <button
+                    key={f}
+                    onClick={() => setActivityFilter(f)}
+                    className={cn(
+                      "px-2.5 py-1 text-[11px] font-bold rounded-lg transition-colors uppercase tracking-wider",
+                      activityFilter === f ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                    )}
+                  >
+                    {f === 'COUNSELOR_LOG' ? 'Counselor' : f}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </CardHeader>
+
+          <CardContent className="p-5 flex-1 max-h-[480px] overflow-y-auto">
+            {filteredActivities.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 text-xs italic">
+                No recorded activities found for this category.
+              </div>
+            ) : (
+              <div className="relative pl-6 space-y-5 border-l-2 border-indigo-100 ml-2">
+                {filteredActivities.map(act => (
+                  <div key={act.id} className="relative group">
+                    {/* Icon indicator bullet */}
+                    <span className={cn(
+                      "absolute -left-[31px] w-3.5 h-3.5 rounded-full ring-4 ring-white flex items-center justify-center",
+                      act.category === 'MEETING' ? 'bg-blue-600' :
+                      act.category === 'TASK' ? 'bg-indigo-600' :
+                      act.category === 'ESSAY' ? 'bg-purple-600' :
+                      act.category === 'DOCUMENT' ? 'bg-emerald-600' : 'bg-amber-600'
+                    )} />
+
+                    <div className="bg-slate-50 hover:bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm transition-all space-y-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className={cn(
+                            "text-[10px] font-extrabold uppercase px-2 py-0.5 rounded tracking-wider",
+                            act.statusColor || "bg-slate-200 text-slate-800"
+                          )}>
+                            {act.category.replace('_', ' ')}
+                          </span>
+                          {act.statusBadge && (
+                            <span className="text-[10px] font-semibold bg-white border border-slate-200 px-2 py-0.5 rounded text-slate-700">
+                              {act.statusBadge}
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[11px] font-medium text-slate-400">{act.timestamp}</span>
+                      </div>
+
+                      <h4 className="text-xs font-bold text-slate-900">{act.title}</h4>
+                      <p className="text-xs text-slate-600 leading-relaxed">{act.description}</p>
+
+                      {act.performedBy && (
+                        <p className="text-[10px] text-slate-400 pt-1">
+                          Action by: <span className="font-semibold text-slate-600">{act.performedBy}</span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+      </div>
     </div>
   );
 }
-

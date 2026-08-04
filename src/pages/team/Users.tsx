@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage } from '@/types';
+import { canStaffAccessAllStudents, isStudentAssignedToStaff } from '@/lib/staffPermissions';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 import CompetencyRadar from '@/pages/student/CompetencyRadar';
 
@@ -25,8 +26,8 @@ export default function TeamUsers() {
   const [selectedStaffMember, setSelectedStaffMember] = useState<StaffMember | null>(null);
 
   const filteredStudents = students.filter(s => {
-    if (currentUser.role !== 'SYSTEM_ADMIN' && currentUser.role !== 'DEVELOPER' && currentUser.role !== 'OPERATIONS_LEAD') {
-      if (s.counselor !== currentUser.name) return false;
+    if (!canStaffAccessAllStudents(currentUser)) {
+      if (!isStudentAssignedToStaff(s, currentUser)) return false;
     }
     return s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
            s.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -667,7 +668,51 @@ function ImportStudentsModal({ onClose, onImport, counselorName }: { onClose: ()
 
 
 function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student, onClose: () => void, onUpdate: (s: Student) => void }) {
+  const { currentUser } = useDatabase();
   const [activeTab, setActiveTab] = useState('Profile Details');
+
+  // State for manual activity logging by counselor
+  const [isLoggingManualActivity, setIsLoggingManualActivity] = useState(false);
+  const [manualType, setManualType] = useState('Whatsapp Chat');
+  const [manualAttendees, setManualAttendees] = useState('Student only');
+  const [manualNotes, setManualNotes] = useState('');
+
+  const handleAddManualActivity = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualNotes.trim()) return;
+
+    const now = new Date();
+    const timestampStr = now.toLocaleString('en-US', { 
+      month: 'short', day: 'numeric', year: 'numeric', 
+      hour: 'numeric', minute: 'numeric', hour12: true 
+    });
+    const dateStr = now.toISOString().split('T')[0];
+
+    const newActivityLog = {
+      id: 'act_manual_' + Date.now(),
+      activityType: manualType,
+      type: manualType,
+      attendees: manualAttendees,
+      description: manualNotes.trim(),
+      details: `Attendees: ${manualAttendees} | Category: ${manualType}`,
+      timestamp: timestampStr,
+      date: dateStr,
+      performedBy: currentUser?.name || 'Counselor',
+      role: currentUser?.role || 'COUNSELLOR'
+    };
+
+    const updatedLogs = [newActivityLog, ...(student.operationalLogs || [])];
+    const updatedActivities = [newActivityLog, ...(student.activities || [])];
+
+    onUpdate({
+      ...student,
+      operationalLogs: updatedLogs,
+      activities: updatedActivities
+    });
+
+    setIsLoggingManualActivity(false);
+    setManualNotes('');
+  };
 
   return (
     <>
@@ -721,16 +766,90 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
         
         {activeTab === 'Activity' && (
           <div className="space-y-6">
-            <div className="flex justify-between items-center mb-2">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Staff Activity Log & Operational Audit Trail</h3>
-              <span className="text-xs bg-blue-100 text-blue-800 font-bold px-2.5 py-1 rounded-full">
-                {(student.operationalLogs?.length || 0) + (student.activities?.length || 0)} Recorded Actions
-              </span>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2 pb-3 border-b border-slate-100">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Staff Activity Log & Operational Audit Trail</h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Record counselor interactions and audit meeting scheduling, tasks, and notes for {student.name}.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs bg-blue-100 text-blue-800 font-bold px-2.5 py-1 rounded-full whitespace-nowrap">
+                  {(student.operationalLogs?.length || 0) + (student.activities?.length || 0)} Actions
+                </span>
+                <Button 
+                  size="sm" 
+                  onClick={() => setIsLoggingManualActivity(!isLoggingManualActivity)}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1" /> {isLoggingManualActivity ? 'Cancel' : 'Log Manual Activity'}
+                </Button>
+              </div>
             </div>
-            
-            <p className="text-xs text-slate-500">
-              Audit log capturing meeting scheduling, post-meeting tasks, notes, rating updates, and staff modifications for {student.name}.
-            </p>
+
+            {/* Manual Activity Logging Card */}
+            {isLoggingManualActivity && (
+              <form onSubmit={handleAddManualActivity} className="bg-indigo-50/60 p-5 rounded-2xl border border-indigo-200 space-y-4 shadow-sm">
+                <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
+                  <h4 className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                    <MessageSquare className="w-4 h-4 text-indigo-600" /> Manual Counselor Activity Logging
+                  </h4>
+                  <span className="text-[10px] text-indigo-700 font-medium">Logged by {currentUser?.name || 'Counselor'}</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Activity Type *</label>
+                    <select
+                      value={manualType}
+                      onChange={e => setManualType(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="Whatsapp Chat">Whatsapp Chat</option>
+                      <option value="Audio Call">Audio Call</option>
+                      <option value="Zoho/Zoom Call">Zoho/Zoom Call</option>
+                      <option value="Task">Task</option>
+                      <option value="Essay">Essay</option>
+                      <option value="others">others</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Participants *</label>
+                    <select
+                      value={manualAttendees}
+                      onChange={e => setManualAttendees(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="Student only">Student only</option>
+                      <option value="Parents Only">Parents Only</option>
+                      <option value="Student with Parents">Student with Parents</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Notes & Discussion Details *</label>
+                  <textarea
+                    rows={3}
+                    value={manualNotes}
+                    onChange={e => setManualNotes(e.target.value)}
+                    placeholder="Enter discussion notes, key action items, call outcome, or guidance given..."
+                    className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 resize-none"
+                    required
+                  />
+                </div>
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button type="button" variant="outline" size="sm" onClick={() => setIsLoggingManualActivity(false)}>
+                    Cancel
+                  </Button>
+                  <Button type="submit" size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
+                    Save Activity
+                  </Button>
+                </div>
+              </form>
+            )}
 
             {/* Operational Logs list */}
             {student.operationalLogs && student.operationalLogs.length > 0 && (
@@ -2308,7 +2427,13 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
   ];
 
   const [scores, setScores] = useState<any[]>(student.academicScores || defaultScores);
-  const [extracurriculars, setExtracurriculars] = useState<any[]>(student.extracurriculars || []);
+  
+  // Pure profile building extracurricular activities only (excluding operational website logs)
+  const initialPureExtracurriculars = React.useMemo(() => {
+    return (student.extracurriculars || []).filter((item: any) => !item.activityType && !item.performedBy && !item.attendees);
+  }, [student.extracurriculars]);
+
+  const [extracurriculars, setExtracurriculars] = useState<any[]>(initialPureExtracurriculars);
 
   const handleSave = () => {
     const isTaskSheetChanged = formData.taskSheetLink !== (student.taskSheetLink || '');
@@ -2336,6 +2461,7 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
       satMathMentor: formData.satMathMentor,
       taskSheetLink: formData.taskSheetLink,
       academicScores: scores,
+      activities: student.activities || [],
       extracurriculars: extracurriculars,
       operationalLogs: [newOpLog, ...(student.operationalLogs || [])]
     });
@@ -2565,43 +2691,75 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
       <Card>
         <CardContent className="p-6">
           <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-2">
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Profile Activities & Extracurriculars</h3>
+            <div>
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Extracurricular Activities & Honors (Profile Building)</h3>
+              <p className="text-xs text-slate-500">Synchronized profile building activities, honors, and commitments across Student Portal & Team Database.</p>
+            </div>
             {isEditing && (
-              <Button size="sm" variant="outline" onClick={() => setExtracurriculars([...extracurriculars, { id: Date.now(), title: '', category: '', verified: false }])}>
+              <Button size="sm" variant="outline" onClick={() => setExtracurriculars([...extracurriculars, { id: 'act_' + Date.now(), title: '', category: 'STEM', role: 'Member', hoursPerWeek: '2', weeksPerYear: '30', verified: false }])}>
                 Add Activity
               </Button>
             )}
           </div>
           <div className="space-y-4">
             {extracurriculars.length === 0 ? (
-               <p className="text-sm text-slate-500">No activities recorded yet.</p>
+               <p className="text-sm text-slate-500 italic bg-slate-50 p-4 rounded-xl text-center border border-dashed border-slate-200">
+                 No profile activities or honors recorded yet by student or counselor.
+               </p>
             ) : (
               extracurriculars.map((act, idx) => (
-                <div key={act.id} className="bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <div key={act.id || idx} className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
                   {isEditing ? (
                     <div className="space-y-3">
-                      <input className="w-full border rounded p-2 text-sm font-bold" placeholder="Role / Title (e.g. Founder)" value={act.title} onChange={e => {
-                        const n = [...extracurriculars]; n[idx].title = e.target.value; setExtracurriculars(n);
-                      }} />
-                      <div className="grid grid-cols-2 gap-3">
-                        <input className="border rounded p-2 text-sm" placeholder="Category (e.g. Leadership)" value={act.category} onChange={e => {
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <input className="border rounded p-2 text-sm font-bold" placeholder="Activity Title / Name" value={act.title || act.name || ''} onChange={e => {
+                          const n = [...extracurriculars]; n[idx].title = e.target.value; setExtracurriculars(n);
+                        }} />
+                        <input className="border rounded p-2 text-sm" placeholder="Role / Position (e.g. Founder, Member)" value={act.role || ''} onChange={e => {
+                          const n = [...extracurriculars]; n[idx].role = e.target.value; setExtracurriculars(n);
+                        }} />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <input className="border rounded p-2 text-sm" placeholder="Category (e.g. STEM, Leadership)" value={act.category || ''} onChange={e => {
                           const n = [...extracurriculars]; n[idx].category = e.target.value; setExtracurriculars(n);
                         }} />
-                        <label className="flex items-center gap-2 text-sm">
-                          <input type="checkbox" checked={act.verified} onChange={e => {
+                        <input className="border rounded p-2 text-sm" placeholder="Hours / Week (e.g. 5)" value={act.hoursPerWeek || ''} onChange={e => {
+                          const n = [...extracurriculars]; n[idx].hoursPerWeek = e.target.value; setExtracurriculars(n);
+                        }} />
+                        <label className="flex items-center gap-2 text-sm bg-white p-2 rounded border border-slate-200 font-medium">
+                          <input type="checkbox" checked={act.verified || false} onChange={e => {
                             const n = [...extracurriculars]; n[idx].verified = e.target.checked; setExtracurriculars(n);
                           }} /> Verified by Counselor
                         </label>
                       </div>
+                      <textarea rows={2} className="w-full border rounded p-2 text-sm resize-none" placeholder="Activity Description & Impact..." value={act.description || ''} onChange={e => {
+                        const n = [...extracurriculars]; n[idx].description = e.target.value; setExtracurriculars(n);
+                      }} />
                     </div>
                   ) : (
                     <div>
                       <div className="flex justify-between items-start">
                         <div>
-                          <h4 className="font-bold text-slate-900">{act.title || 'Untitled Activity'}</h4>
-                          <p className="text-xs text-slate-500 mt-1">{act.category || 'Uncategorized'}</p>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-slate-900">{act.title || act.name || 'Untitled Activity'}</h4>
+                            {act.role && <span className="text-xs bg-indigo-50 text-indigo-700 font-semibold px-2 py-0.5 rounded border border-indigo-100">{act.role}</span>}
+                          </div>
+                          <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                            <span className="font-medium text-slate-700">{act.category || 'Uncategorized'}</span>
+                            {act.hoursPerWeek && <span>• {act.hoursPerWeek} hrs/wk</span>}
+                            {act.weeksPerYear && <span>• {act.weeksPerYear} wks/yr</span>}
+                          </p>
+                          {act.description && <p className="text-xs text-slate-600 mt-2 bg-white p-2.5 rounded-lg border border-slate-100">{act.description}</p>}
                         </div>
-                        {act.verified && <span className="text-[10px] bg-green-100 text-green-700 font-bold px-2 py-1 rounded uppercase">Verified</span>}
+                        {act.verified ? (
+                          <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full uppercase tracking-wider border border-emerald-200">
+                            Verified
+                          </span>
+                        ) : (
+                          <span className="text-[10px] bg-slate-100 text-slate-600 font-medium px-2 py-0.5 rounded">
+                            Pending Verification
+                          </span>
+                        )}
                       </div>
                     </div>
                   )}

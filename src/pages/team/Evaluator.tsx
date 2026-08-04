@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, Essay, EssayVersion } from '@/types';
+import { getScopedStudentsForStaff } from '@/lib/staffPermissions';
 
 interface ExtendedEssay extends Essay {
   studentName: string;
@@ -32,8 +33,11 @@ export default function Evaluator() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
 
-  // Flatten all essays from all students
-  const allEssays: ExtendedEssay[] = students.flatMap(student => 
+  // Scoped student list based on staff permissions
+  const scopedStudents = getScopedStudentsForStaff(students, currentUser);
+
+  // Flatten all essays from scoped students
+  const allEssays: ExtendedEssay[] = scopedStudents.flatMap(student => 
     (student.essays || []).map(essay => ({
       ...essay,
       studentName: student.name,
@@ -237,8 +241,8 @@ export default function Evaluator() {
               onChange={(e) => setSelectedStudentFilter(e.target.value)}
               className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 focus:ring-2 focus:ring-indigo-500"
             >
-              <option value="ALL">All Students ({students.length})</option>
-              {students.map(s => (
+              <option value="ALL">All Students ({scopedStudents.length})</option>
+              {scopedStudents.map(s => (
                 <option key={s.id} value={s.id}>{s.name} ({s.id})</option>
               ))}
             </select>

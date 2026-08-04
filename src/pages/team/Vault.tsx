@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Search, Filter, CheckCircle2, AlertCircle, Clock, FileText, Check, X, ShieldAlert, Eye } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
+import { getScopedStudentsForStaff } from '@/lib/staffPermissions';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 
 interface DocumentInfo {
@@ -22,21 +23,25 @@ interface DocumentInfo {
 const initialDocuments: any[] = [];
 
 export default function TeamVault() {
-  const { students, updateStudent } = useDatabase();
+  const { students, updateStudent, currentUser } = useDatabase();
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
 
   React.useEffect(() => {
-    const allDocs = students.flatMap(s => (s.documents || []).map(d => ({
+    const scopedStudents = getScopedStudentsForStaff(students, currentUser);
+    const allDocs = scopedStudents.flatMap(s => (s.documents || []).map(d => ({
       ...d,
       studentId: s.id,
       studentName: s.name,
       fileExt: 'pdf'
     })));
     setDocuments(allDocs as unknown as DocumentInfo[]);
-  }, [students]);
+  }, [students, currentUser]);
   const [activeTab, setActiveTab] = useState('Pending Verification');
   const [searchQuery, setSearchQuery] = useState('');
-  
+  const [selectedStudentFilter, setSelectedStudentFilter] = useState('ALL');
+
+  const scopedStudents = React.useMemo(() => getScopedStudentsForStaff(students, currentUser), [students, currentUser]);
+
   // Review Drawer & Full Preview Modal State
   const [selectedDoc, setSelectedDoc] = useState<DocumentInfo | null>(null);
   const [fullPreviewDoc, setFullPreviewDoc] = useState<DocumentInfo | null>(null);
@@ -45,6 +50,9 @@ export default function TeamVault() {
   const [feedback, setFeedback] = useState('');
 
   const filteredDocs = documents.filter(d => {
+    if (selectedStudentFilter !== 'ALL' && d.studentId !== selectedStudentFilter) {
+      return false;
+    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       if (!d.name.toLowerCase().includes(q) && 
@@ -129,9 +137,16 @@ export default function TeamVault() {
             />
           </div>
           <div className="flex gap-2 w-full sm:w-auto">
-             <Button variant="outline" className="flex-1 sm:flex-none bg-white border-slate-200 text-slate-700 hover:bg-slate-50">
-               <Filter className="w-4 h-4 mr-2" /> Filter Student
-             </Button>
+             <select
+               value={selectedStudentFilter}
+               onChange={(e) => setSelectedStudentFilter(e.target.value)}
+               className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 shadow-sm cursor-pointer"
+             >
+               <option value="ALL">All Students ({scopedStudents.length})</option>
+               {scopedStudents.map(s => (
+                 <option key={s.id} value={s.id}>{s.name} ({s.id})</option>
+               ))}
+             </select>
           </div>
         </div>
 

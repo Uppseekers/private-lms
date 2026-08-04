@@ -73,7 +73,9 @@ export default function StudentProfile() {
   const [intakeTerm, setIntakeTerm] = useState<string>(initialIntakeParts[0] && intakeTerms.includes(initialIntakeParts[0]) ? initialIntakeParts[0] : 'Fall');
   const [intakeYear, setIntakeYear] = useState<string>(initialIntakeParts[1] || currentYear.toString());
 
-  const [activities, setActivities] = useState<any[]>(student?.activities || []);
+  // Only load student.extracurriculars for profile building extracurricular activities. Do NOT pull website/counselor activities logs!
+  const initialProfileActivities = (student?.extracurriculars || []).filter((a: any) => !a.activityType && !a.performedBy && !a.attendees);
+  const [activities, setActivities] = useState<any[]>(initialProfileActivities);
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
   const [editingActivityIdx, setEditingActivityIdx] = useState<number | null>(null);
   
@@ -187,7 +189,8 @@ export default function StudentProfile() {
         engScore: fd.get('engScore') || student?.engScore || '',
         major1: fd.get('major1') || student?.major1 || '',
         major2: fd.get('major2') || student?.major2 || '',
-        activities: activities
+        extracurriculars: activities,
+        activities: student?.activities || []
       };
       updateStudent(updated);
       setIsSaving(false);

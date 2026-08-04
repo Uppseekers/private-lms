@@ -16,6 +16,7 @@ import {
 } from 'recharts';
 import { useDatabase } from '@/context/DatabaseContext';
 import { normalizeTaskStage, normalizeTaskCategory } from '@/lib/taskActivityUtils';
+import { getScopedStudentsForStaff, canStaffAccessAllStudents } from '@/lib/staffPermissions';
 import { 
   Users, BookOpen, CheckSquare, Clock, Filter, Search, 
   CheckCircle2, AlertCircle, ArrowUpRight, Calendar, UserCheck, 
@@ -24,7 +25,11 @@ import {
 import { cn } from '@/lib/utils';
 
 export default function TeamDashboard() {
-  const { students, batches, events, staff, updateStudent } = useDatabase();
+  const { students, batches, events, staff, updateStudent, currentUser } = useDatabase();
+
+  const scopedStudents = useMemo(() => {
+    return getScopedStudentsForStaff(students, currentUser);
+  }, [students, currentUser]);
 
   // Date & Timeframe Evaluation Filters for Tasks Chart
   const [dateEvalMode, setDateEvalMode] = useState<'DUE_DATE' | 'TASK_DATE'>('DUE_DATE');
@@ -256,7 +261,7 @@ export default function TeamDashboard() {
       counts[i.toString()] = 0;
     }
     
-    students.forEach(student => {
+    scopedStudents.forEach(student => {
       const match = student.intake.match(/\d{4}/);
       if (match) {
         const year = match[0];
@@ -270,7 +275,7 @@ export default function TeamDashboard() {
       year,
       students: counts[year]
     }));
-  }, [students]);
+  }, [scopedStudents]);
 
   // 2. Active Batches calculation
   const activeBatches = useMemo(() => {
@@ -280,9 +285,11 @@ export default function TeamDashboard() {
   // 3. Consolidated All Tasks from Students & Meeting Events
   const allSystemTasks = useMemo(() => {
     const taskList: any[] = [];
+    const canAccessAll = canStaffAccessAllStudents(currentUser);
+    const scopedIds = new Set(scopedStudents.map(s => s.id));
 
     // From Student profile tasks
-    students.forEach(student => {
+    scopedStudents.forEach(student => {
       (student.tasks || []).forEach((t: any) => {
         taskList.push({
           id: t.id || Math.random().toString(),
@@ -305,6 +312,15 @@ export default function TeamDashboard() {
     events.forEach(evt => {
       (evt.tasks || []).forEach((mt: any) => {
         const studentObj = students.find(s => s.id === mt.assignedToStudentId);
+        const targetStudentId = mt.assignedToStudentId || studentObj?.id;
+
+        // If counselor is restricted, only include meeting tasks if student is in scopedStudents or counselor is host
+        if (!canAccessAll) {
+          const isTargetScoped = targetStudentId && scopedIds.has(targetStudentId);
+          const isHost = evt.host === currentUser?.name;
+          if (!isTargetScoped && !isHost) return;
+        }
+
         taskList.push({
           id: mt.id || Math.random().toString(),
           title: mt.title || 'Untitled Meeting Task',
@@ -323,7 +339,7 @@ export default function TeamDashboard() {
     });
 
     return taskList;
-  }, [students, events]);
+  }, [students, scopedStudents, events, currentUser]);
 
   // 4. Stage-wise Tasks Chart Filtering Logic
   const filteredTasksForChart = useMemo(() => {
@@ -577,8 +593,8 @@ export default function TeamDashboard() {
                 onChange={(e) => setSelectedStudentFilter(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg p-2 font-medium text-slate-800 focus:ring-2 focus:ring-indigo-500"
               >
-                <option value="ALL">All Students ({students.length})</option>
-                {students.map(s => (
+                <option value="ALL">All Students ({scopedStudents.length})</option>
+                {scopedStudents.map(s => (
                   <option key={s.id} value={s.id}>{s.name} ({s.id})</option>
                 ))}
               </select>

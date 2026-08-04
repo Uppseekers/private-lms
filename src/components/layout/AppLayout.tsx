@@ -22,6 +22,7 @@ import {
   Target
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getScopedStudentsForStaff } from '@/lib/staffPermissions';
 import { Role } from '@/types';
 import { useDatabase } from '@/context/DatabaseContext';
 import { GoogleSheetsSyncModal } from '@/components/GoogleSheetsSyncModal';
@@ -136,7 +137,7 @@ export default function AppLayout() {
     : [];
 
   const matchingStudents = (query && isTeam)
-    ? students.filter(s => s.name?.toLowerCase().includes(query) || s.email?.toLowerCase().includes(query) || s.counselor?.toLowerCase().includes(query))
+    ? getScopedStudentsForStaff(students, currentUser).filter(s => s.name?.toLowerCase().includes(query) || s.email?.toLowerCase().includes(query) || s.counselor?.toLowerCase().includes(query))
     : [];
 
   const matchingUniversities = query
