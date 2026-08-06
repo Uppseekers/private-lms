@@ -55,7 +55,7 @@ export const COMPETENCIES: CompetencyVector[] = [
     bgLight: 'bg-blue-50 text-blue-700',
     borderLight: 'border-blue-200',
     categoryTriggers: ['Research & Academic', 'Academic', 'Supercurricular'],
-    keywords: ['research', 'academics', 'olympiads', 'debates', 'logic', 'analysis', 'evaluate', 'critique', 'strategy', 'theory', 'investigative', 'audit', 'study', 'hypothesis', 'proof', 'literature', 'synthesis', 'papers', 'philosophy'],
+    keywords: ['research', 'academics', 'olympiads', 'debates', 'logic', 'analysis', 'evaluate', 'critique', 'strategy', 'strategising', 'theory', 'investigative', 'audit', 'study', 'hypothesis', 'proof', 'literature', 'synthesis', 'papers', 'philosophy'],
     description: 'Research, Academics, Olympiads, Debates, Logic, Analysis'
   },
   {
@@ -65,7 +65,7 @@ export const COMPETENCIES: CompetencyVector[] = [
     bgLight: 'bg-cyan-50 text-cyan-700',
     borderLight: 'border-cyan-200',
     categoryTriggers: ['Leadership & STEM', 'STEM', 'STEM & Science'],
-    keywords: ['stem', 'algorithms', 'engineering', 'hackathons', 'robotics', 'sciences', 'solve', 'debug', 'troubleshoot', 'optimize', 'innovate', 'resolve', 'fix', 'challenge', 'solution', 'diagnostic', 'inventions', 'capstone'],
+    keywords: ['stem', 'algorithms', 'engineering', 'hackathons', 'robotics', 'sciences', 'solve', 'debug', 'troubleshoot', 'optimize', 'innovate', 'resolve', 'fix', 'challenge', 'solution', 'diagnostic', 'inventions', 'capstone', 'bug', 'bugs', 'testing', 'test', 'issue', 'issues'],
     description: 'STEM, Algorithms, Engineering, Hackathons, Robotics, Sciences'
   },
   {
@@ -85,7 +85,7 @@ export const COMPETENCIES: CompetencyVector[] = [
     bgLight: 'bg-lime-50 text-lime-700',
     borderLight: 'border-lime-200',
     categoryTriggers: ['Community Service & Clubs', 'Athletics & Sports', 'Community Service'],
-    keywords: ['athletics', 'sports', 'clubs', 'committees', 'volunteering', 'orchestras', 'bands', 'team', 'collaborate', 'member', 'partner', 'organize', 'peer', 'volunteer', 'community', 'coordination', 'mentor', 'outreach', 'varsity', 'tournaments', 'charity'],
+    keywords: ['athletics', 'sports', 'clubs', 'committees', 'volunteering', 'orchestras', 'bands', 'team', 'collaborate', 'member', 'partner', 'organize', 'peer', 'volunteer', 'community', 'coordination', 'mentor', 'outreach', 'varsity', 'tournaments', 'charity', 'leadership', 'lead', 'officer', 'president', 'captain', 'director', 'manager', 'intern', 'internship', 'deliver', 'project'],
     description: 'Athletics/Sports, Clubs, Committees, Volunteering, Orchestras/Bands'
   },
   {
@@ -95,7 +95,7 @@ export const COMPETENCIES: CompetencyVector[] = [
     bgLight: 'bg-amber-50 text-amber-800',
     borderLight: 'border-amber-200',
     categoryTriggers: ['Arts, Music & Design', 'Arts & Music', 'Art & Music'],
-    keywords: ['art', 'music', 'ui/ux design', 'creative writing', 'film', 'architecture', 'design', 'create', 'compose', 'paint', 'build', 'perform', 'produce', 'artistic', 'novel', 'concept', 'media', 'theater', 'prototype', 'animation', 'story'],
+    keywords: ['art', 'music', 'ui/ux design', 'creative writing', 'film', 'architecture', 'design', 'designing', 'create', 'compose', 'paint', 'build', 'building', 'perform', 'produce', 'artistic', 'novel', 'concept', 'media', 'theater', 'prototype', 'animation', 'story'],
     description: 'Art & Music, UI/UX Design, Creative Writing, Film, Architecture'
   },
   {
@@ -105,7 +105,7 @@ export const COMPETENCIES: CompetencyVector[] = [
     bgLight: 'bg-orange-50 text-orange-700',
     borderLight: 'border-orange-200',
     categoryTriggers: ['Coding & Engineering', 'Internship & Projects', 'Internship & Work'],
-    keywords: ['code', 'software', 'hardware', 'arduino', 'labs', 'data analytics', 'program', 'python', 'java', 'cad', 'experiment', 'biotech', 'web', 'ai', 'machine learning', 'circuit', 'biology', 'chemistry', 'physics', 'app launches'],
+    keywords: ['code', 'software', 'hardware', 'arduino', 'labs', 'data analytics', 'program', 'python', 'java', 'cad', 'experiment', 'biotech', 'web', 'ai', 'machine learning', 'circuit', 'biology', 'chemistry', 'physics', 'app launches', 'tool', 'tools', 'bug', 'bugs', 'testing', 'test', 'building', 'build', 'fintech', 'loan', 'credit', 'cibil', 'cobil', 'framework', 'system', 'database', 'api', 'engineering', 'dev', 'developer', 'automation', 'feature'],
     description: 'Code, Software, Hardware/Arduino, Labs, Data Analytics'
   }
 ];
@@ -203,6 +203,51 @@ function getRoleMetrics(roleRaw: string): { bonus: number; multiplier: number; l
   }
 }
 
+function isPureExtracurricularActivity(act: any): boolean {
+  if (!act) return false;
+
+  // 1. Exclude operational / counselor logs / website activity attributes
+  if (act.activityType || act.performedBy || act.attendees) return false;
+
+  // 2. Exclude non-extracurricular activity types
+  const typeUpper = String(act.type || '').toUpperCase();
+  if (['WHATSAPP CHAT', 'AUDIO CALL', 'ZOHO/ZOOM CALL', 'ZOOM CALL', 'TASK', 'ESSAY', 'DOCUMENT', 'COUNSELOR_LOG', 'STATUS', 'LOG', 'MEETING', 'SYSTEM'].includes(typeUpper)) {
+    return false;
+  }
+
+  // 3. Exclude non-extracurricular activity categories
+  const catUpper = String(act.category || '').toUpperCase();
+  if (['MEETING', 'TASK', 'ESSAY', 'DOCUMENT', 'COUNSELOR_LOG', 'STATUS', 'SYSTEM_LOG'].includes(catUpper)) {
+    return false;
+  }
+
+  // 4. Exclude titles/names/descriptions that indicate portal logs or essay/task updates
+  const titleLower = String(act.title || act.name || act.activityName || act.description || '').toLowerCase().trim();
+  if (
+    titleLower.startsWith('essay:') ||
+    titleLower.startsWith('task:') ||
+    titleLower.startsWith('document:') ||
+    titleLower.includes('whatsapp chat') ||
+    titleLower.includes('zoho call') ||
+    titleLower.includes('zoom call') ||
+    titleLower.includes('audio call') ||
+    titleLower.includes('counselor update') ||
+    titleLower.includes('counselor log') ||
+    titleLower.includes('essay draft') ||
+    titleLower.includes('essay review') ||
+    titleLower.includes('task revision') ||
+    titleLower.includes('essay writing')
+  ) {
+    return false;
+  }
+
+  // 5. Must have a valid title or name or activityName or organization
+  const hasTitle = Boolean(act.title || act.name || act.activityName || act.organization);
+  if (!hasTitle) return false;
+
+  return true;
+}
+
 interface CompetencyRadarProps {
   student?: any;
   isTeamView?: boolean;
@@ -225,20 +270,23 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
   // Selected major view mode: 'major1' | 'major2' | preset id
   const [selectedMajorSource, setSelectedMajorSource] = useState<string>('major1');
 
-  // Extract Profile Activities from Section 6
+  // Extract Profile Activities from Section 6 (Profile Building Extracurriculars)
   const profileActivities: ActivityRecord[] = useMemo(() => {
-    const rawList = [
-      ...(currentStudent?.activities || []),
-      ...(currentStudent?.extracurriculars || [])
-    ];
+    // Prefer student.extracurriculars array (Section 6 Profile Building)
+    const rawList = Array.isArray(currentStudent?.extracurriculars)
+      ? currentStudent.extracurriculars
+      : (Array.isArray(currentStudent?.activities) ? currentStudent.activities : []);
 
     if (!rawList || rawList.length === 0) return [];
+
+    const pureActivities = rawList.filter(isPureExtracurricularActivity);
+    if (pureActivities.length === 0) return [];
 
     const seen = new Set<string>();
     const result: ActivityRecord[] = [];
 
-    rawList.forEach((act: any, idx: number) => {
-      const rawTitle = act.title || act.description || act.organization || `Activity #${idx + 1}`;
+    pureActivities.forEach((act: any, idx: number) => {
+      const rawTitle = act.title || act.activityName || act.name || act.organization || `Activity #${idx + 1}`;
       const key = act.id || `${rawTitle}_${idx}`;
       if (seen.has(key)) return;
       seen.add(key);
@@ -302,80 +350,102 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
 
       const matchedVectorsForThisAct: string[] = [];
 
-      // 1. Matrix Domain Mapping Check
-      DOMAIN_COVERAGE_MATRIX.forEach(domain => {
-        const catMatch = domain.categoryTriggers.some(c => act.category.toLowerCase().includes(c.toLowerCase()));
-        const indicatorMatch = domain.indicators.some(ind => fullText.includes(ind.toLowerCase()));
+      // 1. Matrix Domain Mapping Check based on Activity Category Field
+      let matchedDomain = DOMAIN_COVERAGE_MATRIX.find(domain =>
+        domain.categoryTriggers.some(c => act.category.toLowerCase().includes(c.toLowerCase()))
+      );
 
-        if (catMatch || indicatorMatch) {
-          const matchLabel = catMatch ? `Domain: ${domain.fieldType}` : `Keywords (${domain.fieldType})`;
+      if (!matchedDomain) {
+        matchedDomain = DOMAIN_COVERAGE_MATRIX.find(domain =>
+          act.category.toLowerCase().includes(domain.fieldType.toLowerCase())
+        );
+      }
 
-          // Primary vectors get 100% points
-          domain.primaryVectors.forEach(vecId => {
-            if (rawScores[vecId] !== undefined) {
-              rawScores[vecId] += calculatedPoints;
-              const vecObj = COMPETENCIES.find(c => c.id === vecId);
-              if (vecObj && !matchedVectorsForThisAct.includes(vecObj.name)) {
-                matchedVectorsForThisAct.push(vecObj.name);
-              }
-              vectorMatchDetails[vecId].push({
-                activityTitle: act.title,
-                points: calculatedPoints,
-                reason: `Primary ${matchLabel}`,
-                roleLabel: roleInfo.label,
-                hoursLabel: baseInfo.category
-              });
+      if (matchedDomain) {
+        const matchLabel = `Domain (${matchedDomain.fieldType})`;
+
+        // Primary vectors get 100% points
+        matchedDomain.primaryVectors.forEach(vecId => {
+          if (rawScores[vecId] !== undefined) {
+            rawScores[vecId] += calculatedPoints;
+            const vecObj = COMPETENCIES.find(c => c.id === vecId);
+            if (vecObj && !matchedVectorsForThisAct.includes(vecObj.name)) {
+              matchedVectorsForThisAct.push(vecObj.name);
             }
-          });
+            vectorMatchDetails[vecId].push({
+              activityTitle: act.title,
+              points: calculatedPoints,
+              reason: `Primary ${matchLabel}`,
+              roleLabel: roleInfo.label,
+              hoursLabel: baseInfo.category
+            });
+          }
+        });
 
-          // Secondary vectors get 50% points (0.5x weightage)
-          domain.secondaryVectors.forEach(vecId => {
-            if (rawScores[vecId] !== undefined) {
-              const secPts = Number((calculatedPoints * 0.5).toFixed(2));
-              rawScores[vecId] += secPts;
-              const vecObj = COMPETENCIES.find(c => c.id === vecId);
-              if (vecObj && !matchedVectorsForThisAct.includes(`${vecObj.name} (Sec)`)) {
-                matchedVectorsForThisAct.push(`${vecObj.name} (Sec)`);
-              }
-              vectorMatchDetails[vecId].push({
-                activityTitle: act.title,
-                points: secPts,
-                reason: `Secondary ${matchLabel}`,
-                roleLabel: roleInfo.label,
-                hoursLabel: baseInfo.category
-              });
+        // Secondary vectors get 50% points (0.5x weightage)
+        matchedDomain.secondaryVectors.forEach(vecId => {
+          if (rawScores[vecId] !== undefined) {
+            const secPts = Number((calculatedPoints * 0.5).toFixed(2));
+            rawScores[vecId] += secPts;
+            const vecObj = COMPETENCIES.find(c => c.id === vecId);
+            if (vecObj && !matchedVectorsForThisAct.includes(`${vecObj.name} (Sec)`)) {
+              matchedVectorsForThisAct.push(`${vecObj.name} (Sec)`);
             }
-          });
-        }
-      });
+            vectorMatchDetails[vecId].push({
+              activityTitle: act.title,
+              points: secPts,
+              reason: `Secondary ${matchLabel}`,
+              roleLabel: roleInfo.label,
+              hoursLabel: baseInfo.category
+            });
+          }
+        });
+      }
 
-      // 2. Direct Fallback Competency Keyword Check (if not already mapped)
+      // 2. Key Indicator & Keyword Check (Covers other vectors beyond primary & secondary)
       COMPETENCIES.forEach(comp => {
         let isMatch = false;
         let matchReason = '';
 
-        if (comp.categoryTriggers.some(c => act.category.toLowerCase().includes(c.toLowerCase()))) {
+        const matchedKw = comp.keywords.find(kw => fullText.includes(kw.toLowerCase()));
+        if (matchedKw) {
+          isMatch = true;
+          matchReason = `Key Indicator (${matchedKw})`;
+        } else if (comp.categoryTriggers.some(c => act.category.toLowerCase().includes(c.toLowerCase()))) {
           isMatch = true;
           matchReason = `Category (${act.category})`;
         }
 
-        comp.keywords.forEach(kw => {
-          if (fullText.includes(kw.toLowerCase())) {
-            isMatch = true;
-            matchReason = matchReason ? `${matchReason}, Keyword (${kw})` : `Keyword (${kw})`;
-          }
-        });
+        const isPrimaryMapped = matchedVectorsForThisAct.includes(comp.name);
+        const isSecondaryMapped = matchedVectorsForThisAct.includes(`${comp.name} (Sec)`);
 
-        if (isMatch && !matchedVectorsForThisAct.some(v => v.includes(comp.name))) {
-          rawScores[comp.id] += calculatedPoints;
-          matchedVectorsForThisAct.push(comp.name);
-          vectorMatchDetails[comp.id].push({
-            activityTitle: act.title,
-            points: calculatedPoints,
-            reason: matchReason,
-            roleLabel: roleInfo.label,
-            hoursLabel: baseInfo.category
-          });
+        if (isMatch && !isPrimaryMapped) {
+          if (isSecondaryMapped) {
+            // Upgrade secondary 50% mapping to full 100% mapping via direct key indicator match
+            const addedPoints = Number((calculatedPoints * 0.5).toFixed(2));
+            rawScores[comp.id] += addedPoints;
+            const secIdx = matchedVectorsForThisAct.indexOf(`${comp.name} (Sec)`);
+            if (secIdx !== -1) matchedVectorsForThisAct[secIdx] = comp.name;
+            vectorMatchDetails[comp.id].push({
+              activityTitle: act.title,
+              points: addedPoints,
+              reason: `Primary Upgrade: ${matchReason}`,
+              roleLabel: roleInfo.label,
+              hoursLabel: baseInfo.category
+            });
+          } else {
+            // Key indicator covers other vector than primary and secondary (3rd or 4th vector gets 25% weightage)
+            const thirdOrFourthPoints = Number((calculatedPoints * 0.25).toFixed(2));
+            rawScores[comp.id] += thirdOrFourthPoints;
+            matchedVectorsForThisAct.push(`${comp.name} (25%)`);
+            vectorMatchDetails[comp.id].push({
+              activityTitle: act.title,
+              points: thirdOrFourthPoints,
+              reason: `3rd/4th Vector Highlight (${matchReason})`,
+              roleLabel: roleInfo.label,
+              hoursLabel: baseInfo.category
+            });
+          }
         }
       });
 
@@ -477,6 +547,60 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
     });
     return gaps;
   }, [competencyScores, currentMajorInfo]);
+
+  // Portfolio Commitment Depth Calculations
+  const portfolioCommitmentDepth = useMemo(() => {
+    const totalHours = activityBreakdown.reduce((sum, a) => sum + (a.annualHours || 0), 0);
+    const highCommitmentCount = profileActivities.filter(a => {
+      const h = (Number(a.hoursPerWeek) || 0) * (Number(a.weeksPerYear) || 0);
+      const isLeader = /president|founder|captain|lead|head|chair|director|chief|initiator|creator/i.test(a.role || '');
+      return h >= 80 || isLeader;
+    }).length;
+
+    let tierLabel = 'Tier 3: Early Depth (<150 hrs/yr)';
+    let tierBadge = 'bg-slate-100 text-slate-700 border-slate-200';
+    if (totalHours >= 300) {
+      tierLabel = 'Tier 1: High Depth (>300 hrs/yr)';
+      tierBadge = 'bg-emerald-100 text-emerald-800 border-emerald-300';
+    } else if (totalHours >= 150) {
+      tierLabel = 'Tier 2: Moderate Depth (150-300 hrs/yr)';
+      tierBadge = 'bg-blue-100 text-blue-800 border-blue-300';
+    }
+
+    const totalWeeklyHours = profileActivities.reduce((acc, a) => acc + (Number(a.hoursPerWeek) || 0), 0);
+    const avgWeeklyHours = profileActivities.length > 0 ? (totalWeeklyHours / profileActivities.length).toFixed(1) : '0';
+
+    return {
+      totalHours,
+      highCommitmentCount,
+      tierLabel,
+      tierBadge,
+      avgWeeklyHours
+    };
+  }, [activityBreakdown, profileActivities]);
+
+  // Portfolio Engagement Width Calculations
+  const portfolioEngagementWidth = useMemo(() => {
+    const activeVectorsCount = COMPETENCIES.filter(c => (competencyScores[c.id] || 0) > 0).length;
+    let widthLabel = 'Specialized Focus (1-2 Vectors)';
+    let widthBadge = 'bg-amber-100 text-amber-800 border-amber-300';
+
+    if (activeVectorsCount >= 5) {
+      widthLabel = 'Broad Multi-Disciplinary Width (5-6 Vectors)';
+      widthBadge = 'bg-indigo-100 text-indigo-800 border-indigo-300';
+    } else if (activeVectorsCount >= 3) {
+      widthLabel = 'Balanced Core Width (3-4 Vectors)';
+      widthBadge = 'bg-blue-100 text-blue-800 border-blue-300';
+    }
+
+    return {
+      activeVectorsCount,
+      totalActivitiesCount: profileActivities.length,
+      widthLabel,
+      widthBadge,
+      coveredPct: Math.round((activeVectorsCount / 6) * 100)
+    };
+  }, [competencyScores, profileActivities]);
 
   // SVG Spider Radar Coordinates Calculation
   const CX = 180;
@@ -1041,14 +1165,19 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
 
           {/* Automated Portfolio Strategy Index */}
           <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-5">
-            <div className="border-b border-slate-100 pb-3">
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-indigo-600" /> Automated Portfolio Strategy Index
-              </h3>
-              <p className="text-[11px] text-slate-500">Holistic evaluation based on university admissions assessment standards</p>
+            <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                  <TrendingUp className="w-4 h-4 text-indigo-600" /> Automated Portfolio Strategy Index
+                </h3>
+                <p className="text-[11px] text-slate-500">Holistic evaluation based on university admissions assessment standards</p>
+              </div>
+              <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">
+                Admissions Strategy Engine
+              </span>
             </div>
 
-            {/* Portfolio Coverage & Gaps Meter */}
+            {/* Portfolio Coverage Index Meter */}
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
@@ -1073,47 +1202,92 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
               </div>
             </div>
 
-            {/* Dominant Competencies & Identified Gaps Section */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {/* 3 Key Pillars: Admissions Spike Assessment, Commitment Depth, Engagement Width */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               
-              {/* Dominant Competency Card */}
-              <div className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-xl space-y-2">
-                <div className="flex items-center gap-1.5 text-emerald-900 font-bold text-xs">
-                  <Award className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Dominant Competency</span>
+              {/* Pillar 1: Admissions Spike Assessment */}
+              <div className="p-4 bg-indigo-50/70 border border-indigo-200/90 rounded-2xl space-y-2.5 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
+                      <Award className="w-4 h-4 text-indigo-600 shrink-0" /> Admissions Spike Assessment
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 border border-indigo-200">
+                      {isSpikeProminent ? 'Prominent Spike' : 'Developing Spike'}
+                    </span>
+                  </div>
+
+                  <div className="text-sm font-extrabold text-slate-900 pt-1">
+                    {topCompetency.name} ({topCompetency.score} / 10.0)
+                  </div>
+
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    {isSpikeAlignedWithMajor ? (
+                      <>Direct major synergy with <strong>{currentMajorInfo.label}</strong>.</>
+                    ) : (
+                      <>Secondary domain pillar alongside <strong>{currentMajorInfo.label}</strong>.</>
+                    )}
+                  </p>
                 </div>
-                <div className="text-sm font-extrabold text-slate-900">
-                  {topCompetency.name} ({topCompetency.score} / 10.0)
+
+                <div className="pt-2 border-t border-indigo-200/60 text-[10px] text-indigo-900 font-semibold">
+                  Spike Status: {isSpikeProminent ? 'Standout Domain Depth' : 'Focus on Leadership Entries'}
                 </div>
-                <p className="text-[11px] text-slate-600 leading-relaxed">
-                  {isSpikeAlignedWithMajor ? (
-                    <>Strong alignment with target field in <strong>{currentMajorInfo.label}</strong>.</>
-                  ) : (
-                    <>Provides a strong secondary pillar alongside <strong>{currentMajorInfo.label}</strong>.</>
-                  )}
-                </p>
               </div>
 
-              {/* Identified Gaps Card */}
-              <div className="p-4 bg-amber-50/60 border border-amber-200 rounded-xl space-y-2">
-                <div className="flex items-center gap-1.5 text-amber-900 font-bold text-xs">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>Identified Gaps ({identifiedGaps.length})</span>
+              {/* Pillar 2: Portfolio Commitment Depth */}
+              <div className="p-4 bg-emerald-50/70 border border-emerald-200/90 rounded-2xl space-y-2.5 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                      <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" /> Portfolio Commitment Depth
+                    </span>
+                    <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded border", portfolioCommitmentDepth.tierBadge)}>
+                      {portfolioCommitmentDepth.tierLabel.split(':')[0]}
+                    </span>
+                  </div>
+
+                  <div className="text-sm font-extrabold text-slate-900 pt-1 flex items-baseline gap-1.5">
+                    <span>{portfolioCommitmentDepth.totalHours} Annual Hours</span>
+                    <span className="text-[11px] font-normal text-slate-500">logged</span>
+                  </div>
+
+                  <div className="text-[11px] text-slate-600 space-y-0.5">
+                    <div>• <strong>{portfolioCommitmentDepth.highCommitmentCount}</strong> High-Commitment / Leadership activities</div>
+                    <div>• <strong>{portfolioCommitmentDepth.avgWeeklyHours} hrs/wk</strong> average commitment</div>
+                  </div>
                 </div>
-                <div className="text-xs font-bold text-slate-800">
-                  {identifiedGaps.length > 0 ? (
-                    identifiedGaps.map(g => g.name).join(', ')
-                  ) : (
-                    'No critical gaps identified!'
-                  )}
+
+                <div className="pt-2 border-t border-emerald-200/60 text-[10px] text-emerald-900 font-semibold truncate">
+                  Depth Level: {portfolioCommitmentDepth.tierLabel}
                 </div>
-                <p className="text-[11px] text-slate-600 leading-relaxed">
-                  {identifiedGaps.length > 0 ? (
-                    <>Focus on adding activities matching these vector domains to balance coverage.</>
-                  ) : (
-                    <>High overall balance across vector domains.</>
-                  )}
-                </p>
+              </div>
+
+              {/* Pillar 3: Portfolio Engagement Width */}
+              <div className="p-4 bg-cyan-50/70 border border-cyan-200/90 rounded-2xl space-y-2.5 flex flex-col justify-between">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-cyan-950 flex items-center gap-1.5">
+                      <Zap className="w-4 h-4 text-cyan-600 shrink-0" /> Portfolio Engagement Width
+                    </span>
+                    <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded border", portfolioEngagementWidth.widthBadge)}>
+                      {portfolioEngagementWidth.coveredPct}% Coverage
+                    </span>
+                  </div>
+
+                  <div className="text-sm font-extrabold text-slate-900 pt-1">
+                    {portfolioEngagementWidth.activeVectorsCount} of 6 Vectors Covered
+                  </div>
+
+                  <div className="text-[11px] text-slate-600 space-y-0.5">
+                    <div>• <strong>{portfolioEngagementWidth.totalActivitiesCount}</strong> total profile activities</div>
+                    <div className="truncate">• Gaps: {identifiedGaps.length > 0 ? identifiedGaps.map(g => g.name).join(', ') : 'None'}</div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-cyan-200/60 text-[10px] text-cyan-900 font-semibold truncate">
+                  Width Rating: {portfolioEngagementWidth.widthLabel}
+                </div>
               </div>
 
             </div>
@@ -1122,17 +1296,17 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
             <div className="p-4 bg-indigo-50/80 border border-indigo-100 rounded-2xl space-y-2 text-xs">
               <div className="flex items-center gap-2 text-indigo-950 font-bold">
                 <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                <span>Admissions Strategy & Guidance</span>
+                <span>Admissions Officer Strategic Synthesis</span>
               </div>
 
               <p className="text-slate-700 leading-relaxed text-[11px]">
                 {isSpikeProminent && isSpikeAlignedWithMajor ? (
                   <>
-                    The student profile exhibits a distinct <strong>{topCompetency.name}</strong> spike that directly supports target applications in <strong>{currentMajorInfo.label}</strong>. Top-tier university admissions favor candidates with clear domain depth supported by meaningful leadership roles.
+                    The student profile exhibits a distinct <strong>{topCompetency.name}</strong> spike ({topCompetency.score}/10) that directly supports target applications in <strong>{currentMajorInfo.label}</strong> with a total commitment of <strong>{portfolioCommitmentDepth.totalHours} annual hours</strong> across <strong>{portfolioEngagementWidth.activeVectorsCount} vector domains</strong>.
                   </>
                 ) : (
                   <>
-                    The student's top competency is <strong>{topCompetency.name} ({topCompetency.score}/10)</strong>. To optimize the profile for <strong>{currentMajorInfo.label}</strong>, focus on converting key activities into high-commitment entries with initiative or leadership roles.
+                    The student's top competency is <strong>{topCompetency.name} ({topCompetency.score}/10)</strong> with <strong>{portfolioCommitmentDepth.totalHours} annual hours</strong> logged. To optimize the profile for <strong>{currentMajorInfo.label}</strong>, convert key entries into leadership or student-led initiative roles to elevate commitment depth.
                   </>
                 )}
               </p>
