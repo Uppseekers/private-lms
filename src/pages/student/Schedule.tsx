@@ -63,8 +63,26 @@ export default function StudentSchedule() {
     location: e.location || e.link || 'https://meet.google.com'
   }));
 
-  const upcomingClassesFiltered = formattedEvents.filter(e => e.status !== 'Completed' && e.status !== 'Canceled');
-  const pastClassesFiltered = formattedEvents.filter(e => e.status === 'Completed');
+  const isEventInPast = (e: any): boolean => {
+    if (e.status === 'Completed') return true;
+    if (e.status === 'Canceled') return false;
+    const dateStr = e.day || e.date;
+    if (!dateStr || dateStr.toLowerCase() === 'today') return false;
+    try {
+      const evtDate = new Date(dateStr);
+      if (!isNaN(evtDate.getTime())) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const evtMidnight = new Date(evtDate);
+        evtMidnight.setHours(0, 0, 0, 0);
+        if (evtMidnight.getTime() < today.getTime()) return true;
+      }
+    } catch(err) {}
+    return false;
+  };
+
+  const upcomingClassesFiltered = formattedEvents.filter(e => !isEventInPast(e) && e.status !== 'Canceled');
+  const pastClassesFiltered = formattedEvents.filter(e => isEventInPast(e));
   const canceledClassesFiltered = formattedEvents.filter(e => e.status === 'Canceled');
 
   const displayedClasses = horizon === 'upcoming' ? upcomingClassesFiltered : (horizon === 'past' ? pastClassesFiltered : canceledClassesFiltered);
@@ -525,20 +543,30 @@ export default function StudentSchedule() {
 
             <div className="p-6 overflow-y-auto space-y-6 text-xs flex-1">
               {/* Join Call Link */}
-              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 flex items-center justify-between">
+              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between">
                 <div>
-                  <h4 className="font-bold text-blue-900 text-sm">Meeting Link & Video Room</h4>
-                  <p className="text-blue-700 text-xs mt-0.5">Click to launch Google Meet / Video call directly</p>
+                  <h4 className="font-bold text-slate-900 text-sm">Meeting Link & Video Room</h4>
+                  <p className="text-slate-500 text-xs mt-0.5">
+                    {isEventInPast(selectedMeetingModal) 
+                      ? 'This scheduled call session has concluded.' 
+                      : 'Click to launch Google Meet / Video call directly'}
+                  </p>
                 </div>
-                <Button 
-                  onClick={() => {
-                    const meetingUrl = selectedMeetingModal.location || selectedMeetingModal.link || 'https://meet.google.com';
-                    window.open(meetingUrl.startsWith('http') ? meetingUrl : `https://${meetingUrl}`, '_blank');
-                  }}
-                  className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
-                >
-                  <Video className="w-4 h-4 mr-1.5" /> Join Call
-                </Button>
+                {isEventInPast(selectedMeetingModal) ? (
+                  <span className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-200 text-slate-600 border border-slate-300 flex items-center gap-1.5">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-slate-500" /> Call Ended
+                  </span>
+                ) : (
+                  <Button 
+                    onClick={() => {
+                      const meetingUrl = selectedMeetingModal.location || selectedMeetingModal.link || 'https://meet.google.com';
+                      window.open(meetingUrl.startsWith('http') ? meetingUrl : `https://${meetingUrl}`, '_blank');
+                    }}
+                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
+                  >
+                    <Video className="w-4 h-4 mr-1.5" /> Join Call
+                  </Button>
+                )}
               </div>
 
               {/* Pre-read Notes / Agenda */}

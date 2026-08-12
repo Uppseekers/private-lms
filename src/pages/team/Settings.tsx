@@ -62,7 +62,7 @@ export default function TeamSettings() {
 
   // Audit Logs
   const [auditLogs, setAuditLogs] = useState([
-    { id: '1', date: 'July 30, 2026 - 14:05', user: 'Sarah Jenkins', role: 'Counselor', action: 'Added new user Dr. Aris Thorne (Role: Research Mentor)' },
+    { id: '1', date: 'July 30, 2026 - 14:05', user: 'Sarah Jenkins', role: 'Counselor', action: 'Added new user Dr. Aris Thorne (Role: Research Guide)' },
   ]);
 
   const addAuditLog = (action: string) => {

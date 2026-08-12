@@ -49,15 +49,15 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
   };
 
   return (
-    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-      <div className="bg-white rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col">
-        <div className="p-6 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+    <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200 overflow-y-auto">
+      <div className="bg-white rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh] my-auto border border-slate-100">
+        <div className="p-6 bg-slate-50 border-b border-slate-100 flex justify-between items-center shrink-0">
           <h2 className="text-xl font-bold text-slate-900">Create New Task</h2>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-2 rounded-full">
              <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-6 space-y-4">
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-2">Task Name</label>
             <input 
@@ -108,9 +108,9 @@ const CreateTaskModal: React.FC<{ onClose: () => void, onCreate: (t: Task) => vo
             />
           </div>
         </div>
-        <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3">
+        <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-end gap-3 shrink-0">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={handleCreate}>Create Task</Button>
+          <Button className="bg-blue-600 hover:bg-blue-700 text-white font-bold" onClick={handleCreate}>Create Task</Button>
         </div>
       </div>
     </div>

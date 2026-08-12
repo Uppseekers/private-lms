@@ -38,23 +38,36 @@ export default function Evaluator() {
 
   // Flatten all essays from scoped students
   const allEssays: ExtendedEssay[] = scopedStudents.flatMap(student => 
-    (student.essays || []).map(essay => ({
-      ...essay,
-      studentName: student.name,
-      studentId: student.id,
-      counselor: student.counselor,
-      studentEmail: student.email
-    }))
+    (student.essays || []).map(essay => {
+      const displayTitle = essay.title || essay.prompt || 'Untitled Essay';
+      const displayPrompt = essay.prompt || essay.title || 'Application Essay Prompt';
+      const displayUniversity = essay.university || 'General Application';
+      return {
+        ...essay,
+        title: displayTitle,
+        prompt: displayPrompt,
+        university: displayUniversity,
+        studentName: student.name,
+        studentId: student.id,
+        counselor: student.counselor,
+        studentEmail: student.email
+      };
+    })
   );
 
   // Filtered queue
   const filteredEssays = allEssays.filter(essay => {
     const q = searchQuery.toLowerCase();
+    const titleText = (essay.title || '').toLowerCase();
+    const promptText = (essay.prompt || '').toLowerCase();
+    const uniText = (essay.university || '').toLowerCase();
+    const studentText = (essay.studentName || '').toLowerCase();
+
     const matchesSearch = !q || 
-      essay.studentName.toLowerCase().includes(q) || 
-      essay.title.toLowerCase().includes(q) || 
-      (essay.prompt && essay.prompt.toLowerCase().includes(q)) ||
-      (essay.university && essay.university.toLowerCase().includes(q));
+      studentText.includes(q) || 
+      titleText.includes(q) || 
+      promptText.includes(q) ||
+      uniText.includes(q);
 
     const matchesStudent = selectedStudentFilter === 'ALL' || essay.studentId === selectedStudentFilter;
     const matchesStatus = selectedStatusFilter === 'ALL' || essay.status === selectedStatusFilter;
@@ -68,18 +81,14 @@ export default function Evaluator() {
 
   const handleOpenEditor = (essay: ExtendedEssay) => {
     setActiveEssay(essay);
-    const latestVersion = essay.versions && essay.versions.length > 0 ? essay.versions[essay.versions.length - 1] : null;
+    const versions = essay.versions || [];
+    const versionWithContent = versions.find(v => v && typeof v.content === 'string' && v.content.trim().length > 0);
+    const latestVersion = versionWithContent || (versions.length > 0 ? versions[0] : null);
+
     setEditedContent(latestVersion?.content || '');
     setEvaluationStatus(essay.status as any || 'Under Review');
     setMentorComment('');
-    setCommentsList(latestVersion?.inlineComments || [
-      {
-        id: '1',
-        author: essay.counselor || 'Counselor',
-        date: 'Aug 1, 2026',
-        text: 'Strong opening hook! Ensure the transition between the local vendor story and your computational interest feels natural.'
-      }
-    ]);
+    setCommentsList(latestVersion?.inlineComments || []);
     setSaveSuccess(false);
   };
 

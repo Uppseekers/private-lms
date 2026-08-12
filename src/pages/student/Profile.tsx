@@ -2,8 +2,11 @@ import { useDatabase } from '@/context/DatabaseContext';
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, Upload, Plus, ShieldCheck, Clock, FileText, AlertCircle, Trash2, Edit3, X } from 'lucide-react';
+import { CheckCircle2, Upload, Plus, ShieldCheck, Clock, FileText, AlertCircle, Trash2, Edit3, X, Calendar } from 'lucide-react';
 import { INDIAN_CITIES, WORLD_COUNTRIES } from '@/data/locationAndUniData';
+import { cn } from '@/lib/utils';
+
+const ALL_CLASSES = ['Class 9', 'Class 10', 'Class 11', 'Class 12'];
 
 // Reusable components
 const Label = ({ children }: { children: React.ReactNode }) => (
@@ -85,9 +88,22 @@ export default function StudentProfile() {
   const [actCategory, setActCategory] = useState('Research & Academic');
   const [actOrg, setActOrg] = useState('');
   const [actDesc, setActDesc] = useState('');
-  const [actYears, setActYears] = useState('11th, 12th Grade');
+  const [actYears, setActYears] = useState('Class 11, Class 12');
+  const [actSelectedClasses, setActSelectedClasses] = useState<string[]>(['Class 11', 'Class 12']);
   const [actHoursPerWeek, setActHoursPerWeek] = useState('5');
   const [actWeeksPerYear, setActWeeksPerYear] = useState('30');
+
+  const toggleClassSelection = (cls: string) => {
+    let updated: string[];
+    if (actSelectedClasses.includes(cls)) {
+      updated = actSelectedClasses.filter(c => c !== cls);
+    } else {
+      updated = [...actSelectedClasses, cls];
+    }
+    updated.sort((a, b) => ALL_CLASSES.indexOf(a) - ALL_CLASSES.indexOf(b));
+    setActSelectedClasses(updated);
+    setActYears(updated.length > 0 ? updated.join(', ') : 'Class 11, Class 12');
+  };
 
   const openAddActivityModal = () => {
     if (activities.length >= 16) return;
@@ -97,7 +113,8 @@ export default function StudentProfile() {
     setActCategory('Research & Academic');
     setActOrg('');
     setActDesc('');
-    setActYears('11th, 12th Grade');
+    setActSelectedClasses(['Class 11', 'Class 12']);
+    setActYears('Class 11, Class 12');
     setActHoursPerWeek('5');
     setActWeeksPerYear('30');
     setIsActivityModalOpen(true);
@@ -111,7 +128,18 @@ export default function StudentProfile() {
     setActCategory(act.category || 'Research & Academic');
     setActOrg(act.organization || '');
     setActDesc(act.description || '');
-    setActYears(act.date || act.years || '11th, 12th Grade');
+    
+    const existingYears = act.classes || act.years || act.date || 'Class 11, Class 12';
+    setActYears(existingYears);
+
+    // Derive selected classes from existing string if present
+    const matched = ALL_CLASSES.filter(c => 
+      existingYears.toLowerCase().includes(c.toLowerCase()) || 
+      existingYears.toLowerCase().includes(c.toLowerCase().replace('class ', '')) ||
+      existingYears.toLowerCase().includes(c.toLowerCase().replace('class ', 'grade '))
+    );
+    setActSelectedClasses(matched.length > 0 ? matched : ['Class 11', 'Class 12']);
+
     setActHoursPerWeek(act.hoursPerWeek || '5');
     setActWeeksPerYear(act.weeksPerYear || '30');
     setIsActivityModalOpen(true);
@@ -119,6 +147,7 @@ export default function StudentProfile() {
 
   const handleSaveActivity = () => {
     if (!actTitle.trim()) return;
+    const yearCoverageStr = actSelectedClasses.length > 0 ? actSelectedClasses.join(', ') : actYears;
     const newAct = {
       id: editingActivityIdx !== null ? activities[editingActivityIdx].id : 'act_' + Date.now(),
       title: actTitle.trim(),
@@ -126,8 +155,9 @@ export default function StudentProfile() {
       category: actCategory,
       organization: actOrg.trim(),
       description: actDesc.trim(),
-      date: actYears,
-      years: actYears,
+      date: yearCoverageStr,
+      years: yearCoverageStr,
+      classes: yearCoverageStr,
       hoursPerWeek: actHoursPerWeek.trim(),
       weeksPerYear: actWeeksPerYear.trim()
     };
@@ -347,7 +377,7 @@ export default function StudentProfile() {
             <p className="text-xs text-slate-500 mt-1">Standardized Prep Advisor</p>
           </div>
           <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <span className="text-[10px] uppercase font-bold text-purple-600 block mb-1">Research Mentor</span>
+            <span className="text-[10px] uppercase font-bold text-purple-600 block mb-1">Research Guide</span>
             <p className="font-bold text-slate-900">Academic Mentor</p>
             <p className="text-xs text-slate-500 mt-1">Projects & Research Lead</p>
           </div>
@@ -420,8 +450,13 @@ export default function StudentProfile() {
                   </div>
                 </div>
                 {act.description && <p className="text-slate-600 line-clamp-2">{act.description}</p>}
-                <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100 text-[10px] text-slate-500 font-medium">
-                  {act.date && <span className="bg-slate-200/70 px-2 py-0.5 rounded font-semibold text-slate-700">{act.date}</span>}
+                <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-slate-100 text-[10px] text-slate-500 font-medium">
+                  {(act.years || act.date || act.classes) && (
+                    <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded font-bold flex items-center gap-1">
+                      <Calendar className="w-3 h-3 text-indigo-500" />
+                      Class Coverage: {act.years || act.date || act.classes}
+                    </span>
+                  )}
                   {(act.hoursPerWeek || act.weeksPerYear) && (
                     <span className="bg-blue-50 text-blue-700 border border-blue-100 px-2 py-0.5 rounded font-bold">
                       ⏱️ {act.hoursPerWeek ? `${act.hoursPerWeek} hrs/wk` : ''}{act.hoursPerWeek && act.weeksPerYear ? ' • ' : ''}{act.weeksPerYear ? `${act.weeksPerYear} wks/yr` : ''}
@@ -441,18 +476,18 @@ export default function StudentProfile() {
 
       {/* Activity Modal */}
       {isActivityModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-xl space-y-4">
-            <div className="flex justify-between items-center border-b pb-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm overflow-y-auto">
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl max-h-[90vh] flex flex-col my-auto overflow-hidden border border-slate-100">
+            <div className="flex justify-between items-center border-b border-slate-200 p-4 sm:px-6 shrink-0 bg-slate-50/80">
               <h3 className="font-bold text-slate-900 text-base">
                 {editingActivityIdx !== null ? 'Edit Activity' : 'Add New Activity'} ({activities.length + (editingActivityIdx === null ? 1 : 0)} / 16)
               </h3>
-              <button type="button" onClick={() => setIsActivityModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+              <button type="button" onClick={() => setIsActivityModalOpen(false)} className="text-slate-400 hover:text-slate-700 p-1.5 rounded-lg hover:bg-slate-200/60 transition-colors">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="space-y-3 text-left">
+            <div className="p-4 sm:p-6 space-y-4 text-left overflow-y-auto flex-1">
               <div>
                 <label className="text-xs font-bold text-slate-600 uppercase block mb-1">Activity Title / Role *</label>
                 <input 
@@ -472,10 +507,10 @@ export default function StudentProfile() {
                     onChange={e => setActRole(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="Founder / Initiator">Founder / Initiator (+0.5 Bonus, 1.5× Multiplier)</option>
-                    <option value="Leadership / Officer">Leadership / Officer (+0.3 Bonus, 1.3× Multiplier)</option>
-                    <option value="Core Member / Lead">Core Member / Lead (+0.15 Bonus, 1.15× Multiplier)</option>
-                    <option value="Individual Participant">Individual Participant (1.0× Multiplier)</option>
+                    <option value="Founder / Initiator">Founder / Initiator</option>
+                    <option value="Leadership / Officer">Leadership / Officer</option>
+                    <option value="Core Member / Lead">Core Member / Lead</option>
+                    <option value="Individual Participant">Individual Participant</option>
                   </select>
                 </div>
                 <div>
@@ -485,16 +520,59 @@ export default function StudentProfile() {
                     onChange={e => setActCategory(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   >
-                    <option value="Research & Academic">Research & Academic (Critical Thinking)</option>
-                    <option value="Leadership & STEM">Leadership & STEM (Problem Solving)</option>
-                    <option value="Coding & Engineering">Coding & Engineering (Technical Skills)</option>
-                    <option value="Writing, Media & Speaking">Writing, Media & Speaking (Communication)</option>
-                    <option value="Community Service & Clubs">Community Service & Clubs (Team Work)</option>
-                    <option value="Arts, Music & Design">Arts, Music & Design (Creativity)</option>
-                    <option value="Athletics & Sports">Athletics & Sports (Team Work)</option>
-                    <option value="Internship & Projects">Internship & Projects (Technical & Logic)</option>
+                    <option value="Research & Academic">Research & Academic</option>
+                    <option value="Leadership & STEM">Leadership & STEM</option>
+                    <option value="Coding & Engineering">Coding & Engineering</option>
+                    <option value="Writing, Media & Speaking">Writing, Media & Speaking</option>
+                    <option value="Community Service & Clubs">Community Service & Clubs</option>
+                    <option value="Arts, Music & Design">Arts, Music & Design</option>
+                    <option value="Athletics & Sports">Athletics & Sports</option>
+                    <option value="Internship & Projects">Internship & Projects</option>
                     <option value="Other">Other Category</option>
                   </select>
+                </div>
+              </div>
+
+              {/* Classes / Grade Level Years of Coverage */}
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-slate-700 uppercase flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-indigo-600" />
+                    Classes / Years of Coverage *
+                  </label>
+                  <span className="text-[10px] text-slate-500 font-medium">Select participating grade years</span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {ALL_CLASSES.map(cls => {
+                    const isSelected = actSelectedClasses.includes(cls);
+                    return (
+                      <button
+                        key={cls}
+                        type="button"
+                        onClick={() => toggleClassSelection(cls)}
+                        className={cn(
+                          "px-3 py-1.5 rounded-lg text-xs font-bold transition-all border flex items-center gap-1.5 cursor-pointer",
+                          isSelected
+                            ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
+                            : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100 hover:text-slate-900"
+                        )}
+                      >
+                        {isSelected ? <CheckCircle2 className="w-3.5 h-3.5 text-white" /> : <Plus className="w-3.5 h-3.5 text-slate-400" />}
+                        {cls}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="pt-1">
+                  <input 
+                    type="text" 
+                    value={actYears} 
+                    onChange={e => {
+                      setActYears(e.target.value);
+                    }} 
+                    placeholder="e.g. Class 9, Class 10, Class 11, Class 12" 
+                    className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-700 font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
                 </div>
               </div>
 
@@ -544,9 +622,9 @@ export default function StudentProfile() {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t">
+            <div className="flex justify-end gap-2 p-4 sm:px-6 border-t border-slate-200 shrink-0 bg-slate-50/80">
               <Button type="button" variant="outline" onClick={() => setIsActivityModalOpen(false)}>Cancel</Button>
-              <Button type="button" onClick={handleSaveActivity} disabled={!actTitle.trim()} className="bg-blue-600 hover:bg-blue-700 text-white">
+              <Button type="button" onClick={handleSaveActivity} disabled={!actTitle.trim()} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
                 {editingActivityIdx !== null ? 'Save Changes' : 'Add Activity'}
               </Button>
             </div>

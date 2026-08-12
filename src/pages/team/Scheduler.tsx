@@ -6,6 +6,7 @@ import {
   FileText, Link as LinkIcon, CheckCircle2, Star, MessageSquare, ClipboardList, Paperclip 
 } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
+import { cn } from '@/lib/utils';
 import { MeetingMOM, MeetingResourceLink, MeetingTask, OperationalLog } from '@/types';
 
 export default function TeamScheduler() {
@@ -56,6 +57,25 @@ export default function TeamScheduler() {
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [horizonFilter, setHorizonFilter] = useState<'all' | 'upcoming' | 'past'>('all');
+
+  const isEventInPast = (e: any): boolean => {
+    if (e.status === 'Completed') return true;
+    if (e.status === 'Canceled') return false;
+    const dateStr = e.day || e.date;
+    if (!dateStr || dateStr.toLowerCase() === 'today') return false;
+    try {
+      const evtDate = new Date(dateStr);
+      if (!isNaN(evtDate.getTime())) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const evtMidnight = new Date(evtDate);
+        evtMidnight.setHours(0, 0, 0, 0);
+        if (evtMidnight.getTime() < today.getTime()) return true;
+      }
+    } catch(err) {}
+    return false;
+  };
 
   // 1. ROLE-BASED STUDENT VISIBILITY FOR SCHEDULING
   const isAdmin = currentUser.role === 'SYSTEM_ADMIN' || currentUser.role === 'OPERATIONS_LEAD' || currentUser.role === 'DEVELOPER' || currentUser.students === 'All';
@@ -91,6 +111,11 @@ export default function TeamScheduler() {
     }
     return false;
   }).filter((e: any) => {
+    if (horizonFilter === 'upcoming') {
+      if (isEventInPast(e)) return false;
+    } else if (horizonFilter === 'past') {
+      if (!isEventInPast(e)) return false;
+    }
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
     return (e.title || '').toLowerCase().includes(q) || 
@@ -623,8 +648,8 @@ export default function TeamScheduler() {
       )}
 
       {/* SEARCH & FILTERS */}
-      <div className="bg-white rounded-xl border border-slate-200 p-3 flex gap-3 items-center">
-        <div className="relative flex-1">
+      <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap gap-3 items-center justify-between">
+        <div className="relative flex-1 min-w-[200px]">
            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
            <input 
              type="text" 
@@ -634,8 +659,32 @@ export default function TeamScheduler() {
              className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-blue-500" 
            />
         </div>
-        <div className="text-xs text-slate-500 font-medium px-2">
-          Showing <strong className="text-slate-900">{visibleEvents.length}</strong> sessions
+
+        <div className="flex items-center gap-2">
+          <div className="flex bg-slate-100 p-1 rounded-lg">
+            <button 
+              onClick={() => setHorizonFilter('all')}
+              className={cn("px-2.5 py-1 text-xs font-semibold rounded-md transition-colors", horizonFilter === 'all' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700")}
+            >
+              All
+            </button>
+            <button 
+              onClick={() => setHorizonFilter('upcoming')}
+              className={cn("px-2.5 py-1 text-xs font-semibold rounded-md transition-colors", horizonFilter === 'upcoming' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700")}
+            >
+              Upcoming
+            </button>
+            <button 
+              onClick={() => setHorizonFilter('past')}
+              className={cn("px-2.5 py-1 text-xs font-semibold rounded-md transition-colors", horizonFilter === 'past' ? "bg-white text-blue-600 shadow-sm" : "text-slate-500 hover:text-slate-700")}
+            >
+              Past Sessions
+            </button>
+          </div>
+
+          <div className="text-xs text-slate-500 font-medium px-2 hidden sm:block">
+            Showing <strong className="text-slate-900">{visibleEvents.length}</strong> sessions
+          </div>
         </div>
       </div>
 
@@ -646,7 +695,9 @@ export default function TeamScheduler() {
             No scheduled classes or meetings found matching filter.
           </div>
         ) : (
-          visibleEvents.map((evt: any) => (
+          visibleEvents.map((evt: any) => {
+            const inPast = isEventInPast(evt);
+            return (
             <div key={evt.id} className="p-4 sm:p-5 flex flex-col md:flex-row gap-4 justify-between items-start hover:bg-slate-50/50 transition-colors">
               <div className="space-y-1.5 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
@@ -654,9 +705,9 @@ export default function TeamScheduler() {
                     {evt.stream}
                   </span>
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                    evt.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
+                    inPast ? 'bg-slate-100 text-slate-700' : evt.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
                   }`}>
-                    {evt.status || 'Scheduled'}
+                    {inPast ? 'Past / Completed' : (evt.status || 'Scheduled')}
                   </span>
                   <span className="text-xs text-slate-500 font-semibold">{evt.day || evt.date} • {evt.time}</span>
                 </div>
@@ -700,17 +751,23 @@ export default function TeamScheduler() {
 
               {/* Action Buttons */}
               <div className="flex flex-wrap items-center gap-2 shrink-0 self-start sm:self-center">
-                <Button 
-                  size="sm"
-                  onClick={() => {
-                    const link = evt.location || evt.link;
-                    if (link) window.open(link.startsWith('http') ? link : `https://${link}`, '_blank');
-                    else alert('No video meeting link specified.');
-                  }}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs h-8 px-3 font-medium"
-                >
-                  <Video className="w-3.5 h-3.5 mr-1" /> Join Call
-                </Button>
+                {inPast ? (
+                  <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" /> Call Ended
+                  </span>
+                ) : (
+                  <Button 
+                    size="sm"
+                    onClick={() => {
+                      const link = evt.location || evt.link;
+                      if (link) window.open(link.startsWith('http') ? link : `https://${link}`, '_blank');
+                      else alert('No video meeting link specified.');
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs h-8 px-3 font-medium"
+                  >
+                    <Video className="w-3.5 h-3.5 mr-1" /> Join Call
+                  </Button>
+                )}
 
                 <Button 
                   variant="outline" 
@@ -733,7 +790,8 @@ export default function TeamScheduler() {
                 </Button>
               </div>
             </div>
-          ))
+          );
+          })
         )}
       </div>
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Save, Send, AlertCircle, Plus, CheckCircle2, Clock, MessageSquare, BookOpen, ChevronRight, Wand2, Sparkles, Copy, Check, FileCheck, RefreshCw, X } from 'lucide-react';
+import { Search, Save, Send, AlertCircle, Plus, CheckCircle2, Clock, MessageSquare, BookOpen, ChevronRight, Wand2, Sparkles, Copy, Check, FileCheck, RefreshCw, X, Trash2, Pencil, Edit3 } from 'lucide-react';
 import Markdown from 'react-markdown';
 import { cn } from '@/lib/utils';
 import { useDatabase } from '@/context/DatabaseContext';
@@ -113,6 +113,86 @@ export default function StudentEssays() {
   const [isProofreaderOpen, setIsProofreaderOpen] = useState(false);
   const [proofreaderInitialText, setProofreaderInitialText] = useState('');
 
+  // Rename & Delete state
+  const [editingEssay, setEditingEssay] = useState<Essay | null>(null);
+  const [renamePrompt, setRenamePrompt] = useState('');
+  const [renameUniversity, setRenameUniversity] = useState('');
+  const [renameTargetCount, setRenameTargetCount] = useState<number>(650);
+  const [deletingEssayId, setDeletingEssayId] = useState<string | null>(null);
+
+  const handleOpenRenameModal = (essay: Essay) => {
+    setEditingEssay(essay);
+    setRenamePrompt(essay.prompt || essay.title || '');
+    setRenameUniversity(essay.university || '');
+    setRenameTargetCount(essay.targetCount || 650);
+  };
+
+  const handleSaveRename = () => {
+    if (!editingEssay || !student) return;
+    const newPrompt = renamePrompt.trim() || 'Untitled Essay';
+    const newUni = renameUniversity.trim() || 'General';
+    const newTarget = Number(renameTargetCount) || 650;
+
+    const updatedEssays = (student.essays || []).map(e => {
+      if (e.id === editingEssay.id) {
+        return {
+          ...e,
+          title: newPrompt,
+          prompt: newPrompt,
+          university: newUni,
+          targetCount: newTarget
+        };
+      }
+      return e;
+    });
+
+    const updatedTasks = (student.tasks || []).map(t => {
+      if (t.relatedTo === editingEssay.id) {
+        return {
+          ...t,
+          name: `Essay: ${newUni ? `${newUni} - ` : ''}${newPrompt.substring(0, 50)}`,
+          description: `University/Target: ${newUni}\nPrompt: ${newPrompt}`
+        };
+      }
+      return t;
+    });
+
+    updateStudent({
+      ...student,
+      essays: updatedEssays,
+      tasks: updatedTasks
+    });
+
+    if (selectedEssay?.id === editingEssay.id) {
+      setSelectedEssay({
+        ...selectedEssay,
+        title: newPrompt,
+        prompt: newPrompt,
+        university: newUni,
+        targetCount: newTarget
+      });
+    }
+
+    setEditingEssay(null);
+  };
+
+  const handleDeleteEssay = (essayId: string) => {
+    if (!student) return;
+    const updatedEssays = (student.essays || []).filter(e => e.id !== essayId);
+    const updatedTasks = (student.tasks || []).filter(t => t.relatedTo !== essayId);
+
+    updateStudent({
+      ...student,
+      essays: updatedEssays,
+      tasks: updatedTasks
+    });
+
+    if (selectedEssay?.id === essayId) {
+      setSelectedEssay(null);
+    }
+    setDeletingEssayId(null);
+  };
+
   const syncTaskForEssay = (currentTasks: Task[] = [], essay: Essay, status: Essay['status']): Task[] => {
     let stage: TaskStage = 'IN_PROGRESS';
     if (status === 'Under Review') stage = 'SUBMITTED_FOR_REVIEW';
@@ -120,7 +200,7 @@ export default function StudentEssays() {
     if (status === 'Approved') stage = 'COMPLETED';
 
     const existingIdx = currentTasks.findIndex(t => 
-      t.relatedTo === essay.id || t.name.toLowerCase().includes(essay.prompt.toLowerCase().substring(0, 20))
+      t.relatedTo === essay.id || t.name.toLowerCase().includes((essay.prompt || '').toLowerCase().substring(0, 20))
     );
 
     if (existingIdx >= 0) {
@@ -133,11 +213,11 @@ export default function StudentEssays() {
     } else {
       const newTask: Task = {
         id: 'TASK-' + Math.floor(1000 + Math.random() * 9000),
-        name: `Essay: ${essay.university ? `${essay.university} - ` : ''}${essay.prompt.substring(0, 50)}${essay.prompt.length > 50 ? '...' : ''}`,
+        name: `Essay: ${essay.university ? `${essay.university} - ` : ''}${(essay.prompt || 'Essay').substring(0, 50)}`,
         category: 'Administrative / College Prep',
         dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
         stage,
-        description: `University/Target: ${essay.university || 'General'}\nPrompt: ${essay.prompt}`,
+        description: `University/Target: ${essay.university || 'General'}\nPrompt: ${essay.prompt || 'Essay Prompt'}`,
         assignedBy: 'Essay Writing Tool',
         relatedTo: essay.id,
         attachments: []
@@ -150,10 +230,12 @@ export default function StudentEssays() {
     if (!student) return;
     const newEssay: Essay = {
       id: 'e_' + Date.now(),
+      title: 'Untitled Essay / Blank Document',
       prompt: 'Untitled Essay / Blank Document',
       university: 'General',
       status: 'In Progress',
       isNewDocument: true,
+      targetCount: 650,
       versions: [
         {
           id: 'v1.0',
@@ -208,12 +290,22 @@ export default function StudentEssays() {
     });
   };
 
-  const handleSubmit = (essayId: string) => {
+  const handleSubmit = (essayId: string, content?: string) => {
     if (!student) return;
     let targetEssay: Essay | null = null;
     const newEssays = essays.map(e => {
       if (e.id === essayId) {
-        const updated = { ...e, status: 'Under Review' as const };
+        let versions = e.versions;
+        if (content !== undefined && content.trim()) {
+          const newVersion: EssayVersion = {
+            id: `v${e.versions.length + 1}.0`,
+            version: `v${e.versions.length + 1}.0`,
+            content,
+            date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true })
+          };
+          versions = [newVersion, ...e.versions];
+        }
+        const updated = { ...e, status: 'Under Review' as const, versions };
         targetEssay = updated;
         return updated;
       }
@@ -240,7 +332,7 @@ export default function StudentEssays() {
         </div>
       </div>
 
-            <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
+      <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
         <div className="flex gap-4">
           <select className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
             <option>All Prompts</option>
@@ -268,10 +360,12 @@ export default function StudentEssays() {
       
       {selectedEssay ? (
         <EssayEditor 
-          essay={essays.find(e => e.id === selectedEssay.id)!} 
+          essay={essays.find(e => e.id === selectedEssay.id) || selectedEssay} 
           onClose={() => setSelectedEssay(null)}
           onSave={handleSaveDraft}
           onSubmit={handleSubmit}
+          onRename={handleOpenRenameModal}
+          onDelete={handleDeleteEssay}
         />
       ) : (
         <Card className="overflow-hidden border-slate-200 shadow-sm">
@@ -284,45 +378,76 @@ export default function StudentEssays() {
                   <th className="px-6 py-4">Deadline</th>
                   <th className="px-6 py-4">Word Count</th>
                   <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4 text-right">Action</th>
+                  <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
                 {essays.map(essay => {
-                  const currentContent = essay.versions.length > 0 ? essay.versions[0].content : '';
+                  const currentContent = essay.versions && essay.versions.length > 0 ? essay.versions[0].content : '';
                   const words = currentContent.trim().split(/\s+/).filter(w => w.length > 0).length;
                   return (
-                    <tr key={essay.id} className="hover:bg-slate-50 transition-colors cursor-pointer group" onClick={() => setSelectedEssay(essay)}>
-                      <td className="px-6 py-4 max-w-xs font-medium text-slate-900 group-hover:text-blue-600 transition-colors">
+                    <tr key={essay.id} className="hover:bg-slate-50 transition-colors group">
+                      <td className="px-6 py-4 max-w-xs font-medium text-slate-900 cursor-pointer" onClick={() => setSelectedEssay(essay)}>
                         <div className="flex flex-col gap-1">
-                          <span className="truncate">{essay.prompt}</span>
+                          <span className="truncate font-bold text-slate-900 group-hover:text-blue-600 transition-colors">{essay.prompt || essay.title || 'Untitled Essay'}</span>
                           {isCounselorAssignedEssay(essay) ? (
                             <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-100 w-fit">
                               <Sparkles className="w-3 h-3 text-purple-600" /> Counselor Assigned (AI Enabled)
                             </span>
                           ) : (
                             <span className="inline-flex items-center gap-1 text-[10px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200 w-fit">
-                              Independent Draft (No AI)
+                              Self Created Essay
                             </span>
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 text-slate-600">
-                        {essay.university || 'Common App (General)'}
+                      <td className="px-6 py-4 text-slate-600 cursor-pointer" onClick={() => setSelectedEssay(essay)}>
+                        {essay.university || 'General Application'}
                       </td>
-                      <td className="px-6 py-4 text-slate-600">
+                      <td className="px-6 py-4 text-slate-600 cursor-pointer" onClick={() => setSelectedEssay(essay)}>
                         {essay.university === 'Columbia University' ? 'Nov 01' : 'Jan 01'}
                       </td>
-                      <td className="px-6 py-4 text-slate-600">
-                        {words} / 650
+                      <td className="px-6 py-4 text-slate-600 cursor-pointer" onClick={() => setSelectedEssay(essay)}>
+                        {words} / {essay.targetCount || 650}
                       </td>
-                      <td className="px-6 py-4">
+                      <td className="px-6 py-4 cursor-pointer" onClick={() => setSelectedEssay(essay)}>
                         <StatusBadge status={essay.status} />
                       </td>
                       <td className="px-6 py-4 text-right">
-                        <Button variant="ghost" size="sm" className="text-blue-600 hover:text-blue-700 hover:bg-blue-50">
-                          {essay.status === 'In Progress' || essay.status === 'Draft Saved' || essay.status === 'Needs Revision' ? 'Write' : 'View'}
-                        </Button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleOpenRenameModal(essay);
+                            }}
+                            className="text-slate-600 hover:text-blue-600 hover:bg-slate-100 p-2 h-8"
+                            title="Rename Essay / Edit Details"
+                          >
+                            <Pencil className="w-3.5 h-3.5 mr-1" /> Rename
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeletingEssayId(essay.id);
+                            }}
+                            className="text-slate-400 hover:text-rose-600 hover:bg-rose-50 p-2 h-8"
+                            title="Delete Essay"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            onClick={() => setSelectedEssay(essay)}
+                            className="text-blue-600 hover:text-blue-700 hover:bg-blue-50 font-bold"
+                          >
+                            {essay.status === 'In Progress' || essay.status === 'Draft Saved' || essay.status === 'Needs Revision' ? 'Write' : 'View'}
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -331,6 +456,87 @@ export default function StudentEssays() {
             </table>
           </div>
         </Card>
+      )}
+
+      {/* Rename / Edit Essay Details Modal */}
+      {editingEssay && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl overflow-hidden border border-slate-200 p-6 space-y-5">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                <Edit3 className="w-5 h-5 text-blue-600" /> Rename & Edit Essay Details
+              </h3>
+              <button onClick={() => setEditingEssay(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-full">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">Essay Name / Prompt Title</label>
+                <input 
+                  type="text" 
+                  value={renamePrompt} 
+                  onChange={(e) => setRenamePrompt(e.target.value)}
+                  placeholder="e.g. Common App Personal Statement, Stanford Short Essay..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">Target University</label>
+                <input 
+                  type="text" 
+                  value={renameUniversity} 
+                  onChange={(e) => setRenameUniversity(e.target.value)}
+                  placeholder="e.g. Harvard University, General / Common App..."
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">Target Word Count Limit</label>
+                <input 
+                  type="number" 
+                  value={renameTargetCount} 
+                  onChange={(e) => setRenameTargetCount(Number(e.target.value))}
+                  placeholder="650"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm font-medium focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+              <Button variant="ghost" onClick={() => setEditingEssay(null)} className="text-slate-600">Cancel</Button>
+              <Button onClick={handleSaveRename} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                Save Changes
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Essay Confirmation Modal */}
+      {deletingEssayId && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl p-6 space-y-4 border border-slate-200">
+            <div className="w-12 h-12 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 mx-auto">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="text-lg font-bold text-slate-900">Delete Essay?</h3>
+              <p className="text-xs text-slate-500">
+                Are you sure you want to delete this essay? All drafted versions and associated task records will be permanently removed.
+              </p>
+            </div>
+            <div className="flex gap-3 pt-2">
+              <Button variant="outline" onClick={() => setDeletingEssayId(null)} className="flex-1 font-bold">Cancel</Button>
+              <Button onClick={() => handleDeleteEssay(deletingEssayId)} className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-bold">
+                Yes, Delete Essay
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
 
       {isProofreaderOpen && (
@@ -354,7 +560,14 @@ function StatusBadge({ status }: { status: Essay['status'] }) {
   }
 }
 
-function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClose: () => void, onSave: (id: string, content: string) => void, onSubmit: (id: string) => void }) {
+function EssayEditor({ essay, onClose, onSave, onSubmit, onRename, onDelete }: { 
+  essay: Essay, 
+  onClose: () => void, 
+  onSave: (id: string, content: string) => void, 
+  onSubmit: (id: string, content?: string) => void,
+  onRename?: (essay: Essay) => void,
+  onDelete?: (id: string) => void
+}) {
   const latestVersion = essay.versions[0];
   const [content, setContent] = useState(latestVersion?.content || '');
   
@@ -595,19 +808,48 @@ function EssayEditor({ essay, onClose, onSave, onSubmit }: { essay: Essay, onClo
   };
 
   const handleSubmit = () => {
-    onSubmit(essay.id);
+    onSubmit(essay.id, content);
   };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300">
-      <div className="flex items-center gap-3">
-        <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-2 -ml-2 rounded-full hover:bg-slate-100 transition-colors">
-          <ChevronRight className="w-5 h-5 rotate-180" />
-        </button>
-        <div>
-          <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Drafting: {essay.university || 'General Form'}</h3>
-          <p className="text-xs text-slate-500">{essay.prompt}</p>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-2 -ml-2 rounded-full hover:bg-slate-100 transition-colors">
+            <ChevronRight className="w-5 h-5 rotate-180" />
+          </button>
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Drafting: {essay.university || 'General Form'}</h3>
+              {onRename && (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => onRename(essay)}
+                  className="text-xs text-blue-600 hover:text-blue-700 hover:bg-blue-50 font-bold h-7 px-2"
+                >
+                  <Pencil className="w-3.5 h-3.5 mr-1" /> Rename
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-slate-500 font-medium">{essay.prompt}</p>
+          </div>
         </div>
+
+        {onDelete && (
+          <Button 
+            variant="outline" 
+            size="sm"
+            onClick={() => {
+              if (window.confirm(`Are you sure you want to delete this essay? This action cannot be undone.`)) {
+                onDelete(essay.id);
+              }
+            }}
+            className="text-rose-600 border-rose-200 hover:bg-rose-50 hover:text-rose-700 font-bold text-xs"
+          >
+            <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete Essay
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

@@ -19,7 +19,9 @@ import {
   Zap,
   Target,
   Layers,
-  Table as TableIcon
+  Table as TableIcon,
+  X,
+  Calendar
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -34,6 +36,7 @@ export interface ActivityRecord {
   hoursPerWeek: number;
   weeksPerYear: number;
   description: string;
+  years?: string;
 }
 
 export interface CompetencyVector {
@@ -182,24 +185,24 @@ const PRESET_MAJORS = [
 // Exact Math Helper Functions per Specification
 function getHoursBasePoints(annualHours: number): { points: number; category: string } {
   if (annualHours < 25) {
-    return { points: 0.5, category: 'Light Commitment (< 25 hrs/yr)' };
+    return { points: 0.5, category: 'Light Commitment' };
   } else if (annualHours <= 99) {
-    return { points: 1.0, category: 'Moderate Commitment (25 – 99 hrs/yr)' };
+    return { points: 1.0, category: 'Moderate Commitment' };
   } else {
-    return { points: 1.5, category: 'High Commitment (≥ 100 hrs/yr)' };
+    return { points: 1.5, category: 'High Commitment' };
   }
 }
 
 function getRoleMetrics(roleRaw: string): { bonus: number; multiplier: number; label: string } {
   const r = (roleRaw || '').toLowerCase();
   if (r.includes('founder') || r.includes('initiator') || r.includes('director')) {
-    return { bonus: 0.5, multiplier: 1.5, label: 'Founder / Initiator (+0.5 Bonus, 1.5× Multiplier)' };
+    return { bonus: 0.5, multiplier: 1.5, label: 'Founder / Initiator' };
   } else if (r.includes('leadership') || r.includes('officer') || r.includes('captain') || r.includes('president')) {
-    return { bonus: 0.3, multiplier: 1.3, label: 'Leadership / Officer (+0.3 Bonus, 1.3× Multiplier)' };
+    return { bonus: 0.3, multiplier: 1.3, label: 'Leadership / Officer' };
   } else if (r.includes('core') || r.includes('lead') || r.includes('treasurer') || r.includes('secretary') || r.includes('vice')) {
-    return { bonus: 0.15, multiplier: 1.15, label: 'Core Member / Lead (+0.15 Bonus, 1.15× Multiplier)' };
+    return { bonus: 0.15, multiplier: 1.15, label: 'Core Member / Lead' };
   } else {
-    return { bonus: 0.0, multiplier: 1.0, label: 'Individual Participant (1.0× Multiplier)' };
+    return { bonus: 0.0, multiplier: 1.0, label: 'Individual Participant' };
   }
 }
 
@@ -262,6 +265,7 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
   const [hoveredCompetency, setHoveredCompetency] = useState<string | null>(null);
   const [showMathDetails, setShowMathDetails] = useState<boolean>(isTeamView);
   const [showMatrixTable, setShowMatrixTable] = useState<boolean>(isTeamView);
+  const [isStrategyModalOpen, setIsStrategyModalOpen] = useState<boolean>(false);
 
   // Profile Intended Majors from Section 4
   const profileMajor1 = currentStudent?.major1 || '';
@@ -305,7 +309,8 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
         organization: act.organization || '',
         hoursPerWeek: Math.min(168, Math.max(1, hpw)),
         weeksPerYear: Math.min(52, Math.max(1, wpy)),
-        description: act.description || `${act.organization ? act.organization + ' - ' : ''}${rawTitle}`
+        description: act.description || `${act.organization ? act.organization + ' - ' : ''}${rawTitle}`,
+        years: act.classes || act.years || act.date || ''
       });
     });
 
@@ -458,7 +463,13 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
         roleMultiplier: roleInfo.multiplier,
         roleLabel: roleInfo.label,
         totalPoints: calculatedPoints,
-        mappedVectors: matchedVectorsForThisAct
+        mappedVectors: matchedVectorsForThisAct,
+        activity: act,
+        category: act.category,
+        description: act.description,
+        role: act.role,
+        hoursPerWeek: act.hoursPerWeek,
+        weeksPerYear: act.weeksPerYear
       });
     });
 
@@ -891,79 +902,101 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
             </div>
           </div>
 
-          {/* Activity Breakdown Vault Card (Synced Read-Only View) */}
+          {/* Activity Breakdown Vault Card (Synced View) */}
           <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Briefcase className="w-4 h-4 text-indigo-600" /> Synced Profile Building Activities ({profileActivities.length})
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  Live synced from Section 6 (Profile Building) of the Student Profile
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Briefcase className="w-4 h-4 text-indigo-600" /> Admissions Activity Vault
+                  </h3>
+                  <span className="text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">
+                    {profileActivities.length} / 10 Max
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 pt-0.5 leading-relaxed">
+                  Build your portfolio. Competencies (Critical Thinking, Problem Solving, Communication, Team Work, Creativity, Technical Skills) are calculated automatically based on action verbs, description details, and duration.
                 </p>
               </div>
 
               {!isTeamView && (
                 <Link to="/student/profile">
-                  <Button size="sm" variant="outline" className="text-xs font-bold h-8 px-3 rounded-xl border-indigo-200 text-indigo-700 hover:bg-indigo-50 flex items-center gap-1.5">
-                    <ExternalLink className="w-3.5 h-3.5" /> Edit Section 6
+                  <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs h-8 px-3 rounded-xl gap-1.5 shrink-0">
+                    + Add Activity
                   </Button>
                 </Link>
               )}
             </div>
 
-            {/* Read-Only Notice */}
-            <div className="p-3 bg-indigo-50/60 border border-indigo-100 rounded-xl flex items-center gap-2 text-xs text-indigo-900">
-              <Lock className="w-4 h-4 text-indigo-600 shrink-0" />
-              <span>
-                Scores update automatically when activities are updated or added in Section 6 (Profile Building).
-              </span>
-            </div>
-
-            {/* Detailed Activity Breakdown Cards */}
-            <div className="space-y-3">
+            {/* Detailed Activity Vault Cards Grid */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
               {activityBreakdown.length > 0 ? (
                 activityBreakdown.map((item, idx) => (
                   <div 
                     key={idx} 
-                    className="p-4 bg-slate-50/90 border border-slate-200/90 rounded-xl space-y-2.5 transition-all hover:border-indigo-200"
+                    className="p-3.5 bg-white border border-slate-200/90 rounded-2xl space-y-2 shadow-2xs hover:border-indigo-300 transition-all flex flex-col justify-between"
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <span className="font-bold text-xs text-slate-900 block">{item.title}</span>
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100">
-                            {item.roleLabel}
-                          </span>
-                          <span className="text-[10px] font-medium bg-slate-200/70 text-slate-700 px-2 py-0.5 rounded-md">
-                            {item.baseCategory}
-                          </span>
-                        </div>
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100 inline-flex items-center gap-1">
+                          <Sparkles className="w-3 h-3 text-blue-500" />
+                          {item.baseCategory || 'Supercurricular'}
+                        </span>
+                        {!isTeamView && (
+                          <Link to="/student/profile" className="text-slate-400 hover:text-indigo-600 p-0.5">
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </Link>
+                        )}
                       </div>
 
-                      {/* Weightage points shown on Team View */}
-                      {isTeamView && (
-                        <div className="text-right shrink-0">
-                          <span className="text-xs font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-1 rounded-lg inline-block">
-                            +{item.totalPoints} pts
+                      <h4 className="font-bold text-xs text-slate-900 leading-tight">
+                        {item.title}
+                      </h4>
+
+                      <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-slate-500 font-medium">
+                        <span>Role: <strong className="text-slate-800 font-semibold">{item.role || item.roleLabel || 'Individual'}</strong></span>
+                        <span>• Time: <strong className="text-slate-800 font-semibold">{item.hoursPerWeek || 5}h/wk</strong> for <strong className="text-slate-800 font-semibold">{item.weeksPerYear || 30} wks</strong> ({item.annualHours} hrs/yr)</span>
+                        {item.years && (
+                          <span className="bg-indigo-50 text-indigo-700 border border-indigo-100 px-2 py-0.5 rounded-md font-bold text-[9px] inline-flex items-center gap-1">
+                            <Calendar className="w-2.5 h-2.5 text-indigo-500" />
+                            {item.years}
                           </span>
-                        </div>
-                      )}
+                        )}
+                      </div>
+
+                      <div className="p-2.5 bg-slate-50 border border-slate-100 rounded-xl text-[11px] text-slate-600 leading-relaxed line-clamp-3 font-normal">
+                        {item.description || 'Action-oriented activity profile entry logged under Section 6 (Profile Building).'}
+                      </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-between text-[10px] text-slate-500 pt-2 border-t border-slate-200/60 gap-1">
-                      <span className="flex items-center gap-1 font-medium text-slate-600">
-                        <Clock className="w-3 h-3 text-slate-400" />
-                        {item.annualHours} Annual Hours
+                    <div className="pt-2 border-t border-slate-100 space-y-1">
+                      <span className="text-[9px] uppercase font-extrabold text-slate-400 tracking-wider block">
+                        Competency Mapping
                       </span>
-                      <span className="text-slate-600 font-semibold">
-                        Mapped Vectors: {item.mappedVectors.length > 0 ? item.mappedVectors.join(', ') : 'General'}
-                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {item.mappedVectors.length > 0 ? (
+                          item.mappedVectors.map((vName: string) => {
+                            const cleanName = String(vName).replace(/\s*\([^)]*\)/g, '').trim();
+                            return (
+                              <span 
+                                key={vName}
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-100"
+                              >
+                                {cleanName}
+                              </span>
+                            );
+                          })
+                        ) : (
+                          <span className="text-[10px] font-medium px-2 py-0.5 rounded-lg bg-slate-100 text-slate-600">
+                            General Involvement
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))
               ) : (
-                <div className="p-8 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl space-y-3">
+                <div className="col-span-2 p-8 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl space-y-3">
                   <Info className="w-8 h-8 text-indigo-400 mx-auto" />
                   <p className="font-semibold text-slate-700 text-xs">No profile building activities recorded yet</p>
                   <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
@@ -1123,202 +1156,194 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
               </svg>
             </div>
 
-            {/* Live Vector Score Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-2">
-              {COMPETENCIES.map((comp) => {
-                const score = competencyScores[comp.id] || 0;
-                const matches = matchedActivitiesByVector[comp.id] || [];
-                const percent = Math.min(100, (score / 10.0) * 100);
-
-                return (
-                  <div
-                    key={comp.id}
-                    onMouseEnter={() => setHoveredCompetency(comp.id)}
-                    onMouseLeave={() => setHoveredCompetency(null)}
-                    className={cn(
-                      "p-2.5 rounded-xl border transition-all cursor-pointer space-y-1.5",
-                      hoveredCompetency === comp.id ? "ring-2 ring-indigo-500 bg-white shadow-xs" : "bg-slate-50/70 border-slate-200/80"
-                    )}
-                  >
-                    <div className="flex items-center justify-between text-[11px]">
-                      <span className="font-bold text-slate-800 truncate" style={{ color: comp.color }}>
-                        {comp.name}
-                      </span>
-                      <span className="font-extrabold text-slate-900">{score.toFixed(1)}</span>
-                    </div>
-
-                    <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className="h-1.5 rounded-full transition-all duration-500"
-                        style={{ width: `${percent}%`, backgroundColor: comp.color }}
-                      />
-                    </div>
-
-                    <div className="text-[9px] text-slate-500 truncate" title={comp.description}>
-                      {matches.length > 0 ? `${matches.length} activity ${matches.length === 1 ? 'contribution' : 'contributions'}` : 'No activity matches'}
-                    </div>
-                  </div>
-                );
-              })}
+            {/* Sleek Horizontal Vector Legend */}
+            <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 pt-3 border-t border-slate-100">
+              {COMPETENCIES.map((comp) => (
+                <div 
+                  key={comp.id} 
+                  onMouseEnter={() => setHoveredCompetency(comp.id)}
+                  onMouseLeave={() => setHoveredCompetency(null)}
+                  className="flex items-center gap-1.5 text-xs font-semibold text-slate-700 cursor-pointer hover:opacity-80 transition-opacity"
+                >
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: comp.color }} />
+                  <span>{comp.name}</span>
+                  <span className="font-extrabold text-slate-900">({(competencyScores[comp.id] || 0).toFixed(1)})</span>
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Automated Portfolio Strategy Index */}
-          <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-5">
-            <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
+          {/* Automated Portfolio Strategy Index Card */}
+          <div className="bg-white border border-slate-200/90 rounded-2xl p-5 shadow-xs space-y-4">
+            <div className="border-b border-slate-100 pb-3 flex items-center justify-between flex-wrap gap-2">
               <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <TrendingUp className="w-4 h-4 text-indigo-600" /> Automated Portfolio Strategy Index
-                </h3>
-                <p className="text-[11px] text-slate-500">Holistic evaluation based on university admissions assessment standards</p>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-600" /> AUTOMATED PORTFOLIO STRATEGY INDEX
+                  </h3>
+                  <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-full">
+                    T-Shaped Model
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 pt-0.5">
+                  Real-time admissions evaluation comparing your profile against Top 20 & Ivy League benchmarks
+                </p>
               </div>
-              <span className="text-[10px] font-extrabold uppercase px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg">
-                Admissions Strategy Engine
-              </span>
+
+              <Button 
+                onClick={() => setIsStrategyModalOpen(true)}
+                size="sm"
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl h-8 px-3.5 flex items-center gap-1.5 transition-colors shrink-0 shadow-xs cursor-pointer"
+              >
+                <span>Full Strategy Report</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </Button>
             </div>
 
-            {/* Portfolio Coverage Index Meter */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Target className="w-4 h-4 text-indigo-600" /> Portfolio Coverage Index
+            {/* ADMISSIONS SPIKE ASSESSMENT SUMMARY */}
+            <div className="p-4 bg-indigo-50/60 border border-indigo-100 rounded-2xl space-y-2.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="text-[11px] font-extrabold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                  <Award className="w-4 h-4 text-indigo-600 shrink-0" /> ADMISSIONS SPIKE ASSESSMENT
                 </span>
-                <span className="text-sm font-extrabold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2.5 py-0.5 rounded-lg">
-                  {portfolioCoveragePct}% Overall Balance
-                </span>
-              </div>
-
-              <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
-                <div 
-                  className="h-2.5 rounded-full bg-gradient-to-r from-indigo-500 via-blue-500 to-emerald-500 transition-all duration-700"
-                  style={{ width: `${portfolioCoveragePct}%` }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between text-[10px] text-slate-500 font-medium pt-0.5">
-                <span>0% (Developing)</span>
-                <span>50% (Balanced Matrix)</span>
-                <span>100% (Standout Spike & Coverage)</span>
-              </div>
-            </div>
-
-            {/* 3 Key Pillars: Admissions Spike Assessment, Commitment Depth, Engagement Width */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              
-              {/* Pillar 1: Admissions Spike Assessment */}
-              <div className="p-4 bg-indigo-50/70 border border-indigo-200/90 rounded-2xl space-y-2.5 flex flex-col justify-between">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-indigo-950 flex items-center gap-1.5">
-                      <Award className="w-4 h-4 text-indigo-600 shrink-0" /> Admissions Spike Assessment
-                    </span>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-100 text-indigo-800 border border-indigo-200">
-                      {isSpikeProminent ? 'Prominent Spike' : 'Developing Spike'}
-                    </span>
-                  </div>
-
-                  <div className="text-sm font-extrabold text-slate-900 pt-1">
-                    {topCompetency.name} ({topCompetency.score} / 10.0)
-                  </div>
-
-                  <p className="text-[11px] text-slate-600 leading-relaxed">
-                    {isSpikeAlignedWithMajor ? (
-                      <>Direct major synergy with <strong>{currentMajorInfo.label}</strong>.</>
-                    ) : (
-                      <>Secondary domain pillar alongside <strong>{currentMajorInfo.label}</strong>.</>
-                    )}
-                  </p>
-                </div>
-
-                <div className="pt-2 border-t border-indigo-200/60 text-[10px] text-indigo-900 font-semibold">
-                  Spike Status: {isSpikeProminent ? 'Standout Domain Depth' : 'Focus on Leadership Entries'}
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                    Spike: {topCompetency.name} ({topCompetency.score.toFixed(1)}/10.0)
+                  </span>
+                  <span className={cn(
+                    "text-[10px] font-bold px-2.5 py-0.5 rounded-full border",
+                    isSpikeAlignedWithMajor 
+                      ? "bg-emerald-100 text-emerald-800 border-emerald-200" 
+                      : "bg-blue-100 text-blue-800 border-blue-200"
+                  )}>
+                    {isSpikeAlignedWithMajor ? "Major Aligned" : "Secondary Talent Pillar"}
+                  </span>
                 </div>
               </div>
 
-              {/* Pillar 2: Portfolio Commitment Depth */}
-              <div className="p-4 bg-emerald-50/70 border border-emerald-200/90 rounded-2xl space-y-2.5 flex flex-col justify-between">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
-                      <TrendingUp className="w-4 h-4 text-emerald-600 shrink-0" /> Portfolio Commitment Depth
-                    </span>
-                    <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded border", portfolioCommitmentDepth.tierBadge)}>
-                      {portfolioCommitmentDepth.tierLabel.split(':')[0]}
-                    </span>
-                  </div>
-
-                  <div className="text-sm font-extrabold text-slate-900 pt-1 flex items-baseline gap-1.5">
-                    <span>{portfolioCommitmentDepth.totalHours} Annual Hours</span>
-                    <span className="text-[11px] font-normal text-slate-500">logged</span>
-                  </div>
-
-                  <div className="text-[11px] text-slate-600 space-y-0.5">
-                    <div>• <strong>{portfolioCommitmentDepth.highCommitmentCount}</strong> High-Commitment / Leadership activities</div>
-                    <div>• <strong>{portfolioCommitmentDepth.avgWeeklyHours} hrs/wk</strong> average commitment</div>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-emerald-200/60 text-[10px] text-emerald-900 font-semibold truncate">
-                  Depth Level: {portfolioCommitmentDepth.tierLabel}
-                </div>
-              </div>
-
-              {/* Pillar 3: Portfolio Engagement Width */}
-              <div className="p-4 bg-cyan-50/70 border border-cyan-200/90 rounded-2xl space-y-2.5 flex flex-col justify-between">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-cyan-950 flex items-center gap-1.5">
-                      <Zap className="w-4 h-4 text-cyan-600 shrink-0" /> Portfolio Engagement Width
-                    </span>
-                    <span className={cn("text-[10px] font-bold px-2 py-0.5 rounded border", portfolioEngagementWidth.widthBadge)}>
-                      {portfolioEngagementWidth.coveredPct}% Coverage
-                    </span>
-                  </div>
-
-                  <div className="text-sm font-extrabold text-slate-900 pt-1">
-                    {portfolioEngagementWidth.activeVectorsCount} of 6 Vectors Covered
-                  </div>
-
-                  <div className="text-[11px] text-slate-600 space-y-0.5">
-                    <div>• <strong>{portfolioEngagementWidth.totalActivitiesCount}</strong> total profile activities</div>
-                    <div className="truncate">• Gaps: {identifiedGaps.length > 0 ? identifiedGaps.map(g => g.name).join(', ') : 'None'}</div>
-                  </div>
-                </div>
-
-                <div className="pt-2 border-t border-cyan-200/60 text-[10px] text-cyan-900 font-semibold truncate">
-                  Width Rating: {portfolioEngagementWidth.widthLabel}
-                </div>
-              </div>
-
-            </div>
-
-            {/* Strategic Admissions Officer Profile Synthesis */}
-            <div className="p-4 bg-indigo-50/80 border border-indigo-100 rounded-2xl space-y-2 text-xs">
-              <div className="flex items-center gap-2 text-indigo-950 font-bold">
-                <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                <span>Admissions Officer Strategic Synthesis</span>
-              </div>
-
-              <p className="text-slate-700 leading-relaxed text-[11px]">
-                {isSpikeProminent && isSpikeAlignedWithMajor ? (
+              <p className="text-xs text-slate-700 leading-relaxed">
+                {isSpikeProminent ? (
                   <>
-                    The student profile exhibits a distinct <strong>{topCompetency.name}</strong> spike ({topCompetency.score}/10) that directly supports target applications in <strong>{currentMajorInfo.label}</strong> with a total commitment of <strong>{portfolioCommitmentDepth.totalHours} annual hours</strong> across <strong>{portfolioEngagementWidth.activeVectorsCount} vector domains</strong>.
+                    <strong>The T-Shaped Spike:</strong> You have cultivated an anchor spike in <strong>{topCompetency.name} ({topCompetency.score.toFixed(1)}/10.0)</strong>. {isSpikeAlignedWithMajor ? (
+                      <>This directly powers your target major <strong>"{currentMajorInfo.label}"</strong>. Elite admissions committees view this domain depth as a primary academic engine demonstrating ready research/leadership capability.</>
+                    ) : (
+                      <>While a strong personal asset, this spike lies outside primary vectors expected for <strong>"{currentMajorInfo.label}"</strong>. It functions as a compelling secondary talent pillar (e.g. the 'Musician-Engineer' archetype). We recommend building a complementary academic spike in expected major vectors.</>
+                    )}
                   </>
                 ) : (
                   <>
-                    The student's top competency is <strong>{topCompetency.name} ({topCompetency.score}/10)</strong> with <strong>{portfolioCommitmentDepth.totalHours} annual hours</strong> logged. To optimize the profile for <strong>{currentMajorInfo.label}</strong>, convert key entries into leadership or student-led initiative roles to elevate commitment depth.
+                    <strong>Developing Spike:</strong> Your profile currently displays a balanced/flat curve (top score: {topCompetency.score.toFixed(1)}/10.0). Elite universities build a <em>well-rounded class of spiked specialists</em>. We recommend channeling 70% of supercurricular time into 1–2 core projects for <strong>"{currentMajorInfo.label}"</strong> to create a standout spike.
                   </>
                 )}
               </p>
+            </div>
 
-              <div className="pt-2 border-t border-indigo-100/80 space-y-1">
-                <span className="text-[10px] font-bold text-indigo-900 uppercase block">Actionable Recommendations:</span>
-                <ul className="list-disc list-inside text-[11px] text-slate-600 space-y-1">
-                  <li>In Section 6 (Profile Building), emphasize student-led initiatives and leadership positions for maximum impact.</li>
-                  <li>Log consistent weekly hours and weeks per year to demonstrate high commitment and sustained dedication.</li>
-                  <li>Include specific project descriptions and domain keywords for accurate multi-vector competency mapping.</li>
-                </ul>
+            {/* TARGET vs ACHIEVED: COMMITMENT DEPTH & ENGAGEMENT WIDTH GRID */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              
+              {/* Commitment Depth: Target vs Achieved */}
+              <div className="p-4 bg-slate-50/80 border border-slate-200/90 rounded-2xl space-y-3 flex flex-col justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
+                    <span className="text-[11px] font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <TrendingUp className="w-3.5 h-3.5 text-emerald-600" /> COMMITMENT DEPTH
+                    </span>
+                    <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                      {portfolioCommitmentDepth.totalHours >= 300 ? 'Tier 1 Elite' : portfolioCommitmentDepth.totalHours >= 150 ? 'Tier 2 Strong' : 'Tier 3 Developing'}
+                    </span>
+                  </div>
+
+                  {/* Target vs Achieved Comparative Bar */}
+                  <div className="space-y-1.5 pt-0.5">
+                    <div className="flex items-center justify-between text-xs font-bold">
+                      <span className="text-slate-700">Achieved: <span className="text-emerald-700">{portfolioCommitmentDepth.totalHours} Hrs/Yr</span></span>
+                      <span className="text-slate-500 font-medium">Target: <span className="text-slate-900 font-bold">300+ Hrs/Yr</span></span>
+                    </div>
+
+                    <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden relative">
+                      <div 
+                        className="h-2.5 rounded-full bg-gradient-to-r from-emerald-500 to-teal-600 transition-all duration-500"
+                        style={{ width: `${Math.min(100, Math.round((portfolioCommitmentDepth.totalHours / 300) * 100))}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[9px] text-slate-500 font-medium">
+                      <span>0 Hrs</span>
+                      <span>150 Hrs (Tier 2)</span>
+                      <span>300+ Hrs (Top 20 Target)</span>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-600 leading-relaxed pt-1">
+                    <strong>100-Hour Rule in Admissions:</strong> Elite admissions officers value multi-year depth over short-term club hopping. {portfolioCommitmentDepth.totalHours >= 300 ? (
+                      <>Your <strong>{portfolioCommitmentDepth.totalHours} annual hours</strong> reach the T20 depth threshold.</>
+                    ) : (
+                      <>You have logged <strong>{portfolioCommitmentDepth.totalHours} hours/yr</strong>. Increase weekly hours on core academic/leadership projects to hit the 300+ hour Tier 1 target.</>
+                    )}
+                  </p>
+                </div>
               </div>
+
+              {/* Engagement Width: Target vs Achieved */}
+              <div className="p-4 bg-slate-50/80 border border-slate-200/90 rounded-2xl space-y-3 flex flex-col justify-between">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between border-b border-slate-200/60 pb-2">
+                    <span className="text-[11px] font-bold text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-cyan-600" /> ENGAGEMENT WIDTH
+                    </span>
+                    <span className="text-[10px] font-bold text-cyan-800 bg-cyan-50 border border-cyan-200 px-2 py-0.5 rounded-full">
+                      {portfolioEngagementWidth.activeVectorsCount >= 3 && portfolioEngagementWidth.activeVectorsCount <= 4 ? 'Optimal Target Match' : portfolioEngagementWidth.activeVectorsCount > 4 ? 'Broad Diversity' : 'Narrow Focus'}
+                    </span>
+                  </div>
+
+                  {/* Target vs Achieved Vector Grid */}
+                  <div className="space-y-1.5 pt-0.5">
+                    <div className="flex items-center justify-between text-xs font-bold">
+                      <span className="text-slate-700">Achieved: <span className="text-cyan-700">{portfolioEngagementWidth.activeVectorsCount} / 6 Vectors</span></span>
+                      <span className="text-slate-500 font-medium">Ideal Target: <span className="text-slate-900 font-bold">3 – 4 Core Vectors</span></span>
+                    </div>
+
+                    {/* Vector slots comparison */}
+                    <div className="grid grid-cols-6 gap-1.5 pt-1">
+                      {COMPETENCIES.map((c, idx) => {
+                        const isActive = (competencyScores[c.id] || 0) > 0;
+                        const isTargetZone = idx < 4;
+                        return (
+                          <div 
+                            key={c.id} 
+                            title={`${c.name}: ${(competencyScores[c.id] || 0).toFixed(1)}/10.0`}
+                            className={cn(
+                              "h-3.5 rounded-md transition-all flex items-center justify-center text-[8px] font-extrabold",
+                              isActive 
+                                ? "bg-cyan-600 text-white shadow-2xs" 
+                                : isTargetZone 
+                                  ? "bg-cyan-100/80 border border-dashed border-cyan-300 text-cyan-700" 
+                                  : "bg-slate-200 text-slate-400"
+                            )}
+                          >
+                            V{idx + 1}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <div className="flex justify-between text-[9px] text-slate-500 font-medium pt-0.5">
+                      <span>V1–V2 (Narrow)</span>
+                      <span className="text-cyan-700 font-bold">V3–V4 (T-Shaped Ideal)</span>
+                      <span>V5–V6 (Broad)</span>
+                    </div>
+                  </div>
+
+                  <p className="text-[11px] text-slate-600 leading-relaxed pt-1">
+                    <strong>T-Shaped Horizontal Bar:</strong> {portfolioEngagementWidth.activeVectorsCount >= 3 && portfolioEngagementWidth.activeVectorsCount <= 4 ? (
+                      <>Your <strong>{portfolioEngagementWidth.activeVectorsCount} active vectors</strong> perfectly align with the 3–4 vector ideal target, balancing versatility without diluting your spike.</>
+                    ) : portfolioEngagementWidth.activeVectorsCount < 3 ? (
+                      <>Your <strong>{portfolioEngagementWidth.activeVectorsCount} active vectors</strong> represent a singular focus. Add a supportive teamwork or community initiative to reach the 3-4 vector target.</>
+                    ) : (
+                      <>Your <strong>{portfolioEngagementWidth.activeVectorsCount} active vectors</strong> show wide breadth. Ensure your top spike remains dominant so activities don't look scattered.</>
+                    )}
+                  </p>
+                </div>
+              </div>
+
             </div>
 
           </div>
@@ -1326,6 +1351,242 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
         </div>
 
       </div>
+
+      {/* DETAILED STRATEGY ANALYSIS MODAL */}
+      {isStrategyModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6 overflow-y-auto animate-in fade-in">
+          <div className="bg-white border border-slate-200 rounded-3xl shadow-2xl max-w-4xl w-full max-h-[92vh] flex flex-col overflow-hidden">
+            
+            {/* Modal Header */}
+            <div className="p-5 sm:p-6 bg-gradient-to-r from-indigo-950 via-slate-900 to-indigo-900 text-white flex items-center justify-between shrink-0">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-indigo-400" />
+                  <h2 className="text-base sm:text-xl font-extrabold tracking-tight">Automated Portfolio Strategy Index & Admissions Alignment</h2>
+                </div>
+                <p className="text-xs text-indigo-200">
+                  Comprehensive Evaluation: T-Shaped Profile Framework, Target vs Achieved Benchmarks, and Major Alignment
+                </p>
+              </div>
+              <button 
+                onClick={() => setIsStrategyModalOpen(false)}
+                className="p-2 rounded-full hover:bg-white/10 text-white/80 hover:text-white transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Modal Content - Scrollable */}
+            <div className="p-5 sm:p-6 space-y-6 overflow-y-auto flex-1 text-slate-800">
+
+              {/* Section 1: The T-Shaped Profile & Admissions Analogy Framework */}
+              <div className="p-5 bg-gradient-to-br from-indigo-50/90 via-slate-50 to-blue-50/80 border border-indigo-200/80 rounded-2xl space-y-3 shadow-2xs">
+                <div className="flex items-center justify-between gap-2 flex-wrap border-b border-indigo-100 pb-2.5">
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-5 h-5 text-indigo-600" />
+                    <h3 className="text-sm font-extrabold text-indigo-950 uppercase tracking-wider">
+                      Admissions Officer Strategic Framework: The T-Shaped Profile
+                    </h3>
+                  </div>
+                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-indigo-600 text-white shadow-2xs">
+                    Target Major: {currentMajorInfo.label}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-slate-700 leading-relaxed pt-1">
+                  <div className="p-3.5 bg-white/90 border border-indigo-100 rounded-xl space-y-2">
+                    <div className="font-bold text-indigo-950 flex items-center gap-1.5 text-xs">
+                      <Award className="w-4 h-4 text-indigo-600" />
+                      <span>The Vertical Stem (The Academic Spike)</span>
+                    </div>
+                    <p className="text-slate-600">
+                      Top universities (Ivy League, Stanford, Top 20) do <strong>not</strong> build a freshman class out of "well-rounded" students who do a little bit of everything. Instead, they assemble a <strong>well-rounded class composed of spiked specialists</strong> — pairing the top student researcher, the national tech builder, the passionate community organizer, and the creative writer. Your vertical spike is your primary academic engine.
+                    </p>
+                  </div>
+
+                  <div className="p-3.5 bg-white/90 border border-indigo-100 rounded-xl space-y-2">
+                    <div className="font-bold text-indigo-950 flex items-center gap-1.5 text-xs">
+                      <Zap className="w-4 h-4 text-cyan-600" />
+                      <span>The Horizontal Bar (Engagement Width)</span>
+                    </div>
+                    <p className="text-slate-600">
+                      Your horizontal bar represents cross-disciplinary breadth and versatility (Communication, Teamwork, Leadership, Creativity). It proves to admissions committees that you are not an isolated lone worker, but a collaborative, adaptable team player ready to contribute to residential campus life.
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 2: Deep Admissions Spike Assessment */}
+              <div className="p-5 bg-white border border-slate-200/90 rounded-2xl space-y-4 shadow-2xs">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3 flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Award className="w-5 h-5 text-indigo-600" />
+                    <h3 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider">
+                      Deep Spike Analysis & Major Alignment Synergy
+                    </h3>
+                  </div>
+                  <span className="text-xs font-bold px-3 py-1 rounded-full bg-amber-100 text-amber-900 border border-amber-200">
+                    Top Spike: {topCompetency.name} ({topCompetency.score.toFixed(1)} / 10.0)
+                  </span>
+                </div>
+
+                <div className="space-y-3 text-xs sm:text-sm text-slate-700 leading-relaxed">
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
+                    <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider flex items-center gap-2">
+                      <Target className="w-4 h-4 text-indigo-600" /> Major Synergy Evaluation for "{currentMajorInfo.label}"
+                    </h4>
+                    <p className="text-slate-600 text-xs">
+                      <strong>Expected Major Spikes:</strong> {currentMajorInfo.expectedSpikes.map(id => COMPETENCIES.find(c => c.id === id)?.name).filter(Boolean).join(', ')}.
+                    </p>
+                    <p className="text-slate-700 text-xs leading-relaxed pt-1">
+                      {isSpikeProminent ? (
+                        isSpikeAlignedWithMajor ? (
+                          <>
+                            <strong>Direct Academic Synergy:</strong> Your primary spike in <strong>{topCompetency.name}</strong> ({topCompetency.score.toFixed(1)}/10.0) directly matches expected core competencies for <strong>{currentMajorInfo.label}</strong>. In holistic admissions, this signals an applicant who is already driving field-specific research, problem-solving, or technical execution.
+                          </>
+                        ) : (
+                          <>
+                            <strong>Secondary Talent Pillar (The Musician-Scientist Archetype):</strong> Your primary spike in <strong>{topCompetency.name}</strong> ({topCompetency.score.toFixed(1)}/10.0) is a strong personal distinction, but sits outside the primary academic vectors expected for <strong>{currentMajorInfo.label}</strong>. Admissions officers view this as a positive secondary talent pillar, but will still search your profile for a secondary academic spike in expected major vectors.
+                          </>
+                        )
+                      ) : (
+                        <>
+                          <strong>Flattop Profile Warning:</strong> Your competency profile shows a balanced/flat curve with a top score of <strong>{topCompetency.score.toFixed(1)}/10.0</strong>. At Top 20 universities, flat profiles risk being filtered out during committee deliberations as 'jack-of-all-trades' applications. Concentrate your supercurricular hours to elevate 1–2 target vectors above 4.0+.
+                        </>
+                      )}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Section 3: Target vs Achieved Detailed Comparison Matrix */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                
+                {/* Target vs Achieved: Commitment Depth */}
+                <div className="p-5 bg-white border border-slate-200/90 rounded-2xl space-y-4 shadow-2xs flex flex-col justify-between">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <TrendingUp className="w-4 h-4 text-emerald-600" />
+                        <h4 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
+                          Commitment Depth: Target vs Achieved
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                        {portfolioCommitmentDepth.tierLabel.split(':')[0]}
+                      </span>
+                    </div>
+
+                    <div className="p-3.5 bg-emerald-50/50 border border-emerald-100 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold">
+                        <span className="text-slate-700">Achieved: <span className="text-emerald-800">{portfolioCommitmentDepth.totalHours} Annual Hours</span></span>
+                        <span className="text-slate-500">Target: <span className="text-slate-900">300+ Annual Hours</span></span>
+                      </div>
+
+                      <div className="w-full bg-slate-200 rounded-full h-2.5 overflow-hidden">
+                        <div 
+                          className="h-2.5 rounded-full bg-emerald-600 transition-all duration-500"
+                          style={{ width: `${Math.min(100, Math.round((portfolioCommitmentDepth.totalHours / 300) * 100))}%` }}
+                        />
+                      </div>
+                      <div className="text-[10px] text-emerald-900 font-semibold text-right">
+                        {Math.min(100, Math.round((portfolioCommitmentDepth.totalHours / 300) * 100))}% of Tier 1 Elite Benchmark
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 text-xs text-slate-600 leading-relaxed">
+                      <p>• <strong>Logged Activities:</strong> {portfolioCommitmentDepth.highCommitmentCount} high-commitment / leadership entries</p>
+                      <p>• <strong>Average Commitment:</strong> {portfolioCommitmentDepth.avgWeeklyHours} hours/week across entries</p>
+                      <p>• <strong>Strategic Rationale:</strong> Admissions officers measure depth to distinguish genuine passion from artificial resume padding. Sustained 300+ hours demonstrate multi-year commitment and leadership continuity.</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Target vs Achieved: Engagement Width */}
+                <div className="p-5 bg-white border border-slate-200/90 rounded-2xl space-y-4 shadow-2xs flex flex-col justify-between">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                      <div className="flex items-center gap-2">
+                        <Zap className="w-4 h-4 text-cyan-600" />
+                        <h4 className="text-xs font-extrabold text-slate-900 uppercase tracking-wider">
+                          Engagement Width: Target vs Achieved
+                        </h4>
+                      </div>
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-cyan-100 text-cyan-800 border border-cyan-200">
+                        {portfolioEngagementWidth.widthLabel.split('(')[0].trim()}
+                      </span>
+                    </div>
+
+                    <div className="p-3.5 bg-cyan-50/50 border border-cyan-100 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold">
+                        <span className="text-slate-700">Achieved: <span className="text-cyan-800">{portfolioEngagementWidth.activeVectorsCount} / 6 Active Vectors</span></span>
+                        <span className="text-slate-500">Target: <span className="text-slate-900">3 – 4 Core Vectors</span></span>
+                      </div>
+
+                      <div className="grid grid-cols-6 gap-1.5 pt-1">
+                        {COMPETENCIES.map((c, idx) => {
+                          const isActive = (competencyScores[c.id] || 0) > 0;
+                          return (
+                            <div 
+                              key={c.id} 
+                              className={cn(
+                                "p-1 rounded-md text-center text-[9px] font-bold transition-all",
+                                isActive ? "bg-cyan-600 text-white shadow-2xs" : "bg-slate-100 text-slate-400 border border-slate-200"
+                              )}
+                            >
+                              {c.name.split(' ')[0]}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="text-[10px] text-cyan-900 font-semibold text-right">
+                        {portfolioEngagementWidth.activeVectorsCount >= 3 && portfolioEngagementWidth.activeVectorsCount <= 4 ? 'Optimal T-Shaped Balance' : 'Adjust Focus towards 3–4 Vectors'}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5 text-xs text-slate-600 leading-relaxed">
+                      <p>• <strong>Active Dimensions:</strong> {portfolioEngagementWidth.activeVectorsCount} out of 6 competency vectors mapped</p>
+                      <p>• <strong>Vector Gaps:</strong> {identifiedGaps.length > 0 ? identifiedGaps.map(g => g.name).join(', ') : 'None identified'}</p>
+                      <p>• <strong>Strategic Rationale:</strong> Covering 3–4 vectors provides the ideal horizontal bar for your T-shaped profile. Covering all 6 vectors thinly risks diluting your spike, while covering only 1 vector can appear overly narrow.</p>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              {/* Section 4: Actionable Admissions Guidance */}
+              <div className="p-5 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+                  <Target className="w-4 h-4 text-indigo-600" /> Strategic Action Plan for Profile Elevation
+                </h3>
+                <ul className="space-y-2 text-xs text-slate-700">
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Elevate Key Roles:</strong> Upgrade core participant entries into student-led initiatives, founder roles, or committee captainships to boost competency weightage and role multipliers.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Sustain Dedicated Hours:</strong> Aim for at least 300+ total annual hours across core endeavors to hit the Tier 1 Depth threshold expected at Ivy/Top 20 institutions.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                    <span><strong>Focus Width on 3–4 Vectors:</strong> {identifiedGaps.length > 0 ? `Target missing vectors expected for ${currentMajorInfo.label} (${identifiedGaps.map(g => g.name).join(', ')}) with dedicated supercurricular projects.` : 'Maintain active engagement across your 3-4 core vector domains to preserve T-shaped balance.'}</span>
+                  </li>
+                </ul>
+              </div>
+
+            </div>
+
+            {/* Modal Footer */}
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end shrink-0">
+              <Button onClick={() => setIsStrategyModalOpen(false)} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs px-5 rounded-xl cursor-pointer">
+                Close Report
+              </Button>
+            </div>
+
+          </div>
+        </div>
+      )}
     </div>
   );
 }

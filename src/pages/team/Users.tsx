@@ -511,7 +511,8 @@ function AddStaffForm({ onClose, onAdd }: { onClose: () => void, onAdd: (s: Staf
           <option value="COUNSELOR">Counselor</option>
           <option value="SAT_MATH_FACULTY">SAT Math Faculty</option>
           <option value="SAT_VERBAL_FACULTY">SAT Verbal Faculty</option>
-          <option value="RESEARCH_MENTOR">Research Mentor</option>
+          <option value="RESEARCH_GUIDE">Research Guide</option>
+          <option value="UNIVERSITY_MENTOR">University Mentor</option>
           <option value="OPERATIONS_LEAD">Operations Lead</option>
           <option value="DEVELOPER">Developer</option>
         </select>
@@ -1538,9 +1539,9 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
                </div>
 
                <div>
-                 <label className="block text-sm font-bold text-slate-700 mb-1.5">Research Mentor</label>
+                 <label className="block text-sm font-bold text-slate-700 mb-1.5">Research Guide</label>
                  <select value={formData.researchMentor} onChange={e => setFormData({...formData, researchMentor: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
-                   <option value="">Select Research Mentor</option>
+                   <option value="">Select Research Guide</option>
                    {staff.map(s => (
                      <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
                    ))}
@@ -2591,10 +2592,10 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
             </div>
 
             <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Research Mentor</p>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Research Guide</p>
               {isEditing ? (
                 <select value={formData.researchMentor} onChange={e => setFormData({...formData, researchMentor: e.target.value})} className="w-full border border-slate-200 rounded p-2 text-sm bg-white focus:ring-2 focus:ring-blue-500">
-                  <option value="">Select Research Mentor</option>
+                  <option value="">Select Research Guide</option>
                   {staff.map(s => (
                     <option key={s.id} value={s.name}>{s.name} ({s.role})</option>
                   ))}
