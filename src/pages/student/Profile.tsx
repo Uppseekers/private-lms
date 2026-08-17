@@ -196,10 +196,17 @@ export default function StudentProfile() {
       setIsSaving(true);
       const fd = new FormData(e.target);
       const combinedIntake = `${intakeTerm} ${intakeYear}`;
+      
+      const rawPhone = (fd.get('phone') as string) || '';
+      // Clean any accumulated ' | email@...' from phone field
+      const cleanedPhone = rawPhone.split('|')[0].trim();
+      const enteredEmail = (fd.get('email') as string)?.trim() || student?.email || '';
+
       const updated = {
         ...student,
         name: fd.get('name') || student?.name || '',
-        phone: fd.get('phone') || student?.phone || '',
+        phone: cleanedPhone,
+        email: enteredEmail,
         countries: fd.get('countries') ? [fd.get('countries')] : (student?.countries || []),
         intake: combinedIntake,
         school: fd.get('school') || student?.school || '',
@@ -276,7 +283,8 @@ export default function StudentProfile() {
               {INDIAN_CITIES.map(c => <option key={c} value={c} />)}
             </datalist>
           </div>
-          <Input label="Phone & Email" name="phone" placeholder="+1 234 567 8900 | john@example.com" defaultValue={student?.phone ? `${student.phone}${student.email ? ' | ' + student.email : ''}` : (student?.email || '')} />
+          <Input label="Email Address" name="email" type="email" placeholder="student@example.com" defaultValue={student?.email || ''} />
+          <Input label="Phone Number" name="phone" type="tel" placeholder="+1 234 567 8900" defaultValue={(student?.phone || '').split('|')[0].trim()} />
         </div>
         <div className="pt-4 border-t border-slate-100">
           <h4 className="text-sm font-bold text-slate-900 mb-4">Passport Details</h4>

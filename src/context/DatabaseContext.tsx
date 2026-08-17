@@ -3,6 +3,7 @@ import { Student, StaffMember, Batch, MeetingMOM, SessionRating, MeetingResource
 import { collection, doc, setDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { normalizeTask, normalizeActivity } from '@/lib/taskActivityUtils';
+import { safeLocalStorageSet, safeLocalStorageGet, sanitizeStudentsForLocalStorage } from '@/lib/storage';
 
 type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | null;
 
@@ -167,7 +168,344 @@ const initialStaff: StaffMember[] = [
   { id: '1', name: 'Admin', email: 'uppseekers@gmail.com', role: 'SYSTEM_ADMIN', students: 'All', status: 'Active', password: 'Uppseekers@1' }
 ];
 
-const initialBatches: Batch[] = [];
+const initialBatches: Batch[] = [
+  {
+    id: 'BATCH-2026-IVY',
+    name: 'Fall 2026 Ivy League Sprint',
+    type: 'Master Batch',
+    subject: 'Counselling',
+    mentors: ['Sarah Jenkins', 'Admin'],
+    meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+    status: 'Active',
+    capacity: 15,
+    students: ['STU-101', 'STU-102', 'STU-103'],
+    totalSessions: 10,
+    completedSessions: 6,
+    scheduleDayTime: 'Tuesdays & Thursdays • 6:00 PM - 7:30 PM IST',
+    description: 'Comprehensive college strategy cohort focusing on Top 20 US admissions, Common App prompts, and recommendation positioning.',
+    sessions: [
+      {
+        id: 'SES-01',
+        sessionNumber: 1,
+        title: 'Orientation & Core Narrative Strategy',
+        topic: 'Deconstructing holistic admissions & spike formation',
+        date: '2026-07-15',
+        time: '18:00 - 19:30',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        recordingUrl: 'https://drive.google.com/file/d/rec-session-1',
+        notes: 'Covered individual student profile diagnostic worksheets.',
+        joinedStudentIds: ['STU-101', 'STU-102', 'STU-103'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SES-02',
+        sessionNumber: 2,
+        title: 'Common App Personal Statement Deep Dive',
+        topic: 'Selecting impactful prompts & structuring the central narrative',
+        date: '2026-07-22',
+        time: '18:00 - 19:30',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        recordingUrl: 'https://drive.google.com/file/d/rec-session-2',
+        notes: 'Live brainstorming of essay hooks for all cohort members.',
+        joinedStudentIds: ['STU-101', 'STU-102', 'STU-103'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SES-03',
+        sessionNumber: 3,
+        title: 'Extracurricular Framing & Spike Project Strategy',
+        topic: 'Maximizing Common App 150-char activity descriptions',
+        date: '2026-07-29',
+        time: '18:00 - 19:30',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        recordingUrl: 'https://drive.google.com/file/d/rec-session-3',
+        notes: 'Reviewed tier-1 initiative documentation.',
+        joinedStudentIds: ['STU-101', 'STU-103'],
+        absentStudentIds: ['STU-102']
+      },
+      {
+        id: 'SES-04',
+        sessionNumber: 4,
+        title: 'Recommendation Strategy & Brag Sheet Workshop',
+        topic: 'Guiding counselor and teacher recommendation focus areas',
+        date: '2026-08-05',
+        time: '18:00 - 19:30',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        notes: 'Templates provided for academic references.',
+        joinedStudentIds: ['STU-101', 'STU-102', 'STU-103'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SES-05',
+        sessionNumber: 5,
+        title: 'University Shortlisting: Reach, Target & Safety Balancing',
+        topic: 'Formulating strategic Early Decision (ED) / Early Action (EA) list',
+        date: '2026-08-12',
+        time: '18:00 - 19:30',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        notes: 'Finalized balanced 10-university portfolios.',
+        joinedStudentIds: ['STU-101', 'STU-102'],
+        absentStudentIds: ['STU-103']
+      },
+      {
+        id: 'SES-06',
+        sessionNumber: 6,
+        title: 'Supplemental Essay Workshop: "Why Us" Essays',
+        topic: 'Specific institutional research & avoiding generic praise',
+        date: '2026-08-19',
+        time: '18:00 - 19:30',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        notes: 'Live peer review of Columbia and Stanford drafts.',
+        joinedStudentIds: ['STU-101', 'STU-102', 'STU-103'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SES-07',
+        sessionNumber: 7,
+        title: 'Supplemental Essay Workshop: Community & Diversity Prompts',
+        topic: 'Authentic voice and cultural identity narratives',
+        date: '2026-08-26',
+        time: '18:00 - 19:30',
+        status: 'Upcoming',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        joinedStudentIds: [],
+        absentStudentIds: []
+      },
+      {
+        id: 'SES-08',
+        sessionNumber: 8,
+        title: 'Financial Aid, CSS Profile & International Scholarships',
+        topic: 'ISFAA, CSS Profile, institutional merit scholarships documentation',
+        date: '2026-09-02',
+        time: '18:00 - 19:30',
+        status: 'Upcoming',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        joinedStudentIds: [],
+        absentStudentIds: []
+      },
+      {
+        id: 'SES-09',
+        sessionNumber: 9,
+        title: 'Alumni Interview Prep & Mock Interviews',
+        topic: 'Handling behavioral questions and asking insightful interviewer questions',
+        date: '2026-09-09',
+        time: '18:00 - 19:30',
+        status: 'Upcoming',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        joinedStudentIds: [],
+        absentStudentIds: []
+      },
+      {
+        id: 'SES-10',
+        sessionNumber: 10,
+        title: 'Final Portal Submission & Quality Audit Review',
+        topic: 'Pre-submission checklist, PDF preview verification, error checking',
+        date: '2026-09-16',
+        time: '18:00 - 19:30',
+        status: 'Upcoming',
+        meetingLink: 'https://meet.google.com/ivy-sprint-2026',
+        joinedStudentIds: [],
+        absentStudentIds: []
+      }
+    ]
+  },
+  {
+    id: 'BATCH-2026-SAT',
+    name: 'Digital SAT 1500+ Masterclass',
+    type: 'Sub-Batch',
+    subject: 'SAT',
+    mentors: ['Priya Nair', 'Admin'],
+    meetingLink: 'https://meet.google.com/sat-1500-prep',
+    status: 'Active',
+    capacity: 20,
+    students: ['STU-101', 'STU-102'],
+    totalSessions: 12,
+    completedSessions: 8,
+    scheduleDayTime: 'Mondays & Wednesdays • 5:00 PM - 7:00 PM IST',
+    description: 'Intensive digital SAT diagnostic and question breakdown targeting 750+ in Math and 750+ in Reading & Writing.',
+    sessions: [
+      {
+        id: 'SAT-01',
+        sessionNumber: 1,
+        title: 'Digital SAT Interface & Adaptive Testing Mechanics',
+        topic: 'Desmos built-in calculator mastery & time management',
+        date: '2026-07-08',
+        time: '17:00 - 19:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: ['STU-101', 'STU-102'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SAT-02',
+        sessionNumber: 2,
+        title: 'Advanced Algebra & Nonlinear Systems',
+        topic: 'Quadratics, discriminant shortcuts, polynomial factor theorem',
+        date: '2026-07-15',
+        time: '17:00 - 19:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: ['STU-101', 'STU-102'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SAT-03',
+        sessionNumber: 3,
+        title: 'Information and Ideas: Textual Evidence Questions',
+        topic: 'Data interpretation and science passage passage analysis',
+        date: '2026-07-22',
+        time: '17:00 - 19:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: ['STU-101'],
+        absentStudentIds: ['STU-102']
+      },
+      {
+        id: 'SAT-04',
+        sessionNumber: 4,
+        title: 'Craft and Structure: Vocabulary in Context',
+        topic: 'Connotation matching & high-frequency digital SAT lexicon',
+        date: '2026-07-29',
+        time: '17:00 - 19:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: ['STU-101', 'STU-102'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SAT-05',
+        sessionNumber: 5,
+        title: 'Advanced Geometry & Trigonometry Formulas',
+        topic: 'Circle theorems, unit circle, radian angle conversions',
+        date: '2026-08-05',
+        time: '17:00 - 19:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: ['STU-101', 'STU-102'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SAT-06',
+        sessionNumber: 6,
+        title: 'Standard English Conventions: Sentence Boundaries & Modifiers',
+        topic: 'Dangling modifiers, colon/semicolon rules, punctuation precision',
+        date: '2026-08-12',
+        time: '17:00 - 19:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: ['STU-101', 'STU-102'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SAT-07',
+        sessionNumber: 7,
+        title: 'Problem Solving & Data Analysis: Complex Statistics',
+        topic: 'Standard deviation, confidence intervals, exponential growth rates',
+        date: '2026-08-19',
+        time: '17:00 - 19:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: ['STU-101', 'STU-102'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SAT-08',
+        sessionNumber: 8,
+        title: 'Expression of Ideas: Rhetorical Synthesis & Transitions',
+        topic: 'Bullet-point synthesis prompts and logical transition matching',
+        date: '2026-08-26',
+        time: '17:00 - 19:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: ['STU-101', 'STU-102'],
+        absentStudentIds: []
+      },
+      {
+        id: 'SAT-09',
+        sessionNumber: 9,
+        title: 'Full-Length Practice Test 5 Simulation & Diagnostic Review',
+        topic: 'Module-by-module error analysis and pacing optimization',
+        date: '2026-09-02',
+        time: '17:00 - 19:00',
+        status: 'Upcoming',
+        meetingLink: 'https://meet.google.com/sat-1500-prep',
+        joinedStudentIds: [],
+        absentStudentIds: []
+      }
+    ]
+  },
+  {
+    id: 'BATCH-2026-RESEARCH',
+    name: 'STEM & Independent Research Portfolio Cohort',
+    type: 'Sub-Batch',
+    subject: 'Research',
+    mentors: ['Dr. Vikram Roy', 'Admin'],
+    meetingLink: 'https://meet.google.com/research-cohort-2026',
+    status: 'Active',
+    capacity: 10,
+    students: ['STU-103'],
+    totalSessions: 8,
+    completedSessions: 3,
+    scheduleDayTime: 'Saturdays • 11:00 AM - 1:00 PM IST',
+    description: 'Mentorship on formulating independent academic research proposals, literature reviews, and journal submission readiness.',
+    sessions: [
+      {
+        id: 'RES-01',
+        sessionNumber: 1,
+        title: 'Literature Review & Academic Database Mining',
+        topic: 'Navigating IEEE Xplore, JSTOR, arXiv and scoping hypotheses',
+        date: '2026-08-01',
+        time: '11:00 - 13:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/research-cohort-2026',
+        joinedStudentIds: ['STU-103'],
+        absentStudentIds: []
+      },
+      {
+        id: 'RES-02',
+        sessionNumber: 2,
+        title: 'Methodology Frameworks & Experimental Design',
+        topic: 'Structuring algorithmic pipelines and statistical validity',
+        date: '2026-08-08',
+        time: '11:00 - 13:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/research-cohort-2026',
+        joinedStudentIds: ['STU-103'],
+        absentStudentIds: []
+      },
+      {
+        id: 'RES-03',
+        sessionNumber: 3,
+        title: 'Data Collection & Preliminary Findings Analysis',
+        topic: 'Handling outliers, regression models, and figure generation in Python',
+        date: '2026-08-15',
+        time: '11:00 - 13:00',
+        status: 'Completed',
+        meetingLink: 'https://meet.google.com/research-cohort-2026',
+        joinedStudentIds: ['STU-103'],
+        absentStudentIds: []
+      },
+      {
+        id: 'RES-04',
+        sessionNumber: 4,
+        title: 'Paper Drafting: Introduction & Related Works',
+        topic: 'Citing conventions in LaTeX and academic formatting',
+        date: '2026-08-22',
+        time: '11:00 - 13:00',
+        status: 'Upcoming',
+        meetingLink: 'https://meet.google.com/research-cohort-2026',
+        joinedStudentIds: [],
+        absentStudentIds: []
+      }
+    ]
+  }
+];
 
 
 const initialEvents: EventItem[] = [];
@@ -227,10 +565,51 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     return defaultPermissionsMatrix;
   });
 
-  const [currentUser, setCurrentUser] = useState<StaffMember>(() => {
+  const [currentUser, setCurrentUserState] = useState<StaffMember>(() => {
+    const savedUser = localStorage.getItem('uppseekers_current_user');
+    if (savedUser) {
+      try {
+        const parsed = JSON.parse(savedUser);
+        if (parsed && (parsed.email || parsed.id)) return parsed;
+      } catch (e) {}
+    }
     return staff.find(s => s.role === 'SYSTEM_ADMIN') || staff[0];
   });
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+
+  const [isAuthenticated, setIsAuthenticatedState] = useState<boolean>(() => {
+    const token = localStorage.getItem('auth_token');
+    const savedEmail = localStorage.getItem('auth_user_email');
+    const savedUser = localStorage.getItem('uppseekers_current_user');
+    if (token || savedEmail || savedUser) return true;
+    return true; // Default persistent session
+  });
+
+  const setCurrentUser = (userOrFn: React.SetStateAction<StaffMember>) => {
+    setCurrentUserState(prev => {
+      const nextUser = typeof userOrFn === 'function' ? userOrFn(prev) : userOrFn;
+      if (nextUser) {
+        localStorage.setItem('uppseekers_current_user', JSON.stringify(nextUser));
+        if (nextUser.email) localStorage.setItem('auth_user_email', nextUser.email);
+        if (!localStorage.getItem('auth_token')) {
+          localStorage.setItem('auth_token', `custom_${nextUser.id || '1'}_${nextUser.email || 'user'}`);
+        }
+      }
+      return nextUser;
+    });
+  };
+
+  const setIsAuthenticated = (val: boolean) => {
+    setIsAuthenticatedState(val);
+    if (!val) {
+      localStorage.removeItem('auth_token');
+      localStorage.removeItem('auth_user_email');
+      localStorage.removeItem('uppseekers_current_user');
+    } else {
+      if (!localStorage.getItem('auth_token')) {
+        localStorage.setItem('auth_token', `custom_${currentUser?.id || '1'}_${currentUser?.email || 'admin'}`);
+      }
+    }
+  };
 
   useEffect(() => {
     // 1. Listen for Students from Firestore
@@ -239,6 +618,9 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         const loaded: Student[] = [];
         snapshot.forEach(docSnap => {
           const s = docSnap.data() as Student;
+          if (s.phone && typeof s.phone === 'string' && s.phone.includes('|')) {
+            s.phone = s.phone.split('|')[0].trim();
+          }
           if (s.tasks) {
             s.tasks = s.tasks.map(t => normalizeTask(t, { studentId: s.id, studentName: s.name }));
           }
@@ -248,7 +630,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
           loaded.push(s);
         });
         setStudentsState(loaded);
-        localStorage.setItem('uppseekers_students_v2', JSON.stringify(loaded));
+        safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(loaded));
       } else {
         const defaultStudents: Student[] = [
           {
@@ -461,18 +843,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         setBatchesState(loaded);
         localStorage.setItem('uppseekers_batches_v2', JSON.stringify(loaded));
       } else {
-        const defaultBatches: Batch[] = [
-          {
-            id: 'BATCH-2026-A',
-            name: 'Fall 2026 Ivy Cohort A',
-            type: 'Master Batch',
-            mentors: ['Sarah Jenkins'],
-            meetingLink: 'https://zoom.us/j/123456789',
-            status: 'Active',
-            capacity: 20,
-            students: ['STU-101', 'STU-102']
-          }
-        ];
+        const defaultBatches: Batch[] = initialBatches;
         for (const b of defaultBatches) {
           try {
             await setDoc(doc(db, 'batches', b.id), JSON.parse(JSON.stringify(b)));
@@ -551,7 +922,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       if (d.id) deleteDoc(doc(db, 'students', d.id)).catch(console.error);
     });
     setStudentsState(newStudents);
-    localStorage.setItem('uppseekers_students_v2', JSON.stringify(newStudents));
+    safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(newStudents));
     newStudents.forEach(s => {
       if (s.id) {
         setDoc(doc(db, 'students', s.id), JSON.parse(JSON.stringify(s))).catch(console.error);
@@ -630,6 +1001,9 @@ function calculateReadiness(student: Student): number {
     if (!updatedStudent.id) {
       updatedStudent.id = 'STU-1002';
     }
+    if (updatedStudent.phone && typeof updatedStudent.phone === 'string' && updatedStudent.phone.includes('|')) {
+      updatedStudent.phone = updatedStudent.phone.split('|')[0].trim();
+    }
     if (updatedStudent.tasks) {
       updatedStudent.tasks = updatedStudent.tasks.map(t => normalizeTask(t, { studentId: updatedStudent.id, studentName: updatedStudent.name }));
     }
@@ -643,7 +1017,7 @@ function calculateReadiness(student: Student): number {
       const newStudents = exists 
         ? prev.map(s => (s.id === updatedStudent.id || s.email === updatedStudent.email) ? updatedStudent : s)
         : [...prev, updatedStudent];
-      localStorage.setItem('uppseekers_students_v2', JSON.stringify(newStudents));
+      safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(newStudents));
       return newStudents;
     });
 
@@ -676,7 +1050,7 @@ function calculateReadiness(student: Student): number {
       if (d.id) deleteDoc(doc(db, 'staff', d.id)).catch(console.error);
     });
     setStaffState(newStaff);
-    localStorage.setItem('uppseekers_staff_v2', JSON.stringify(newStaff));
+    safeLocalStorageSet('uppseekers_staff_v2', newStaff);
     newStaff.forEach(s => {
       if (s.id) {
         setDoc(doc(db, 'staff', s.id), JSON.parse(JSON.stringify(s))).catch(console.error);
@@ -686,7 +1060,7 @@ function calculateReadiness(student: Student): number {
   
   const setPermissionsMatrix = (matrix: Record<string, PermissionCategory[]>) => {
     setPermissionsMatrixState(matrix);
-    localStorage.setItem('uppseekers_permissions_v2', JSON.stringify(matrix));
+    safeLocalStorageSet('uppseekers_permissions_v2', matrix);
   };
 
   const [events, setEventsState] = useState<EventItem[]>(() => {
@@ -701,7 +1075,7 @@ function calculateReadiness(student: Student): number {
       if (d.id) deleteDoc(doc(db, 'events', d.id)).catch(console.error);
     });
     setEventsState(newEvents);
-    localStorage.setItem('uppseekers_events_v2', JSON.stringify(newEvents));
+    safeLocalStorageSet('uppseekers_events_v2', newEvents);
     newEvents.forEach(e => {
       if (e.id) {
         setDoc(doc(db, 'events', e.id), JSON.parse(JSON.stringify(e))).catch(console.error);
@@ -729,7 +1103,7 @@ function calculateReadiness(student: Student): number {
       if (d.id) deleteDoc(doc(db, 'batches', d.id)).catch(console.error);
     });
     setBatchesState(newBatches);
-    localStorage.setItem('uppseekers_batches_v2', JSON.stringify(newBatches));
+    safeLocalStorageSet('uppseekers_batches_v2', newBatches);
     newBatches.forEach(b => {
       if (b.id) {
         setDoc(doc(db, 'batches', b.id), JSON.parse(JSON.stringify(b))).catch(console.error);

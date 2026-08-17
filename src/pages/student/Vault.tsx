@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { UploadCloud, CheckCircle2, AlertCircle, Clock, X, Trash2, Eye, Download, FileText } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertCircle, Clock, X, Trash2, Eye, Download, FileText, Search, Filter } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDatabase } from '@/context/DatabaseContext';
 
@@ -93,6 +93,9 @@ export default function StudentVault() {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('All');
   const [previewDoc, setPreviewDoc] = useState<DocumentInfo | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('ALL');
+  const [selectedDateFilter, setSelectedDateFilter] = useState<'ALL' | '7d' | '30d' | '90d' | 'this_year'>('ALL');
 
   // Form State
   const [selectedCategory, setSelectedCategory] = useState(Object.keys(CATEGORIES)[0]);
@@ -199,11 +202,44 @@ export default function StudentVault() {
     setIsUploadModalOpen(true);
   };
 
-  const filteredDocs = activeTab === 'All' ? documents : documents.filter(d => {
+  const filteredDocs = documents.filter(d => {
+    // Tab Status Filter
     const st = d.status?.toLowerCase();
-    if (activeTab === 'Action Needed') return st === 'rejected';
-    if (activeTab === 'Verified') return st === 'verified';
-    if (activeTab === 'Drafts') return st === 'draft';
+    if (activeTab === 'Action Needed' && st !== 'rejected') return false;
+    if (activeTab === 'Verified' && st !== 'verified') return false;
+    if (activeTab === 'Drafts' && st !== 'draft') return false;
+
+    // Category Filter
+    if (selectedCategoryFilter !== 'ALL' && d.category !== selectedCategoryFilter) {
+      return false;
+    }
+
+    // Search query
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      const matchName = (d.name || '').toLowerCase().includes(q);
+      const matchCat = (d.category || '').toLowerCase().includes(q);
+      const matchType = (d.type || '').toLowerCase().includes(q);
+      const matchTarget = (d.target || '').toLowerCase().includes(q);
+      const matchNotes = (d.notes || '').toLowerCase().includes(q);
+      if (!matchName && !matchCat && !matchType && !matchTarget && !matchNotes) {
+        return false;
+      }
+    }
+
+    // Date Filter
+    if (selectedDateFilter !== 'ALL') {
+      const docDate = new Date(d.date);
+      if (!isNaN(docDate.getTime())) {
+        const now = new Date();
+        const diffDays = (now.getTime() - docDate.getTime()) / (1000 * 3600 * 24);
+        if (selectedDateFilter === '7d' && diffDays > 7) return false;
+        if (selectedDateFilter === '30d' && diffDays > 30) return false;
+        if (selectedDateFilter === '90d' && diffDays > 90) return false;
+        if (selectedDateFilter === 'this_year' && docDate.getFullYear() !== now.getFullYear()) return false;
+      }
+    }
+
     return true;
   });
 
@@ -224,7 +260,7 @@ export default function StudentVault() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto space-y-8 pb-12">
+    <div className="max-w-7xl mx-auto space-y-6 pb-12">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">My Document Vault</h2>
@@ -233,6 +269,72 @@ export default function StudentVault() {
         <Button onClick={handleOpenUpload} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shrink-0">
           <UploadCloud className="w-4 h-4 mr-2" /> Upload New Document
         </Button>
+      </div>
+
+      {/* Filter toolbar */}
+      <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+        <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input 
+              type="text" 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by document name, target university, type, or notes..." 
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+            />
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Category Filter */}
+            <select
+              value={selectedCategoryFilter}
+              onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              <option value="ALL">All Categories</option>
+              {Object.keys(CATEGORIES).map(cat => (
+                <option key={cat} value={cat}>{cat}</option>
+              ))}
+            </select>
+
+            {/* Date Range Filter */}
+            <select
+              value={selectedDateFilter}
+              onChange={(e) => setSelectedDateFilter(e.target.value as any)}
+              className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              <option value="ALL">All Time</option>
+              <option value="7d">Past 7 Days</option>
+              <option value="30d">Past 30 Days</option>
+              <option value="90d">Past 90 Days</option>
+              <option value="this_year">This Year</option>
+            </select>
+
+            {/* Reset Filters */}
+            {(selectedCategoryFilter !== 'ALL' || selectedDateFilter !== 'ALL' || searchQuery.trim()) && (
+              <button
+                onClick={() => {
+                  setSelectedCategoryFilter('ALL');
+                  setSelectedDateFilter('ALL');
+                  setSearchQuery('');
+                }}
+                className="px-2.5 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 rounded-xl border border-rose-200 transition-colors flex items-center gap-1"
+              >
+                <X className="w-3.5 h-3.5" /> Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-100">
+          <span>Showing <strong>{filteredDocs.length}</strong> of <strong>{documents.length}</strong> documents</span>
+          {selectedCategoryFilter !== 'ALL' && (
+            <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md font-semibold text-[11px]">
+              Category: {selectedCategoryFilter}
+            </span>
+          )}
+        </div>
       </div>
 
       <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide border-b border-slate-200">

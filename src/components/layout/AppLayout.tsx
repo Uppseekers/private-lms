@@ -19,7 +19,13 @@ import {
   FileText,
   Menu,
   FileSpreadsheet,
-  Target
+  Target,
+  Bell,
+  CheckCheck,
+  Clock,
+  AlertCircle,
+  Sparkles,
+  BookOpen
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getScopedStudentsForStaff } from '@/lib/staffPermissions';
@@ -48,11 +54,11 @@ const studentNavigation: SidebarItem[] = [
 
 const teamNavigation: SidebarItem[] = [
   { name: 'Dashboard', href: '/team/dashboard', icon: LayoutDashboard },
+  { name: 'Batches & Cohorts', href: '/team/batches', icon: BookOpen, permissionKey: 'view_past', categoryKey: 'batch' },
   { name: 'Class Scheduler', href: '/team/scheduler', icon: CalendarDays, permissionKey: 'create_class', categoryKey: 'schedule' },
   { name: 'Document Center', href: '/team/vault', icon: FolderLock, permissionKey: 'view_vault', categoryKey: 'vault' },
   { name: 'Assignment Evaluator', href: '/team/evaluator', icon: CheckSquare, permissionKey: 'assign_tasks', categoryKey: 'tasks' },
   { name: 'Student Database', href: '/team/users', icon: Users, permissionKey: 'view_roster', categoryKey: 'profile' },
-  { name: 'Batch Allocator', href: '/team/batches', icon: Settings, permissionKey: 'create_batch', categoryKey: 'batch' },
   { name: 'Admin Settings', href: '/team/settings', icon: Shield, permissionKey: 'staff_onboard', categoryKey: 'admin' },
 ];
 
@@ -63,14 +69,55 @@ export default function AppLayout() {
   const [isSearchModalOpen, setIsSearchModalOpen] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
+  const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [readNotifIds, setReadNotifIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('uppseekers_read_notifications') || '[]');
+    } catch {
+      return [];
+    }
+  });
+  const [notifFilter, setNotifFilter] = useState<'ALL' | 'TASKS' | 'DOCS' | 'ESSAYS'>('ALL');
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const notifDropdownRef = useRef<HTMLDivElement>(null);
 
   const { currentUser, permissionsMatrix, staff, students, setCurrentUser, setIsAuthenticated } = useDatabase();
   
-  // Close mobile drawer on navigation
+  // Close mobile drawer and notifications on navigation/click-outside
   useEffect(() => {
     setIsMobileMenuOpen(false);
+    setIsNotificationOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (notifDropdownRef.current && !notifDropdownRef.current.contains(e.target as Node)) {
+        setIsNotificationOpen(false);
+      }
+    };
+    if (isNotificationOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isNotificationOpen]);
+
+  const markAllAsRead = () => {
+    const allIds = notifications.map(n => n.id);
+    setReadNotifIds(allIds);
+    try {
+      localStorage.setItem('uppseekers_read_notifications', JSON.stringify(allIds));
+    } catch {}
+  };
+
+  const markOneAsRead = (id: string) => {
+    if (!readNotifIds.includes(id)) {
+      const updated = [...readNotifIds, id];
+      setReadNotifIds(updated);
+      try {
+        localStorage.setItem('uppseekers_read_notifications', JSON.stringify(updated));
+      } catch {}
+    }
+  };
 
   // Basic mock auth detection based on URL
   const isTeam = location.pathname.startsWith('/team');
@@ -157,6 +204,137 @@ export default function AppLayout() {
     : [];
 
   const totalResults = matchingPages.length + matchingStudents.length + matchingUniversities.length + matchingDocuments.length + matchingEssays.length + matchingTasks.length;
+
+  // Notifications aggregation
+  const notifications = React.useMemo(() => {
+    const list: {
+      id: string;
+      title: string;
+      message: string;
+      time: string;
+      category: 'TASKS' | 'DOCS' | 'ESSAYS';
+      link: string;
+      type: 'urgent' | 'info' | 'success' | 'warning';
+      isRead: boolean;
+    }[] = [];
+
+    if (!isTeam && currentStudent) {
+      // Student Notifications: Tasks assigned, Task updates/changes, Essays, Docs
+      (currentStudent.tasks || []).forEach((t: any) => {
+        const isCompleted = t.status === 'Completed';
+        const isNeedsRev = t.status === 'Needs Revision';
+        list.push({
+          id: `task-${t.id}`,
+          title: isNeedsRev ? `Task Revision: ${t.name}` : isCompleted ? `Task Approved: ${t.name}` : `Task Assigned: ${t.name}`,
+          message: isNeedsRev 
+            ? `Counselor feedback: ${t.feedback || 'Please update your submission and re-upload'}`
+            : isCompleted 
+            ? `Your task submission has been approved & marked complete.`
+            : `Assigned: ${t.description || t.category || 'New task assigned'} (Due: ${t.deadline || 'Upcoming'})`,
+          time: t.deadline ? `Due: ${t.deadline}` : 'Active',
+          category: 'TASKS',
+          link: '/student/tasks',
+          type: isNeedsRev ? 'urgent' : isCompleted ? 'success' : 'info',
+          isRead: readNotifIds.includes(`task-${t.id}`)
+        });
+      });
+
+      (currentStudent.essays || []).forEach((e: any) => {
+        if (e.feedback || e.status === 'Completed' || e.status === 'Needs Revision') {
+          list.push({
+            id: `essay-${e.id}`,
+            title: `Essay Evaluation: ${e.university || 'Essay Draft'}`,
+            message: e.feedback ? `Mentor note: "${e.feedback}"` : `Status updated to ${e.status}`,
+            time: 'Evaluated',
+            category: 'ESSAYS',
+            link: '/student/essays',
+            type: e.status === 'Completed' ? 'success' : 'warning',
+            isRead: readNotifIds.includes(`essay-${e.id}`)
+          });
+        }
+      });
+
+      (currentStudent.documents || []).forEach((d: any) => {
+        if (d.status === 'rejected') {
+          list.push({
+            id: `doc-${d.id}`,
+            title: `Document Action Required: ${d.name}`,
+            message: d.notes ? `Feedback: ${d.notes}` : 'Document was not approved. Please re-upload.',
+            time: d.date || 'Recent',
+            category: 'DOCS',
+            link: '/student/vault',
+            type: 'urgent',
+            isRead: readNotifIds.includes(`doc-${d.id}`)
+          });
+        } else if (d.status === 'verified') {
+          list.push({
+            id: `doc-${d.id}`,
+            title: `Document Verified: ${d.name}`,
+            message: `Your document has been verified by the counselor.`,
+            time: d.date || 'Recent',
+            category: 'DOCS',
+            link: '/student/vault',
+            type: 'success',
+            isRead: readNotifIds.includes(`doc-${d.id}`)
+          });
+        }
+      });
+    } else if (isTeam) {
+      // Team / Counselor Notifications
+      const scoped = getScopedStudentsForStaff(students, currentUser);
+      scoped.forEach((s: any) => {
+        (s.tasks || []).filter((t: any) => t.status === 'In Progress' || t.status === 'Needs Revision' || t.submissionText || t.submissionFileUrl).forEach((t: any) => {
+          list.push({
+            id: `team-task-${s.id}-${t.id}`,
+            title: `${s.name}: ${t.name}`,
+            message: `Task submission awaiting evaluation (${t.category} • ${t.priority || 'Medium'} Priority)`,
+            time: t.deadline || 'Pending',
+            category: 'TASKS',
+            link: '/team/evaluator',
+            type: 'info',
+            isRead: readNotifIds.includes(`team-task-${s.id}-${t.id}`)
+          });
+        });
+
+        (s.essays || []).forEach((e: any) => {
+          if (e.status === 'Draft' || e.status === 'In Review' || e.draftText) {
+            list.push({
+              id: `team-essay-${s.id}-${e.id}`,
+              title: `${s.name}: ${e.prompt || e.university || 'Essay Draft'}`,
+              message: `Essay submission ready in Assignment Evaluator`,
+              time: 'New Submission',
+              category: 'ESSAYS',
+              link: '/team/evaluator',
+              type: 'info',
+              isRead: readNotifIds.includes(`team-essay-${s.id}-${e.id}`)
+            });
+          }
+        });
+
+        (s.documents || []).filter((d: any) => d.status === 'pending' || d.status === 'Pending').forEach((d: any) => {
+          list.push({
+            id: `team-doc-${s.id}-${d.id}`,
+            title: `${s.name}: ${d.name}`,
+            message: `Document uploaded in ${d.category}. Needs counselor verification.`,
+            time: d.date || 'Recent',
+            category: 'DOCS',
+            link: '/team/vault',
+            type: 'warning',
+            isRead: readNotifIds.includes(`team-doc-${s.id}-${d.id}`)
+          });
+        });
+      });
+    }
+
+    return list;
+  }, [isTeam, currentStudent, students, currentUser, readNotifIds]);
+
+  const filteredNotifications = notifications.filter(n => {
+    if (notifFilter === 'ALL') return true;
+    return n.category === notifFilter;
+  });
+
+  const unreadCount = notifications.filter(n => !n.isRead).length;
 
   const handleSelectResult = (path: string) => {
     setIsSearchModalOpen(false);
@@ -341,6 +519,136 @@ export default function AppLayout() {
                   <Command className="w-2.5 h-2.5" /> K
                 </span>
               </div>
+            </div>
+
+            {/* Notification Bell with Top Dropdown */}
+            <div className="relative" ref={notifDropdownRef}>
+              <button
+                onClick={() => setIsNotificationOpen(!isNotificationOpen)}
+                title="Notifications: Tasks, Updates & Reviews"
+                className={cn(
+                  "w-8 h-8 rounded-full flex items-center justify-center transition-all relative border shadow-2xs",
+                  isNotificationOpen 
+                    ? "bg-indigo-600 text-white border-indigo-600 shadow-sm" 
+                    : "bg-slate-100 hover:bg-slate-200/80 text-slate-600 border-slate-200"
+                )}
+              >
+                <Bell className="w-4 h-4" />
+                {unreadCount > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-rose-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center px-1 border-2 border-white animate-pulse shadow-xs">
+                    {unreadCount > 9 ? '9+' : unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {/* Notification Dropdown Panel */}
+              {isNotificationOpen && (
+                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white border border-slate-200 rounded-2xl shadow-2xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                  {/* Header */}
+                  <div className="p-3.5 bg-slate-50/90 border-b border-slate-100 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-900">Notifications</h4>
+                      {unreadCount > 0 && (
+                        <span className="bg-rose-100 text-rose-700 text-[10px] font-bold px-2 py-0.5 rounded-full">
+                          {unreadCount} New
+                        </span>
+                      )}
+                    </div>
+                    {unreadCount > 0 && (
+                      <button 
+                        onClick={markAllAsRead}
+                        className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 transition-colors"
+                      >
+                        <CheckCheck className="w-3.5 h-3.5" /> Mark all read
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Filter Pills */}
+                  <div className="flex gap-1 p-2 bg-slate-50/50 border-b border-slate-100 text-[11px]">
+                    {[
+                      { id: 'ALL', label: 'All' },
+                      { id: 'TASKS', label: 'Tasks & Updates' },
+                      { id: 'ESSAYS', label: 'Essays' },
+                      { id: 'DOCS', label: 'Documents' }
+                    ].map(tab => (
+                      <button
+                        key={tab.id}
+                        onClick={() => setNotifFilter(tab.id as any)}
+                        className={cn(
+                          "px-2.5 py-1 rounded-lg font-medium transition-colors shrink-0",
+                          notifFilter === tab.id
+                            ? "bg-white text-indigo-700 font-bold shadow-2xs border border-slate-200"
+                            : "text-slate-500 hover:text-slate-800"
+                        )}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Notification List */}
+                  <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                    {filteredNotifications.length === 0 ? (
+                      <div className="p-8 text-center text-slate-400">
+                        <Bell className="w-6 h-6 mx-auto mb-2 text-slate-300" />
+                        <p className="text-xs font-semibold">No notifications</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">Assigned tasks and updates will appear here.</p>
+                      </div>
+                    ) : (
+                      filteredNotifications.map(n => (
+                        <div
+                          key={n.id}
+                          onClick={() => {
+                            markOneAsRead(n.id);
+                            setIsNotificationOpen(false);
+                            navigate(n.link);
+                          }}
+                          className={cn(
+                            "p-3.5 hover:bg-indigo-50/50 cursor-pointer transition-colors flex gap-3 text-left relative group",
+                            !n.isRead ? "bg-indigo-50/20" : "bg-white opacity-80 hover:opacity-100"
+                          )}
+                        >
+                          {!n.isRead && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 absolute left-2 top-4"></span>
+                          )}
+                          <div className={cn(
+                            "w-8 h-8 rounded-xl flex items-center justify-center shrink-0 text-xs font-bold",
+                            n.type === 'urgent' ? "bg-rose-100 text-rose-600" :
+                            n.type === 'success' ? "bg-emerald-100 text-emerald-600" :
+                            n.type === 'warning' ? "bg-amber-100 text-amber-600" :
+                            "bg-indigo-100 text-indigo-600"
+                          )}>
+                            {n.category === 'TASKS' ? <CheckSquare className="w-4 h-4" /> :
+                             n.category === 'ESSAYS' ? <PenTool className="w-4 h-4" /> :
+                             <FolderLock className="w-4 h-4" />}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-1 mb-0.5">
+                              <h5 className="text-xs font-bold text-slate-900 truncate">{n.title}</h5>
+                              <span className="text-[10px] text-slate-400 font-medium shrink-0">{n.time}</span>
+                            </div>
+                            <p className="text-xs text-slate-600 line-clamp-2 leading-relaxed">{n.message}</p>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Footer */}
+                  <div className="p-2.5 bg-slate-50 border-t border-slate-100 text-center">
+                    <button
+                      onClick={() => {
+                        setIsNotificationOpen(false);
+                        navigate(isTeam ? '/team/evaluator' : '/student/tasks');
+                      }}
+                      className="text-xs font-bold text-indigo-600 hover:text-indigo-800 transition-colors"
+                    >
+                      {isTeam ? 'Open Assignment Evaluator →' : 'View All Tasks & Assignments →'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div 

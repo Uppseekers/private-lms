@@ -2,10 +2,14 @@ import { useDatabase } from '@/context/DatabaseContext';
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, Plus, FileText, CheckCircle2, AlertCircle, Clock, ChevronRight, GraduationCap, X, UploadCloud, Link as LinkIcon } from 'lucide-react';
+import { 
+  Search, Filter, Plus, FileText, CheckCircle2, AlertCircle, Clock, 
+  ChevronRight, GraduationCap, X, UploadCloud, Link as LinkIcon, Eye, ShieldCheck, Download
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
+import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 
-// Shared types and data (ideally these would be in a shared context or API)
+// Shared types and data
 interface RequiredDoc {
   id: string;
   name: string;
@@ -13,8 +17,15 @@ interface RequiredDoc {
 
 interface AttachedDoc {
   docId: string;
-  status: 'verified' | 'draft' | 'missing';
+  name?: string;
   fileName?: string;
+  fileUrl?: string;
+  status: 'verified' | 'rejected' | 'pending' | 'draft' | 'missing';
+  uploadedAt?: string;
+  uploadedBy?: string;
+  verifiedAt?: string;
+  notes?: string;
+  category?: string;
 }
 
 interface University {
@@ -44,53 +55,7 @@ const mockRequiredDocs: RequiredDoc[] = [
   { id: 'doc12', name: 'Financial Bank Statement / Affidavit' },
 ];
 
-const shortlist: University[] = [
-  {
-    id: 'U-001',
-    name: 'Columbia University',
-    category: 'Reach',
-    major: 'B.S. in Computer Science',
-    round: 'Early Decision (ED)',
-    deadline: '2026-11-01T23:59',
-    portalLink: 'https://commonapp.org',
-    requiredDocs: mockRequiredDocs,
-    attachedDocs: {
-      'doc1': { docId: 'doc1', status: 'verified', fileName: 'HS_Transcripts_Official.pdf' },
-      'doc5': { docId: 'doc5', status: 'draft', fileName: 'Columbia_Essay_v2.docx' },
-    }
-  },
-  {
-    id: 'U-002',
-    name: 'University of Michigan',
-    category: 'Target',
-    major: 'B.S. in Computer Science',
-    round: 'Regular Decision (RD)',
-    deadline: '2027-01-05T23:59',
-    portalLink: 'https://commonapp.org',
-    requiredDocs: mockRequiredDocs.slice(0, 5),
-    attachedDocs: {
-      'doc1': { docId: 'doc1', status: 'verified', fileName: 'HS_Transcripts_Official.pdf' },
-      'doc2': { docId: 'doc2', status: 'verified', fileName: 'SAT_Score_Report.pdf' },
-      'doc3': { docId: 'doc3', status: 'verified', fileName: 'TOEFL_Report.pdf' },
-      'doc4': { docId: 'doc4', status: 'verified', fileName: 'Main_Essay_Final.pdf' },
-      'doc5': { docId: 'doc5', status: 'verified', fileName: 'UMich_Supp_Final.pdf' },
-    }
-  },
-  {
-    id: 'U-003',
-    name: 'Arizona State University',
-    category: 'Safety',
-    major: 'B.S. in Computer Science',
-    round: 'Rolling',
-    deadline: '2027-05-01T23:59',
-    portalLink: 'https://asu.edu/apply',
-    requiredDocs: [mockRequiredDocs[0], mockRequiredDocs[2], mockRequiredDocs[5]],
-    attachedDocs: {
-      'doc1': { docId: 'doc1', status: 'verified', fileName: 'HS_Transcripts_Official.pdf' },
-      'doc3': { docId: 'doc3', status: 'verified', fileName: 'TOEFL_Report.pdf' },
-    }
-  }
-];export default function StudentUniversities() {
+export default function StudentUniversities() {
   const { currentUser, students, updateStudent } = useDatabase();
   const student = students.find(s => s.id === currentUser.id || s.email === currentUser.email) || (currentUser as any);
   const rawShortlist = student?.shortlist || [];
@@ -98,6 +63,7 @@ const shortlist: University[] = [
   const [expandedUniId, setExpandedUniId] = useState<string | null>(null);
   const [attachModalOpen, setAttachModalOpen] = useState(false);
   const [selectedReq, setSelectedReq] = useState<{uniId: string, reqId: string, reqName: string} | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<any | null>(null);
   const [isAddUniModalOpen, setIsAddUniModalOpen] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<'All' | 'Reach' | 'Target' | 'Safety'>('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -110,7 +76,7 @@ const shortlist: University[] = [
   const [newUniDeadline, setNewUniDeadline] = useState('');
   const [newUniPortal, setNewUniPortal] = useState('https://commonapp.org');
 
-  // Helper to normalize university items safely
+  // Normalize universities
   const shortlist = rawShortlist.map((uni: any, idx: number) => {
     let reqDocs: RequiredDoc[] = [];
     if (Array.isArray(uni.requiredDocs) && uni.requiredDocs.length > 0) {
@@ -156,7 +122,16 @@ const shortlist: University[] = [
     const updatedShortlist = [...(student.shortlist || []), newUni];
     updateStudent({
       ...student,
-      shortlist: updatedShortlist
+      shortlist: updatedShortlist,
+      activities: [
+        {
+          id: Math.random().toString(),
+          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+          type: 'UPDATE',
+          description: `Added target university: ${newUni.name}`
+        },
+        ...(student.activities || [])
+      ]
     });
 
     setNewUniName('');
@@ -165,43 +140,109 @@ const shortlist: University[] = [
 
   const handleRemoveUniversity = (uniId: string) => {
     if (!student) return;
-    const targetUni = shortlist.find(u => u.id === uniId);
+    const targetUni = shortlist.find((u: any) => u.id === uniId);
     const updatedShortlist = (student.shortlist || []).filter((u: any) => u.id !== uniId && u.name !== targetUni?.name);
     updateStudent({
       ...student,
-      shortlist: updatedShortlist
+      shortlist: updatedShortlist,
+      activities: [
+        {
+          id: Math.random().toString(),
+          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+          type: 'UPDATE',
+          description: `Removed university from shortlist: ${targetUni?.name || 'University'}`
+        },
+        ...(student.activities || [])
+      ]
     });
   };
 
-  const handleAttachFile = (fileName: string) => {
+  const handleAttachFile = (fileName: string, fileUrl?: string) => {
     if (!selectedReq || !student) return;
-    const { uniId, reqId } = selectedReq;
+    const { uniId, reqId, reqName } = selectedReq;
+    const nowStr = new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true });
 
+    const newAttachedDoc: AttachedDoc = {
+      docId: reqId,
+      name: fileName,
+      fileName: fileName,
+      fileUrl: fileUrl || '',
+      status: 'pending', // Pending counselor verification
+      uploadedAt: nowStr,
+      uploadedBy: student.name,
+      category: 'Checklist Upload'
+    };
+
+    // Update shortlist
+    const targetUni = shortlist.find((u: any) => u.id === uniId);
     const updatedShortlist = (student.shortlist || []).map((u: any) => {
-      if (u.id === uniId) {
+      if (u.id === uniId || u.name === targetUni?.name) {
         const currentAttached = u.attachedDocs || {};
         return {
           ...u,
           attachedDocs: {
             ...currentAttached,
-            [reqId]: { docId: reqId, status: 'verified', fileName }
+            [reqId]: newAttachedDoc,
+            [reqName]: newAttachedDoc
           }
         };
       }
       return u;
     });
 
+    // Also add to student.documents vault if not already there
+    const existingDocIdx = (student.documents || []).findIndex((d: any) => d.name === fileName);
+    let updatedDocuments = [...(student.documents || [])];
+    if (existingDocIdx === -1) {
+      updatedDocuments.unshift({
+        id: `doc_${Date.now()}`,
+        name: fileName,
+        category: 'Application Doc',
+        type: fileName.endsWith('.pdf') ? 'PDF Document' : 'Document',
+        uploadedBy: student.name,
+        target: targetUni?.name || 'Target University',
+        status: 'pending',
+        date: nowStr,
+        fileUrl: fileUrl || ''
+      });
+    }
+
     updateStudent({
       ...student,
-      shortlist: updatedShortlist
+      shortlist: updatedShortlist,
+      documents: updatedDocuments,
+      activities: [
+        {
+          id: Math.random().toString(),
+          date: nowStr,
+          type: 'UPLOAD',
+          description: `Uploaded "${fileName}" for ${targetUni?.name || 'University'} (Pending counselor review)`
+        },
+        ...(student.activities || [])
+      ]
     });
 
     setAttachModalOpen(false);
     setSelectedReq(null);
   };
 
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      handleAttachFile(file.name, dataUrl);
+    };
+    reader.onerror = () => {
+      handleAttachFile(file.name);
+    };
+    reader.readAsDataURL(file);
+  };
+
   // Filtered universities
-  const filteredShortlist = shortlist.filter(uni => {
+  const filteredShortlist = shortlist.filter((uni: any) => {
     const matchesCategory = categoryFilter === 'All' || uni.category === categoryFilter;
     const matchesSearch = !searchQuery.trim() || 
       uni.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
@@ -228,9 +269,9 @@ const shortlist: University[] = [
   const totalDocsAttached = shortlist.reduce((acc: number, uni: any) => acc + (uni.attachedDocs ? Object.keys(uni.attachedDocs).length : 0), 0);
   const overallReadiness = totalDocsNeeded > 0 ? Math.round((totalDocsAttached / totalDocsNeeded) * 100) : 0;
 
-  const reachCount = shortlist.filter(u => u.category === 'Reach').length;
-  const targetCount = shortlist.filter(u => u.category === 'Target').length;
-  const safetyCount = shortlist.filter(u => u.category === 'Safety').length;
+  const reachCount = shortlist.filter((u: any) => u.category === 'Reach').length;
+  const targetCount = shortlist.filter((u: any) => u.category === 'Target').length;
+  const safetyCount = shortlist.filter((u: any) => u.category === 'Safety').length;
 
   const getCategoryBadge = (cat: 'Reach' | 'Target' | 'Safety') => {
     switch (cat) {
@@ -249,6 +290,17 @@ const shortlist: University[] = [
     setSelectedReq({ uniId, reqId, reqName });
     setAttachModalOpen(true);
   };
+
+  // Student available vault documents
+  const vaultDocs = student?.documents && student.documents.length > 0
+    ? student.documents
+    : [
+        { id: 'v1', name: 'HS_Transcripts_Official.pdf', category: 'Academic', date: '2026-08-01', status: 'verified' },
+        { id: 'v2', name: 'Columbia_Essay_v2.docx', category: 'Essays', date: '2026-08-05', status: 'pending' },
+        { id: 'v3', name: 'Bank_Statement_Affidavit.pdf', category: 'Financial', date: '2026-07-28', status: 'verified' },
+        { id: 'v4', name: 'TOEFL_Report.pdf', category: 'Test Scores', date: '2026-07-15', status: 'verified' },
+        { id: 'v5', name: 'SAT_Scorecard_Official.pdf', category: 'Test Scores', date: '2026-08-02', status: 'verified' }
+      ];
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-12 animate-in fade-in duration-300">
@@ -377,8 +429,8 @@ const shortlist: University[] = [
 
       {/* Compact List of Universities */}
       <div className="space-y-3">
-        {filteredShortlist.map((uni) => {
-          const uniAttached = Object.keys(uni.attachedDocs).length;
+        {filteredShortlist.map((uni: any) => {
+          const uniAttached = Object.keys(uni.attachedDocs || {}).length;
           const uniTotal = uni.requiredDocs.length;
           const uniPercent = uniTotal > 0 ? Math.round((uniAttached / uniTotal) * 100) : 0;
           const isExpanded = expandedUniId === uni.id;
@@ -472,61 +524,145 @@ const shortlist: University[] = [
               {/* Compact Drawer for Documents Checklist */}
               {isExpanded && (
                 <div className="border-t border-slate-200/80 bg-slate-50/70 p-4 space-y-3">
-                  <div className="flex items-center justify-between pb-1">
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                      Required Documents Checklist ({uniAttached}/{uniTotal})
-                    </span>
-                    <a 
-                      href={uni.portalLink} 
-                      target="_blank" 
-                      rel="noreferrer" 
-                      className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline"
-                    >
-                      Application Portal <LinkIcon className="w-3 h-3" />
-                    </a>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-1 border-b border-slate-200/60">
+                    <div>
+                      <span className="text-[11px] font-bold uppercase tracking-wider text-slate-600 flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-blue-600" />
+                        Application Checklist & Verification ({uniAttached}/{uniTotal})
+                      </span>
+                      <p className="text-[10px] text-slate-500 mt-0.5">
+                        Uploaded documents undergo official verification by your assigned counselor.
+                      </p>
+                    </div>
+                    {uni.portalLink && (
+                      <a 
+                        href={uni.portalLink} 
+                        target="_blank" 
+                        rel="noreferrer" 
+                        className="text-xs font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1 hover:underline shrink-0"
+                      >
+                        Application Portal <LinkIcon className="w-3 h-3" />
+                      </a>
+                    )}
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     {uni.requiredDocs.map((req: RequiredDoc, index: number) => {
-                      const attached = uni.attachedDocs[req.id];
+                      const attached: AttachedDoc | undefined = uni.attachedDocs[req.id] || uni.attachedDocs[req.name];
+                      const isVerified = attached?.status === 'verified';
+                      const isRejected = attached?.status === 'rejected';
+                      const isPending = !!attached && !isVerified && !isRejected;
+                      const hasDoc = !!attached;
+
                       return (
                         <div 
                           key={req.id || index} 
-                          className="bg-white p-3 rounded-lg border border-slate-200/80 flex items-center justify-between gap-3 shadow-2xs"
+                          className="bg-white p-3.5 rounded-xl border border-slate-200 flex flex-col justify-between gap-2.5 shadow-2xs hover:border-slate-300 transition-colors"
                         >
-                          <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="shrink-0">
-                              {attached ? (
-                                attached.status === 'verified' ? (
-                                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-start gap-2.5 min-w-0">
+                              <div className="shrink-0 mt-0.5">
+                                {isVerified ? (
+                                  <div className="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center">
+                                    <CheckCircle2 className="w-3.5 h-3.5" />
+                                  </div>
+                                ) : isRejected ? (
+                                  <div className="w-6 h-6 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center">
+                                    <AlertCircle className="w-3.5 h-3.5" />
+                                  </div>
+                                ) : isPending ? (
+                                  <div className="w-6 h-6 rounded-full bg-amber-100 text-amber-700 flex items-center justify-center">
+                                    <Clock className="w-3.5 h-3.5" />
+                                  </div>
                                 ) : (
-                                  <Clock className="w-4 h-4 text-amber-500" />
-                                )
-                              ) : (
-                                <AlertCircle className="w-4 h-4 text-rose-500" />
-                              )}
+                                  <div className="w-6 h-6 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center">
+                                    <FileText className="w-3.5 h-3.5" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-slate-800 truncate">{req.name}</p>
+                                {hasDoc ? (
+                                  <p className="text-[11px] font-medium text-slate-600 truncate flex items-center gap-1.5 mt-0.5">
+                                    <span>📄 {attached.fileName || attached.name || 'Document Attached'}</span>
+                                    {attached.uploadedAt && <span className="text-[10px] text-slate-400">({attached.uploadedAt})</span>}
+                                  </p>
+                                ) : (
+                                  <p className="text-[10px] text-slate-400 italic mt-0.5">
+                                    Not uploaded yet
+                                  </p>
+                                )}
+                              </div>
                             </div>
-                            <div className="min-w-0">
-                              <p className="text-xs font-semibold text-slate-800 truncate">{req.name}</p>
-                              <p className="text-[10px] text-slate-400 truncate">
-                                {attached ? (attached.fileName || 'Document attached') : 'Action required'}
-                              </p>
+
+                            {/* Status Badge */}
+                            <div>
+                              {isVerified ? (
+                                <span className="text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0">
+                                  <ShieldCheck className="w-3 h-3" /> Counselor Verified
+                                </span>
+                              ) : isRejected ? (
+                                <span className="text-[10px] font-bold bg-rose-50 text-rose-700 border border-rose-200 px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0">
+                                  <AlertCircle className="w-3 h-3" /> Needs Revision
+                                </span>
+                              ) : isPending ? (
+                                <span className="text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 px-2 py-0.5 rounded-full inline-flex items-center gap-1 shrink-0">
+                                  <Clock className="w-3 h-3" /> Pending Review
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-medium bg-slate-100 text-slate-500 px-2 py-0.5 rounded shrink-0">
+                                  Action Required
+                                </span>
+                              )}
                             </div>
                           </div>
 
-                          <Button 
-                            size="sm" 
-                            variant={attached ? "outline" : "default"}
-                            onClick={() => openAttachModal(uni.id, req.id, req.name)}
-                            className={cn(
-                              "text-[11px] h-7 px-2.5 rounded-lg shrink-0 font-medium",
-                              attached 
-                                ? "border-slate-200 text-slate-600 hover:bg-slate-50" 
-                                : "bg-blue-600 hover:bg-blue-700 text-white"
+                          {/* Notes if revision requested */}
+                          {attached?.notes && (
+                            <div className="text-[10px] text-rose-700 bg-rose-50/70 p-2 rounded-lg border border-rose-100 font-medium">
+                              <strong>Counselor Note:</strong> {attached.notes}
+                            </div>
+                          )}
+
+                          {/* Actions: Preview & Attach */}
+                          <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100">
+                            {hasDoc && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => setPreviewDoc({
+                                  id: attached.docId || req.id,
+                                  name: attached.fileName || attached.name || req.name,
+                                  category: attached.category || 'Application Doc',
+                                  type: (attached.fileName?.endsWith('.pdf') || attached.name?.endsWith('.pdf')) ? 'PDF Document' : 'Document',
+                                  status: isVerified ? 'Verified' : isRejected ? 'Rejected' : 'Pending',
+                                  date: attached.uploadedAt || 'Recent',
+                                  fileUrl: attached.fileUrl || '',
+                                  studentName: student.name,
+                                  studentId: student.id,
+                                  notes: attached.notes
+                                })}
+                                className="text-[11px] h-7 px-2.5 rounded-lg font-semibold text-blue-700 border-blue-200 hover:bg-blue-50 flex items-center gap-1"
+                              >
+                                <Eye className="w-3.5 h-3.5" /> Preview
+                              </Button>
                             )}
-                          >
-                            {attached ? "Change" : "Attach"}
-                          </Button>
+
+                            <Button 
+                              size="sm" 
+                              variant={hasDoc ? "outline" : "default"}
+                              onClick={() => openAttachModal(uni.id, req.id, req.name)}
+                              className={cn(
+                                "text-[11px] h-7 px-2.5 rounded-lg shrink-0 font-semibold",
+                                hasDoc 
+                                  ? "border-slate-200 text-slate-600 hover:bg-slate-50" 
+                                  : "bg-blue-600 hover:bg-blue-700 text-white"
+                              )}
+                            >
+                              <UploadCloud className="w-3.5 h-3.5 mr-1" />
+                              {hasDoc ? "Change File" : "Attach File"}
+                            </Button>
+                          </div>
                         </div>
                       );
                     })}
@@ -543,6 +679,15 @@ const shortlist: University[] = [
           </div>
         )}
       </div>
+
+      {/* Document Preview Modal */}
+      {previewDoc && (
+        <DocumentPreviewModal 
+          doc={previewDoc} 
+          onClose={() => setPreviewDoc(null)} 
+          isStaff={false}
+        />
+      )}
 
       {/* Add University Modal */}
       {isAddUniModalOpen && (
@@ -646,24 +791,37 @@ const shortlist: University[] = [
             </div>
 
             <div className="p-5 space-y-4">
+              <div className="bg-blue-50/80 p-3 rounded-xl border border-blue-100 text-[11px] text-blue-800">
+                <p className="font-semibold flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+                  Counselor Verification Policy
+                </p>
+                <p className="text-blue-700 mt-0.5">
+                  When you attach or update a document, it will be marked as <strong>Pending Verification</strong> until your assigned counselor inspects and approves it.
+                </p>
+              </div>
+
               <div>
                 <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block mb-2">
-                  Select from Student Vault
+                  Select from Student Vault ({vaultDocs.length})
                 </span>
                 <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50/50">
-                  <div className="max-h-40 overflow-y-auto p-2 space-y-1">
-                    {['HS_Transcripts_Official.pdf', 'Columbia_Essay_v2.docx', 'Bank_Statement_Chase.pdf', 'TOEFL_Report.pdf'].map((file, i) => (
+                  <div className="max-h-44 overflow-y-auto p-2 space-y-1 divide-y divide-slate-100">
+                    {vaultDocs.map((doc: any, i: number) => (
                       <button 
-                        key={i} 
+                        key={doc.id || i} 
                         type="button"
-                        onClick={() => handleAttachFile(file)}
+                        onClick={() => handleAttachFile(doc.name, doc.fileUrl)}
                         className="w-full flex items-center justify-between p-2 hover:bg-blue-50 rounded-lg text-left transition-colors border border-transparent hover:border-blue-200"
                       >
-                        <div className="flex items-center gap-2">
-                          <FileText className="w-3.5 h-3.5 text-blue-600" />
-                          <span className="text-xs font-medium text-slate-700">{file}</span>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                          <div className="min-w-0">
+                            <span className="text-xs font-semibold text-slate-800 block truncate">{doc.name}</span>
+                            <span className="text-[10px] text-slate-400">{doc.category || 'Vault File'} • {doc.date || 'Saved'}</span>
+                          </div>
                         </div>
-                        <span className="text-[11px] font-bold text-blue-600">Select</span>
+                        <span className="text-[11px] font-bold text-blue-600 shrink-0 ml-2 px-2.5 py-1 bg-blue-100/60 rounded-md hover:bg-blue-200">Select</span>
                       </button>
                     ))}
                   </div>
@@ -672,7 +830,7 @@ const shortlist: University[] = [
 
               <div className="flex items-center gap-3">
                 <div className="h-px bg-slate-200 flex-1" />
-                <span className="text-[10px] font-bold text-slate-400 uppercase">OR UPLOAD</span>
+                <span className="text-[10px] font-bold text-slate-400 uppercase">OR UPLOAD NEW FILE</span>
                 <div className="h-px bg-slate-200 flex-1" />
               </div>
 
@@ -680,15 +838,12 @@ const shortlist: University[] = [
                 <input 
                   type="file" 
                   className="hidden" 
-                  onChange={(e) => {
-                    if (e.target.files?.[0]) {
-                      handleAttachFile(e.target.files[0].name);
-                    }
-                  }} 
+                  onChange={handleFileUpload} 
+                  accept=".pdf,.doc,.docx,.png,.jpg,.jpeg"
                 />
-                <UploadCloud className="w-5 h-5 text-slate-400 group-hover:text-blue-600 mb-1 transition-colors" />
+                <UploadCloud className="w-6 h-6 text-slate-400 group-hover:text-blue-600 mb-1 transition-colors" />
                 <p className="text-xs font-bold text-slate-700">Browse file or drag here</p>
-                <p className="text-[10px] text-slate-400">PDF, DOCX up to 10MB</p>
+                <p className="text-[10px] text-slate-400">PDF, DOCX, PNG, JPG up to 25MB</p>
               </label>
             </div>
 

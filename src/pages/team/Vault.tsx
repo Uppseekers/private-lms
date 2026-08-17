@@ -39,8 +39,19 @@ export default function TeamVault() {
   const [activeTab, setActiveTab] = useState('Pending Verification');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStudentFilter, setSelectedStudentFilter] = useState('ALL');
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('ALL');
+  const [selectedDateFilter, setSelectedDateFilter] = useState<'ALL' | '7d' | '30d' | '90d' | 'this_year'>('ALL');
 
   const scopedStudents = React.useMemo(() => getScopedStudentsForStaff(students, currentUser), [students, currentUser]);
+
+  // Extract all unique categories present in documents
+  const allCategories = React.useMemo(() => {
+    const set = new Set<string>();
+    documents.forEach(d => {
+      if (d.category) set.add(d.category);
+    });
+    return Array.from(set);
+  }, [documents]);
 
   // Review Drawer & Full Preview Modal State
   const [selectedDoc, setSelectedDoc] = useState<DocumentInfo | null>(null);
@@ -53,12 +64,28 @@ export default function TeamVault() {
     if (selectedStudentFilter !== 'ALL' && d.studentId !== selectedStudentFilter) {
       return false;
     }
+    if (selectedCategoryFilter !== 'ALL' && d.category !== selectedCategoryFilter) {
+      return false;
+    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       if (!d.name.toLowerCase().includes(q) && 
           !d.studentId.toLowerCase().includes(q) && 
-          !d.studentName.toLowerCase().includes(q)) {
+          !d.studentName.toLowerCase().includes(q) &&
+          !(d.category || '').toLowerCase().includes(q) &&
+          !(d.type || '').toLowerCase().includes(q)) {
         return false;
+      }
+    }
+    if (selectedDateFilter !== 'ALL') {
+      const docDate = new Date(d.date);
+      if (!isNaN(docDate.getTime())) {
+        const now = new Date();
+        const diffDays = (now.getTime() - docDate.getTime()) / (1000 * 3600 * 24);
+        if (selectedDateFilter === '7d' && diffDays > 7) return false;
+        if (selectedDateFilter === '30d' && diffDays > 30) return false;
+        if (selectedDateFilter === '90d' && diffDays > 90) return false;
+        if (selectedDateFilter === 'this_year' && docDate.getFullYear() !== now.getFullYear()) return false;
       }
     }
     if (activeTab === 'Pending Verification') return d.status.toLowerCase() === 'pending';
@@ -125,28 +152,81 @@ export default function TeamVault() {
           </div>
         </div>
 
-        <div className="flex flex-col sm:flex-row gap-4 items-center">
-          <div className="relative flex-1 w-full">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input 
-              type="text" 
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by Student ID, Name, or Document Name..." 
-              className="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 shadow-sm"
-            />
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+          <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input 
+                type="text" 
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search by student, ID, document name, category or type..." 
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+              />
+            </div>
+            
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Student Filter */}
+              <select
+                value={selectedStudentFilter}
+                onChange={(e) => setSelectedStudentFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="ALL">All Students ({scopedStudents.length})</option>
+                {scopedStudents.map(s => (
+                  <option key={s.id} value={s.id}>{s.name} ({s.id})</option>
+                ))}
+              </select>
+
+              {/* Category Filter */}
+              <select
+                value={selectedCategoryFilter}
+                onChange={(e) => setSelectedCategoryFilter(e.target.value)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="ALL">All Categories</option>
+                {allCategories.map(cat => (
+                  <option key={cat} value={cat}>{cat}</option>
+                ))}
+              </select>
+
+              {/* Date Range Filter */}
+              <select
+                value={selectedDateFilter}
+                onChange={(e) => setSelectedDateFilter(e.target.value as any)}
+                className="bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+              >
+                <option value="ALL">All Time</option>
+                <option value="7d">Past 7 Days</option>
+                <option value="30d">Past 30 Days</option>
+                <option value="90d">Past 90 Days</option>
+                <option value="this_year">This Year</option>
+              </select>
+
+              {/* Clear Filters button */}
+              {(selectedStudentFilter !== 'ALL' || selectedCategoryFilter !== 'ALL' || selectedDateFilter !== 'ALL' || searchQuery.trim()) && (
+                <button
+                  onClick={() => {
+                    setSelectedStudentFilter('ALL');
+                    setSelectedCategoryFilter('ALL');
+                    setSelectedDateFilter('ALL');
+                    setSearchQuery('');
+                  }}
+                  className="px-2.5 py-2 text-xs font-bold text-rose-600 hover:bg-rose-50 rounded-xl border border-rose-200 transition-colors flex items-center gap-1"
+                >
+                  <X className="w-3.5 h-3.5" /> Clear
+                </button>
+              )}
+            </div>
           </div>
-          <div className="flex gap-2 w-full sm:w-auto">
-             <select
-               value={selectedStudentFilter}
-               onChange={(e) => setSelectedStudentFilter(e.target.value)}
-               className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-semibold text-slate-700 focus:ring-2 focus:ring-blue-500 shadow-sm cursor-pointer"
-             >
-               <option value="ALL">All Students ({scopedStudents.length})</option>
-               {scopedStudents.map(s => (
-                 <option key={s.id} value={s.id}>{s.name} ({s.id})</option>
-               ))}
-             </select>
+
+          <div className="flex items-center justify-between text-xs text-slate-500 pt-1 border-t border-slate-100">
+            <span>Showing <strong>{filteredDocs.length}</strong> of <strong>{documents.length}</strong> total documents</span>
+            {selectedCategoryFilter !== 'ALL' && (
+              <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-md font-semibold text-[11px]">
+                Category: {selectedCategoryFilter}
+              </span>
+            )}
           </div>
         </div>
 

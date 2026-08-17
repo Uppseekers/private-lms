@@ -23,7 +23,7 @@ export interface ShortlistUniversity {
   name: string;
   category: 'Reach' | 'Target' | 'Safety';
   deadline: string;
-  status: 'Applying' | 'Considering' | 'Not Applying' | 'Submitted' | 'In Progress';
+  status: 'Applying' | 'Considering' | 'Not Applying' | 'Submitted' | 'In Progress' | 'Accepted' | 'Waitlisted' | 'Deferred' | 'Rejected' | string;
   major?: string;
   round?: string;
   portalLink?: string;
@@ -147,6 +147,8 @@ export interface OperationalLog {
   details?: string;
   link?: string;
   resourceName?: string;
+  type?: string;
+  date?: string;
 }
 
 export interface SessionRating {
@@ -245,6 +247,21 @@ export enum Role {
   TEACHER = 'TEACHER',
 }
 
+export interface BatchClassSession {
+  id: string;
+  sessionNumber: number;
+  title: string;
+  topic?: string;
+  date: string;
+  time?: string;
+  status: 'Completed' | 'Upcoming' | 'In Progress' | 'Cancelled';
+  meetingLink?: string;
+  recordingUrl?: string;
+  notes?: string;
+  joinedStudentIds: string[]; // student IDs who joined/attended
+  absentStudentIds?: string[]; // student IDs who were absent / not joined
+}
+
 export interface Batch {
   id: string;
   name: string;
@@ -259,6 +276,9 @@ export interface Batch {
   students: string[]; // student IDs
   completedSessions?: number;
   totalSessions?: number;
+  sessions?: BatchClassSession[];
+  scheduleDayTime?: string;
+  description?: string;
 }
 
 export interface StaffMember {

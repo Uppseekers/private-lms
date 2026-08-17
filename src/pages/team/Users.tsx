@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye } from 'lucide-react';
+import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, SlidersHorizontal, Award, Sparkles, CheckSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage } from '@/types';
+import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage, DocumentInfo } from '@/types';
 import { canStaffAccessAllStudents, isStudentAssignedToStaff } from '@/lib/staffPermissions';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 import CompetencyRadar from '@/pages/student/CompetencyRadar';
@@ -678,6 +678,14 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
   const [manualAttendees, setManualAttendees] = useState('Student only');
   const [manualNotes, setManualNotes] = useState('');
 
+  // Rich Activity Filters state
+  const [actStatusFilter, setActStatusFilter] = useState('ALL');
+  const [actCategoryFilter, setActCategoryFilter] = useState('ALL');
+  const [actDateRange, setActDateRange] = useState<'ALL' | 'THIS_WEEK' | 'LAST_WEEK' | 'THIS_MONTH' | 'LAST_MONTH' | 'CUSTOM'>('ALL');
+  const [actStartDate, setActStartDate] = useState('');
+  const [actEndDate, setActEndDate] = useState('');
+  const [actSearchQuery, setActSearchQuery] = useState('');
+
   const handleAddManualActivity = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualNotes.trim()) return;
@@ -765,155 +773,344 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
           <TasksView student={student} onUpdate={onUpdate} />
         )}
         
-        {activeTab === 'Activity' && (
-          <div className="space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2 pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Staff Activity Log & Operational Audit Trail</h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Record counselor interactions and audit meeting scheduling, tasks, and notes for {student.name}.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-xs bg-blue-100 text-blue-800 font-bold px-2.5 py-1 rounded-full whitespace-nowrap">
-                  {(student.operationalLogs?.length || 0) + (student.activities?.length || 0)} Actions
-                </span>
-                <Button 
-                  size="sm" 
-                  onClick={() => setIsLoggingManualActivity(!isLoggingManualActivity)}
-                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
-                >
-                  <Plus className="w-3.5 h-3.5 mr-1" /> {isLoggingManualActivity ? 'Cancel' : 'Log Manual Activity'}
-                </Button>
-              </div>
-            </div>
+        {activeTab === 'Activity' && (() => {
+          // Date range calculation
+          const now = new Date();
+          const oneDay = 24 * 60 * 60 * 1000;
+          
+          const getStartOfWeek = (d: Date) => {
+            const date = new Date(d);
+            const day = date.getDay();
+            const diff = date.getDate() - day + (day === 0 ? -6 : 1);
+            return new Date(date.setDate(diff));
+          };
 
-            {/* Manual Activity Logging Card */}
-            {isLoggingManualActivity && (
-              <form onSubmit={handleAddManualActivity} className="bg-indigo-50/60 p-5 rounded-2xl border border-indigo-200 space-y-4 shadow-sm">
-                <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
-                  <h4 className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
-                    <MessageSquare className="w-4 h-4 text-indigo-600" /> Manual Counselor Activity Logging
-                  </h4>
-                  <span className="text-[10px] text-indigo-700 font-medium">Logged by {currentUser?.name || 'Counselor'}</span>
+          const isDateInRange = (dateStr?: string) => {
+            if (!dateStr || actDateRange === 'ALL') return true;
+            const itemDate = new Date(dateStr);
+            if (isNaN(itemDate.getTime())) return true;
+
+            if (actDateRange === 'THIS_WEEK') {
+              const startOfWeek = getStartOfWeek(now);
+              startOfWeek.setHours(0, 0, 0, 0);
+              return itemDate >= startOfWeek;
+            }
+            if (actDateRange === 'LAST_WEEK') {
+              const startOfLastWeek = new Date(getStartOfWeek(now).getTime() - 7 * oneDay);
+              startOfLastWeek.setHours(0, 0, 0, 0);
+              const endOfLastWeek = new Date(startOfLastWeek.getTime() + 7 * oneDay - 1);
+              return itemDate >= startOfLastWeek && itemDate <= endOfLastWeek;
+            }
+            if (actDateRange === 'THIS_MONTH') {
+              return itemDate.getFullYear() === now.getFullYear() && itemDate.getMonth() === now.getMonth();
+            }
+            if (actDateRange === 'LAST_MONTH') {
+              const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+              return itemDate.getFullYear() === lastMonthDate.getFullYear() && itemDate.getMonth() === lastMonthDate.getMonth();
+            }
+            if (actDateRange === 'CUSTOM') {
+              if (actStartDate && new Date(actStartDate) > itemDate) return false;
+              if (actEndDate) {
+                const end = new Date(actEndDate);
+                end.setHours(23, 59, 59, 999);
+                if (end < itemDate) return false;
+              }
+              return true;
+            }
+            return true;
+          };
+
+          // Filter operational logs
+          const filteredLogs = (student.operationalLogs || []).filter(log => {
+            const logType = log.activityType || (log as any).type || '';
+            if (actStatusFilter !== 'ALL' && !logType.toUpperCase().includes(actStatusFilter)) {
+              return false;
+            }
+            if (actCategoryFilter !== 'ALL' && logType !== actCategoryFilter) {
+              return false;
+            }
+            if (actSearchQuery) {
+              const q = actSearchQuery.toLowerCase();
+              if (!log.description?.toLowerCase().includes(q) && 
+                  !log.details?.toLowerCase().includes(q) && 
+                  !logType.toLowerCase().includes(q) &&
+                  !log.performedBy?.toLowerCase().includes(q)) {
+                return false;
+              }
+            }
+            return isDateInRange(log.timestamp || (log as any).date);
+          });
+
+          // Filter general student activities
+          const filteredActivities = (student.activities || []).filter(act => {
+            if (actStatusFilter !== 'ALL' && act.type?.toUpperCase() !== actStatusFilter) {
+              return false;
+            }
+            if (actCategoryFilter !== 'ALL' && !act.description?.toLowerCase().includes(actCategoryFilter.toLowerCase())) {
+              return false;
+            }
+            if (actSearchQuery) {
+              const q = actSearchQuery.toLowerCase();
+              if (!act.description?.toLowerCase().includes(q) && !act.type?.toLowerCase().includes(q)) {
+                return false;
+              }
+            }
+            return isDateInRange(act.date);
+          });
+
+          const totalFilteredCount = filteredLogs.length + filteredActivities.length;
+
+          return (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2 pb-3 border-b border-slate-100">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Student Activity Log & Audit Trail</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Filter and audit meetings, calls, tasks, document events, and staff notes for {student.name}.
+                  </p>
                 </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs bg-blue-100 text-blue-800 font-bold px-2.5 py-1 rounded-full whitespace-nowrap">
+                    {totalFilteredCount} Results Found
+                  </span>
+                  <Button 
+                    size="sm" 
+                    onClick={() => setIsLoggingManualActivity(!isLoggingManualActivity)}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                  >
+                    <Plus className="w-3.5 h-3.5 mr-1" /> {isLoggingManualActivity ? 'Cancel' : 'Log Manual Activity'}
+                  </Button>
+                </div>
+              </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Rich Activity Filter Bar */}
+              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-2xs space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                  {/* Search query input */}
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input 
+                      type="text"
+                      value={actSearchQuery}
+                      onChange={e => setActSearchQuery(e.target.value)}
+                      placeholder="Search activity notes / staff..."
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3 py-2 text-xs text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    />
+                  </div>
+
+                  {/* Status filter */}
                   <div>
-                    <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Activity Type *</label>
                     <select
-                      value={manualType}
-                      onChange={e => setManualType(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                      value={actStatusFilter}
+                      onChange={e => setActStatusFilter(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
                     >
+                      <option value="ALL">All Statuses</option>
+                      <option value="VERIFIED">Verified & Approved</option>
+                      <option value="UPDATE">Updates</option>
+                      <option value="UPLOAD">Uploads & Documents</option>
+                      <option value="SESSION">Sessions & Calls</option>
+                      <option value="SYSTEM">System Logs</option>
+                    </select>
+                  </div>
+
+                  {/* Category filter */}
+                  <div>
+                    <select
+                      value={actCategoryFilter}
+                      onChange={e => setActCategoryFilter(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="ALL">All Categories</option>
                       <option value="Whatsapp Chat">Whatsapp Chat</option>
                       <option value="Audio Call">Audio Call</option>
                       <option value="Zoho/Zoom Call">Zoho/Zoom Call</option>
-                      <option value="Task">Task</option>
-                      <option value="Essay">Essay</option>
-                      <option value="others">others</option>
+                      <option value="Task">Tasks & Assignments</option>
+                      <option value="Essay">Essays & SOPs</option>
+                      <option value="Document">Document Vault</option>
+                      <option value="others">Other Actions</option>
                     </select>
+                  </div>
+
+                  {/* Date range presets */}
+                  <div>
+                    <select
+                      value={actDateRange}
+                      onChange={e => setActDateRange(e.target.value as any)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-semibold text-slate-800 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                    >
+                      <option value="ALL">Overall / All Time</option>
+                      <option value="THIS_WEEK">This Week</option>
+                      <option value="LAST_WEEK">Last Week</option>
+                      <option value="THIS_MONTH">This Month</option>
+                      <option value="LAST_MONTH">Last Month</option>
+                      <option value="CUSTOM">Custom Date Range (From - To)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Custom Date Range Picker */}
+                {actDateRange === 'CUSTOM' && (
+                  <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase">From:</span>
+                      <input 
+                        type="date" 
+                        value={actStartDate}
+                        onChange={e => setActStartDate(e.target.value)}
+                        className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-800"
+                      />
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] font-bold text-slate-500 uppercase">To:</span>
+                      <input 
+                        type="date" 
+                        value={actEndDate}
+                        onChange={e => setActEndDate(e.target.value)}
+                        className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs text-slate-800"
+                      />
+                    </div>
+                    {(actStartDate || actEndDate) && (
+                      <button 
+                        onClick={() => { setActStartDate(''); setActEndDate(''); }}
+                        className="text-[11px] text-slate-400 hover:text-slate-700 underline"
+                      >
+                        Reset Dates
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Manual Activity Logging Card */}
+              {isLoggingManualActivity && (
+                <form onSubmit={handleAddManualActivity} className="bg-indigo-50/60 p-5 rounded-2xl border border-indigo-200 space-y-4 shadow-sm">
+                  <div className="flex items-center justify-between border-b border-indigo-100 pb-2">
+                    <h4 className="text-xs font-extrabold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                      <MessageSquare className="w-4 h-4 text-indigo-600" /> Manual Counselor Activity Logging
+                    </h4>
+                    <span className="text-[10px] text-indigo-700 font-medium">Logged by {currentUser?.name || 'Counselor'}</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Activity Type *</label>
+                      <select
+                        value={manualType}
+                        onChange={e => setManualType(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="Whatsapp Chat">Whatsapp Chat</option>
+                        <option value="Audio Call">Audio Call</option>
+                        <option value="Zoho/Zoom Call">Zoho/Zoom Call</option>
+                        <option value="Task">Task</option>
+                        <option value="Essay">Essay</option>
+                        <option value="others">others</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Participants *</label>
+                      <select
+                        value={manualAttendees}
+                        onChange={e => setManualAttendees(e.target.value)}
+                        className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500"
+                      >
+                        <option value="Student only">Student only</option>
+                        <option value="Parents Only">Parents Only</option>
+                        <option value="Student with Parents">Student with Parents</option>
+                      </select>
+                    </div>
                   </div>
 
                   <div>
-                    <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Participants *</label>
-                    <select
-                      value={manualAttendees}
-                      onChange={e => setManualAttendees(e.target.value)}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-800 focus:ring-2 focus:ring-indigo-500"
-                    >
-                      <option value="Student only">Student only</option>
-                      <option value="Parents Only">Parents Only</option>
-                      <option value="Student with Parents">Student with Parents</option>
-                    </select>
+                    <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Notes & Discussion Details *</label>
+                    <textarea
+                      rows={3}
+                      value={manualNotes}
+                      onChange={e => setManualNotes(e.target.value)}
+                      placeholder="Enter discussion notes, key action items, call outcome, or guidance given..."
+                      className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 resize-none"
+                      required
+                    />
                   </div>
-                </div>
 
-                <div>
-                  <label className="text-xs font-bold text-slate-700 uppercase block mb-1">Notes & Discussion Details *</label>
-                  <textarea
-                    rows={3}
-                    value={manualNotes}
-                    onChange={e => setManualNotes(e.target.value)}
-                    placeholder="Enter discussion notes, key action items, call outcome, or guidance given..."
-                    className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-800 focus:ring-2 focus:ring-indigo-500 resize-none"
-                    required
-                  />
-                </div>
-
-                <div className="flex justify-end gap-2 pt-1">
-                  <Button type="button" variant="outline" size="sm" onClick={() => setIsLoggingManualActivity(false)}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
-                    Save Activity
-                  </Button>
-                </div>
-              </form>
-            )}
-
-            {/* Operational Logs list */}
-            {student.operationalLogs && student.operationalLogs.length > 0 && (
-              <div className="space-y-3">
-                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">System & Staff Operations</h4>
-                {student.operationalLogs.map((log) => (
-                  <div key={log.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-1.5">
-                    <div className="flex items-center justify-between text-xs">
-                      <span className="font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 uppercase tracking-wider">
-                        {log.activityType}
-                      </span>
-                      <span className="text-slate-400 font-medium">{log.timestamp}</span>
-                    </div>
-                    <p className="text-sm font-semibold text-slate-900">{log.description}</p>
-                    {log.details && (
-                      <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 font-mono">
-                        {log.details}
-                      </p>
-                    )}
-                    <p className="text-[10px] text-slate-400">Performed by: {log.performedBy} ({log.role})</p>
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button type="button" variant="outline" size="sm" onClick={() => setIsLoggingManualActivity(false)}>
+                      Cancel
+                    </Button>
+                    <Button type="submit" size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold">
+                      Save Activity
+                    </Button>
                   </div>
-                ))}
-              </div>
-            )}
+                </form>
+              )}
 
-            {/* Student General Activity History */}
-            <div className="space-y-3 pt-4 border-t border-slate-200">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">General Workspace History</h4>
-              <div className="relative pl-6 space-y-4 border-l-2 border-slate-200 ml-2">
-                {student.activities.map((activity) => (
-                  <div key={activity.id} className="relative">
-                    <span className={cn(
-                      "absolute -left-[31px] w-3 h-3 rounded-full ring-4 ring-white",
-                      activity.type === 'VERIFIED' ? 'bg-green-500' :
-                      activity.type === 'UPLOAD' ? 'bg-blue-500' :
-                      activity.type === 'UPDATE' ? 'bg-amber-500' :
-                      activity.type === 'SESSION' ? 'bg-purple-500' :
-                      'bg-slate-400'
-                    )} />
-                    <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-2">
-                        {activity.date} 
-                        <span className={cn(
-                          activity.type === 'VERIFIED' ? 'text-green-600' :
-                          activity.type === 'UPLOAD' ? 'text-blue-600' :
-                          activity.type === 'UPDATE' ? 'text-amber-600' :
-                          activity.type === 'SESSION' ? 'text-purple-600' :
-                          'text-slate-600'
-                        )}>
-                          {activity.type === 'SYSTEM' ? 'ACCOUNT CREATED' : activity.type}
+              {/* Operational Logs list */}
+              {filteredLogs.length > 0 && (
+                <div className="space-y-3">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">System & Staff Operations ({filteredLogs.length})</h4>
+                  {filteredLogs.map((log) => (
+                    <div key={log.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-1.5">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 uppercase tracking-wider">
+                          {log.activityType || log.type}
                         </span>
-                      </p>
-                      <p className="text-xs text-slate-800 font-medium">{activity.description}</p>
+                        <span className="text-slate-400 font-medium">{log.timestamp || log.date}</span>
+                      </div>
+                      <p className="text-sm font-semibold text-slate-900">{log.description}</p>
+                      {log.details && (
+                        <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 font-mono">
+                          {log.details}
+                        </p>
+                      )}
+                      <p className="text-[10px] text-slate-400">Performed by: {log.performedBy || 'Staff'} ({log.role || 'COUNSELLOR'})</p>
                     </div>
-                  </div>
-                ))}
-                {student.activities.length === 0 && (!student.operationalLogs || student.operationalLogs.length === 0) && (
-                  <div className="text-slate-500 text-xs italic">No activity recorded yet.</div>
-                )}
+                  ))}
+                </div>
+              )}
+
+              {/* Student General Activity History */}
+              <div className="space-y-3 pt-4 border-t border-slate-200">
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">General Workspace History ({filteredActivities.length})</h4>
+                <div className="relative pl-6 space-y-4 border-l-2 border-slate-200 ml-2">
+                  {filteredActivities.map((activity) => (
+                    <div key={activity.id} className="relative">
+                      <span className={cn(
+                        "absolute -left-[31px] w-3 h-3 rounded-full ring-4 ring-white",
+                        activity.type === 'VERIFIED' ? 'bg-green-500' :
+                        activity.type === 'UPLOAD' ? 'bg-blue-500' :
+                        activity.type === 'UPDATE' ? 'bg-amber-500' :
+                        activity.type === 'SESSION' ? 'bg-purple-500' :
+                        'bg-slate-400'
+                      )} />
+                      <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm">
+                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-2">
+                          {activity.date} 
+                          <span className={cn(
+                            activity.type === 'VERIFIED' ? 'text-green-600' :
+                            activity.type === 'UPLOAD' ? 'text-blue-600' :
+                            activity.type === 'UPDATE' ? 'text-amber-600' :
+                            activity.type === 'SESSION' ? 'text-purple-600' :
+                            'text-slate-600'
+                          )}>
+                            {activity.type === 'SYSTEM' ? 'ACCOUNT CREATED' : activity.type}
+                          </span>
+                        </p>
+                        <p className="text-xs text-slate-800 font-medium">{activity.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {filteredActivities.length === 0 && filteredLogs.length === 0 && (
+                    <div className="text-slate-500 text-xs italic bg-slate-50 p-6 rounded-xl text-center border border-dashed border-slate-200">
+                      No activity matched the selected filters. Try choosing "Overall / All Time" or resetting status.
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {activeTab === 'Document Vault' && (
           <VaultView student={student} onUpdate={onUpdate} />
@@ -996,6 +1193,10 @@ const topUniversities = [
 function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [showUniSuggestions, setShowUniSuggestions] = useState(false);
+  const [expandedUniIds, setExpandedUniIds] = useState<string[]>([]);
+  const [previewDoc, setPreviewDoc] = useState<any | null>(null);
+  const [feedbackInput, setFeedbackInput] = useState<{ [key: string]: string }>({});
+
   const [formData, setFormData] = useState<{
     name: string;
     category: 'Reach' | 'Target' | 'Safety';
@@ -1013,6 +1214,73 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
     portalLink: '',
     requiredDocs: []
   });
+
+  const toggleExpand = (id: string) => {
+    setExpandedUniIds(prev => 
+      prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+    );
+  };
+
+  const handleVerifyAttachedDoc = (uniId: string, docKey: string, newStatus: 'verified' | 'rejected', notes?: string) => {
+    const uni = student.shortlist.find(u => u.id === uniId);
+    if (!uni) return;
+
+    const existingAttached = (uni.attachedDocs || {}) as Record<string, any>;
+    const currentDoc = existingAttached[docKey] || { name: docKey };
+
+    const updatedAttached = {
+      ...existingAttached,
+      [docKey]: {
+        ...currentDoc,
+        status: newStatus,
+        verifiedBy: 'Counselor',
+        verifiedAt: new Date().toLocaleDateString(),
+        notes: notes || (newStatus === 'verified' ? 'Verified & approved by Counselor' : 'Revision requested by Counselor')
+      }
+    };
+
+    // Also update in student documents list if matching
+    const updatedDocuments = (student.documents || []).map(d => {
+      if (d.name.toLowerCase().includes(docKey.toLowerCase()) || docKey.toLowerCase().includes(d.name.toLowerCase())) {
+        const docStatus: DocumentInfo['status'] = newStatus === 'verified' ? 'verified' : 'rejected';
+        return {
+          ...d,
+          status: docStatus,
+          notes: notes || d.notes
+        };
+      }
+      return d;
+    });
+
+    const updatedShortlist = student.shortlist.map(u => 
+      u.id === uniId ? { ...u, attachedDocs: updatedAttached } : u
+    );
+
+    onUpdate({
+      ...student,
+      shortlist: updatedShortlist,
+      documents: updatedDocuments,
+      activities: [
+        {
+          id: Math.random().toString(),
+          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+          type: newStatus === 'verified' ? 'VERIFIED' : 'UPDATE',
+          description: `Counselor ${newStatus === 'verified' ? 'verified' : 'requested revision for'} "${docKey}" for ${uni.name}`
+        },
+        ...student.activities
+      ]
+    });
+  };
+
+  const handleUpdateUniStatus = (uniId: string, status: string) => {
+    const updatedShortlist = student.shortlist.map(u => 
+      u.id === uniId ? { ...u, status: status as ShortlistUniversity['status'] } : u
+    );
+    onUpdate({
+      ...student,
+      shortlist: updatedShortlist
+    });
+  };
 
   const matchingUniversities = formData.name.trim() 
     ? topUniversities.filter(u => u.toLowerCase().includes(formData.name.toLowerCase()))
@@ -1093,7 +1361,7 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
       </div>
       
       <div className="bg-white rounded-xl border border-slate-200/80 shadow-2xs overflow-hidden">
-        <table className="w-full text-left text-xs whitespace-nowrap">
+        <table className="w-full text-left text-xs">
           <thead className="bg-slate-50/80 border-b border-slate-200/80 text-slate-400 font-bold uppercase tracking-wider text-[10px]">
             <tr>
               <th className="px-4 py-2.5">University</th>
@@ -1104,57 +1372,231 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white">
-            {student.shortlist.map(uni => (
-              <tr key={uni.id} className="hover:bg-slate-50/60 transition-colors">
-                <td className="px-4 py-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <p className="font-bold text-slate-900 text-xs">{uni.name}</p>
-                    {uni.portalLink && (
-                      <a href={uni.portalLink} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700">
-                        <LinkIcon className="w-3 h-3" />
-                      </a>
-                    )}
-                  </div>
-                  {(uni.major || uni.round) && (
-                    <p className="text-[11px] text-slate-500 mt-0.5 font-medium">{uni.major}{uni.major && uni.round ? ' • ' : ''}{uni.round}</p>
+            {student.shortlist.map(uni => {
+              const isExpanded = expandedUniIds.includes(uni.id);
+              const attachedDocs = (uni.attachedDocs || {}) as Record<string, any>;
+              const requiredDocs = (uni.requiredDocs && uni.requiredDocs.length > 0) 
+                ? uni.requiredDocs 
+                : ['Common App Essay / SOP', 'Official Transcript', 'Letters of Recommendation (LOR)', 'Passport / ID Proof', 'Financial Affidavit / Bank Statement'];
+
+              return (
+                <React.Fragment key={uni.id}>
+                  <tr className={cn("hover:bg-slate-50/60 transition-colors", isExpanded && "bg-blue-50/20")}>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => toggleExpand(uni.id)}
+                          className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors"
+                          title="Click to view checklist & uploaded documents"
+                        >
+                          {isExpanded ? <ChevronDown className="w-4 h-4 text-blue-600" /> : <ChevronRight className="w-4 h-4" />}
+                        </button>
+                        <div>
+                          <div className="flex items-center gap-1.5">
+                            <p className="font-bold text-slate-900 text-xs">{uni.name}</p>
+                            {uni.portalLink && (
+                              <a href={uni.portalLink} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700">
+                                <LinkIcon className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+                          {(uni.major || uni.round) && (
+                            <p className="text-[11px] text-slate-500 mt-0.5 font-medium">{uni.major}{uni.major && uni.round ? ' • ' : ''}{uni.round}</p>
+                          )}
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span className={cn(
+                        "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border",
+                        uni.category === 'Reach' ? 'bg-rose-50 text-rose-700 border-rose-200/80' :
+                        uni.category === 'Target' ? 'bg-amber-50 text-amber-700 border-amber-200/80' :
+                        'bg-emerald-50 text-emerald-700 border-emerald-200/80'
+                      )}>
+                        {uni.category}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-slate-600 font-medium">
+                      <div className="flex items-center gap-1 text-[11px]">
+                        <CalendarDays className="w-3 h-3 text-slate-400" /> 
+                        <span>{uni.deadline}</span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <select
+                        value={uni.status || 'Considering'}
+                        onChange={(e) => handleUpdateUniStatus(uni.id, e.target.value)}
+                        className="bg-slate-50 border border-slate-200 text-slate-700 text-[11px] font-semibold rounded-lg px-2 py-1 focus:ring-1 focus:ring-blue-500 focus:outline-none"
+                      >
+                        <option value="Considering">Considering</option>
+                        <option value="Drafting">Drafting</option>
+                        <option value="Applying">Applying</option>
+                        <option value="Submitted">Submitted</option>
+                        <option value="Accepted">Accepted</option>
+                        <option value="Waitlisted">Waitlisted</option>
+                        <option value="Deferred">Deferred</option>
+                        <option value="Rejected">Rejected</option>
+                      </select>
+                    </td>
+                    <td className="px-4 py-2.5 text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        <button
+                          onClick={() => toggleExpand(uni.id)}
+                          className="px-2 py-1 text-[11px] font-semibold text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-1"
+                        >
+                          <FileText className="w-3 h-3" />
+                          <span>Checklist ({requiredDocs.length})</span>
+                        </button>
+                        <button onClick={() => handleRemove(uni.id)} className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition-colors">
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+
+                  {/* Expanded Checklist & Uploaded Documents Review Panel */}
+                  {isExpanded && (
+                    <tr className="bg-slate-50/70 border-b border-slate-200">
+                      <td colSpan={5} className="p-4">
+                        <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3 shadow-2xs">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                            <div>
+                              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-1.5">
+                                <CheckSquare className="w-3.5 h-3.5 text-blue-600" />
+                                Application Document Checklist & Student Uploads
+                              </h4>
+                              <p className="text-[11px] text-slate-500">
+                                Verify documents uploaded by {student.name} for {uni.name}.
+                              </p>
+                            </div>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+                              Counselor Verification
+                            </span>
+                          </div>
+
+                          <div className="space-y-2.5">
+                            {requiredDocs.map((docReq, dIdx) => {
+                              const docKey = typeof docReq === 'string' ? docReq : (docReq as any).name || `req_${dIdx}`;
+                              const docName = typeof docReq === 'string' ? docReq : (docReq as any).name || docKey;
+                              
+                              // Check attachedDocs or find matching document in student.documents
+                              const uploadedInfo = attachedDocs[docKey] || attachedDocs[docName] || 
+                                (student.documents || []).find(d => 
+                                  d.name.toLowerCase().includes(docName.toLowerCase()) || 
+                                  docName.toLowerCase().includes(d.name.toLowerCase()) ||
+                                  (docName.toLowerCase().includes('transcript') && d.category === 'Academic') ||
+                                  (docName.toLowerCase().includes('sop') && d.category === 'Essays') ||
+                                  (docName.toLowerCase().includes('lor') && d.category === 'Certificates') ||
+                                  (docName.toLowerCase().includes('passport') && d.category === 'Identity')
+                                );
+
+                              const isVerified = uploadedInfo?.status === 'verified';
+                              const isRevision = uploadedInfo?.status === 'rejected';
+                              const isUploaded = !!uploadedInfo;
+                              const currentNotes = feedbackInput[`${uni.id}_${docKey}`] !== undefined 
+                                ? feedbackInput[`${uni.id}_${docKey}`] 
+                                : (uploadedInfo?.notes || '');
+
+                              return (
+                                <div key={dIdx} className="bg-slate-50/80 p-3 rounded-xl border border-slate-200 flex flex-col md:flex-row md:items-center justify-between gap-3">
+                                  <div className="space-y-1 min-w-0 flex-1">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-bold text-slate-900">{docName}</span>
+                                      {isVerified ? (
+                                        <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full flex items-center gap-1 border border-emerald-200">
+                                          <CheckCircle2 className="w-3 h-3" /> Verified by Counselor
+                                        </span>
+                                      ) : isRevision ? (
+                                        <span className="text-[10px] font-bold bg-rose-100 text-rose-800 px-2 py-0.5 rounded-full flex items-center gap-1 border border-rose-200">
+                                          <AlertCircle className="w-3 h-3" /> Needs Revision
+                                        </span>
+                                      ) : isUploaded ? (
+                                        <span className="text-[10px] font-bold bg-amber-100 text-amber-800 px-2 py-0.5 rounded-full flex items-center gap-1 border border-amber-200">
+                                          <Clock className="w-3 h-3" /> Uploaded — Pending Verification
+                                        </span>
+                                      ) : (
+                                        <span className="text-[10px] font-medium bg-slate-100 text-slate-500 px-2 py-0.5 rounded">
+                                          Not Uploaded Yet
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {isUploaded && (
+                                      <div className="text-[11px] text-slate-600 flex items-center gap-2">
+                                        <span className="font-medium text-slate-800 truncate">📄 {uploadedInfo.name || docName}</span>
+                                        {uploadedInfo.date && <span className="text-slate-400 text-[10px]">({uploadedInfo.date})</span>}
+                                        {uploadedInfo.verifiedAt && <span className="text-emerald-700 text-[10px]">Verified: {uploadedInfo.verifiedAt}</span>}
+                                      </div>
+                                    )}
+
+                                    {uploadedInfo?.notes && (
+                                      <p className="text-[10px] text-slate-500 bg-white p-1.5 rounded border border-slate-100 font-mono">
+                                        Note: {uploadedInfo.notes}
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  {/* Verification Actions */}
+                                  <div className="flex items-center gap-2 shrink-0">
+                                    {isUploaded && (
+                                      <button
+                                        onClick={() => setPreviewDoc({
+                                          id: uploadedInfo.id || `doc_${dIdx}`,
+                                          name: uploadedInfo.name || docName,
+                                          fileUrl: uploadedInfo.url || uploadedInfo.fileUrl || '',
+                                          category: uploadedInfo.category || 'Application Doc',
+                                          type: 'PDF Document',
+                                          date: uploadedInfo.date || 'Recent',
+                                          status: isVerified ? 'Verified' : isRevision ? 'Rejected' : 'Pending',
+                                          studentName: student.name,
+                                          studentId: student.id
+                                        })}
+                                        className="px-2.5 py-1 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-lg border border-blue-200 flex items-center gap-1 transition-colors"
+                                      >
+                                        <Eye className="w-3.5 h-3.5" /> View
+                                      </button>
+                                    )}
+
+                                    {isUploaded && !isVerified && (
+                                      <button
+                                        onClick={() => handleVerifyAttachedDoc(uni.id, docKey, 'verified')}
+                                        className="px-2.5 py-1 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-2xs flex items-center gap-1 transition-colors"
+                                      >
+                                        <Check className="w-3.5 h-3.5" /> Approve & Verify
+                                      </button>
+                                    )}
+
+                                    {isUploaded && (
+                                      <button
+                                        onClick={() => {
+                                          const reason = window.prompt('Please enter revision instructions for student:', 'Please re-upload a clear and signed copy of this document.');
+                                          if (reason !== null) {
+                                            handleVerifyAttachedDoc(uni.id, docKey, 'rejected', reason);
+                                          }
+                                        }}
+                                        className="px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 flex items-center gap-1 transition-colors"
+                                      >
+                                        <AlertCircle className="w-3.5 h-3.5" /> Request Revision
+                                      </button>
+                                    )}
+
+                                    {!isUploaded && (
+                                      <span className="text-[11px] text-slate-400 italic">
+                                        Awaiting Student Upload
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
                   )}
-                  {uni.requiredDocs && uni.requiredDocs.length > 0 && (
-                    <p className="text-[10px] text-slate-400 mt-0.5 uppercase font-medium">{uni.requiredDocs.length} Docs Required</p>
-                  )}
-                </td>
-                <td className="px-4 py-2.5">
-                  <span className={cn(
-                    "px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border",
-                    uni.category === 'Reach' ? 'bg-rose-50 text-rose-700 border-rose-200/80' :
-                    uni.category === 'Target' ? 'bg-amber-50 text-amber-700 border-amber-200/80' :
-                    'bg-emerald-50 text-emerald-700 border-emerald-200/80'
-                  )}>
-                    {uni.category}
-                  </span>
-                </td>
-                <td className="px-4 py-2.5 text-slate-600 font-medium">
-                  <div className="flex items-center gap-1 text-[11px]">
-                    <CalendarDays className="w-3 h-3 text-slate-400" /> 
-                    <span>{uni.deadline}</span>
-                  </div>
-                </td>
-                <td className="px-4 py-2.5">
-                  <span className={cn(
-                    "px-2 py-0.5 rounded-md text-[10px] font-bold uppercase tracking-wider border",
-                    uni.status === 'Submitted' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' :
-                    uni.status === 'Applying' ? 'bg-amber-50 text-amber-700 border-amber-200' :
-                    'bg-slate-50 text-slate-600 border-slate-200'
-                  )}>
-                    {uni.status || 'Drafting'}
-                  </span>
-                </td>
-                <td className="px-4 py-2.5 text-right">
-                  <button onClick={() => handleRemove(uni.id)} className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition-colors">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </td>
-              </tr>
-            ))}
+                </React.Fragment>
+              );
+            })}
             {student.shortlist.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-4 py-6 text-center text-slate-400 text-xs">
@@ -1165,6 +1607,13 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
           </tbody>
         </table>
       </div>
+
+      {previewDoc && (
+        <DocumentPreviewModal 
+          doc={previewDoc} 
+          onClose={() => setPreviewDoc(null)} 
+        />
+      )}
       
       {isModalOpen && (
         <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
@@ -1726,7 +2175,42 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
         </div>
       </Card>
       
-      
+      {previewingDoc && (
+        <DocumentPreviewModal 
+          doc={previewingDoc} 
+          onClose={() => setPreviewingDoc(null)} 
+          onVerify={(newStatus, reason, feedback) => {
+            const updatedDocs = documents.map(d => {
+              if (d.id === previewingDoc.id || d.name === previewingDoc.name) {
+                return { 
+                  ...d, 
+                  status: newStatus,
+                  rejectReason: reason,
+                  feedback: feedback
+                };
+              }
+              return d;
+            });
+
+            onUpdate({
+              ...student,
+              documents: updatedDocs as any,
+              activities: [
+                {
+                  id: Math.random().toString(),
+                  date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+                  type: newStatus === 'verified' ? 'VERIFIED' : 'UPDATE',
+                  description: newStatus === 'verified' 
+                    ? `Document verified: ${previewingDoc.name}`
+                    : `Document rejected: ${previewingDoc.name}${reason ? ` (${reason})` : ''}`
+                },
+                ...student.activities
+              ]
+            });
+            setPreviewingDoc(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -2006,6 +2490,7 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
   const tasks = student.tasks || [];
   const [isAssigning, setIsAssigning] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<any | null>(null);
   
   // New Task / Assignment Form
   const [newTaskName, setNewTaskName] = useState('');
@@ -2395,6 +2880,24 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
           </div>
         </div>
       )}
+
+      {previewAttachment && (
+        <DocumentPreviewModal 
+          doc={previewAttachment} 
+          onClose={() => setPreviewAttachment(null)}
+          onVerify={(newStatus, reason, fb) => {
+            if (newStatus === 'verified') {
+              handleReview('COMPLETED');
+            } else if (newStatus === 'rejected') {
+              if (reason || fb) {
+                setFeedback(`${reason ? `Reason: ${reason}. ` : ''}${fb || ''}`);
+              }
+              handleReview('NEEDS_REVISION');
+            }
+            setPreviewAttachment(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -2694,10 +3197,10 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
           <div className="flex justify-between items-center mb-4 border-b border-slate-100 pb-2">
             <div>
               <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Extracurricular Activities & Honors (Profile Building)</h3>
-              <p className="text-xs text-slate-500">Synchronized profile building activities, honors, and commitments across Student Portal & Team Database.</p>
+              <p className="text-xs text-slate-500">Synchronized profile building activities, honors, and participation modes with counselor mapping & verification.</p>
             </div>
             {isEditing && (
-              <Button size="sm" variant="outline" onClick={() => setExtracurriculars([...extracurriculars, { id: 'act_' + Date.now(), title: '', category: 'STEM', role: 'Member', hoursPerWeek: '2', weeksPerYear: '30', verified: false }])}>
+              <Button size="sm" variant="outline" onClick={() => setExtracurriculars([...extracurriculars, { id: 'act_' + Date.now(), title: '', category: 'STEM', participationType: 'Team Work', role: 'Member', hoursPerWeek: '2', weeksPerYear: '30', verified: false, primaryVector: 'Team Work' }])}>
                 Add Activity
               </Button>
             )}
@@ -2712,55 +3215,149 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                 <div key={act.id || idx} className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
                   {isEditing ? (
                     <div className="space-y-3">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <input className="border rounded p-2 text-sm font-bold" placeholder="Activity Title / Name" value={act.title || act.name || ''} onChange={e => {
-                          const n = [...extracurriculars]; n[idx].title = e.target.value; setExtracurriculars(n);
-                        }} />
-                        <input className="border rounded p-2 text-sm" placeholder="Role / Position (e.g. Founder, Member)" value={act.role || ''} onChange={e => {
-                          const n = [...extracurriculars]; n[idx].role = e.target.value; setExtracurriculars(n);
-                        }} />
-                      </div>
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                        <input className="border rounded p-2 text-sm" placeholder="Category (e.g. STEM, Leadership)" value={act.category || ''} onChange={e => {
-                          const n = [...extracurriculars]; n[idx].category = e.target.value; setExtracurriculars(n);
-                        }} />
-                        <input className="border rounded p-2 text-sm" placeholder="Hours / Week (e.g. 5)" value={act.hoursPerWeek || ''} onChange={e => {
-                          const n = [...extracurriculars]; n[idx].hoursPerWeek = e.target.value; setExtracurriculars(n);
-                        }} />
-                        <label className="flex items-center gap-2 text-sm bg-white p-2 rounded border border-slate-200 font-medium">
-                          <input type="checkbox" checked={act.verified || false} onChange={e => {
-                            const n = [...extracurriculars]; n[idx].verified = e.target.checked; setExtracurriculars(n);
-                          }} /> Verified by Counselor
-                        </label>
+                        <div className="sm:col-span-2">
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Activity Title / Name</label>
+                          <input className="w-full border rounded p-2 text-sm font-bold" placeholder="Activity Title / Name" value={act.title || act.name || ''} onChange={e => {
+                            const n = [...extracurriculars]; n[idx].title = e.target.value; setExtracurriculars(n);
+                          }} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Participation Type</label>
+                          <select 
+                            className="w-full border rounded p-2 text-sm bg-white font-medium"
+                            value={act.participationType || (act.category === 'Team Work' ? 'Team Work' : 'Individual Participation')}
+                            onChange={e => {
+                              const n = [...extracurriculars]; n[idx].participationType = e.target.value; setExtracurriculars(n);
+                            }}
+                          >
+                            <option value="Team Work">Team Work / Collaborative</option>
+                            <option value="Individual Participation">Individual Participation</option>
+                            <option value="Leadership & Initiative">Leadership & Initiative</option>
+                            <option value="Community Service">Community Service</option>
+                          </select>
+                        </div>
                       </div>
-                      <textarea rows={2} className="w-full border rounded p-2 text-sm resize-none" placeholder="Activity Description & Impact..." value={act.description || ''} onChange={e => {
-                        const n = [...extracurriculars]; n[idx].description = e.target.value; setExtracurriculars(n);
-                      }} />
+
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Role / Position</label>
+                          <input className="w-full border rounded p-2 text-sm" placeholder="e.g. Lead, Co-founder" value={act.role || ''} onChange={e => {
+                            const n = [...extracurriculars]; n[idx].role = e.target.value; setExtracurriculars(n);
+                          }} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Category</label>
+                          <input className="w-full border rounded p-2 text-sm" placeholder="Category (e.g. STEM)" value={act.category || ''} onChange={e => {
+                            const n = [...extracurriculars]; n[idx].category = e.target.value; setExtracurriculars(n);
+                          }} />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Mapped Competency</label>
+                          <select
+                            className="w-full border rounded p-2 text-sm bg-white"
+                            value={act.primaryVector || 'Team Work'}
+                            onChange={e => {
+                              const n = [...extracurriculars]; n[idx].primaryVector = e.target.value; setExtracurriculars(n);
+                            }}
+                          >
+                            <option value="Team Work">Team Work</option>
+                            <option value="Critical Thinking">Critical Thinking</option>
+                            <option value="Problem Solving">Problem Solving</option>
+                            <option value="Communication">Communication</option>
+                            <option value="Creativity">Creativity</option>
+                            <option value="Technical Skills">Technical Skills</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">Hours/Wk • Wks/Yr</label>
+                          <div className="flex gap-2">
+                            <input className="w-1/2 border rounded p-2 text-sm" placeholder="Hrs/Wk" value={act.hoursPerWeek || ''} onChange={e => {
+                              const n = [...extracurriculars]; n[idx].hoursPerWeek = e.target.value; setExtracurriculars(n);
+                            }} />
+                            <input className="w-1/2 border rounded p-2 text-sm" placeholder="Wks/Yr" value={act.weeksPerYear || ''} onChange={e => {
+                              const n = [...extracurriculars]; n[idx].weeksPerYear = e.target.value; setExtracurriculars(n);
+                            }} />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-center">
+                        <div className="sm:col-span-2">
+                          <textarea rows={2} className="w-full border rounded p-2 text-sm resize-none" placeholder="Activity Description & Impact..." value={act.description || ''} onChange={e => {
+                            const n = [...extracurriculars]; n[idx].description = e.target.value; setExtracurriculars(n);
+                          }} />
+                        </div>
+                        <div>
+                          <label className="flex items-center gap-2 text-sm bg-white p-2.5 rounded-lg border border-slate-200 font-bold text-emerald-800 cursor-pointer">
+                            <input type="checkbox" checked={act.verified || false} onChange={e => {
+                              const n = [...extracurriculars]; n[idx].verified = e.target.checked; setExtracurriculars(n);
+                            }} />
+                            <span>Counselor Verified</span>
+                          </label>
+                        </div>
+                      </div>
                     </div>
                   ) : (
                     <div>
                       <div className="flex justify-between items-start">
-                        <div>
-                          <div className="flex items-center gap-2">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <h4 className="font-bold text-slate-900">{act.title || act.name || 'Untitled Activity'}</h4>
                             {act.role && <span className="text-xs bg-indigo-50 text-indigo-700 font-semibold px-2 py-0.5 rounded border border-indigo-100">{act.role}</span>}
+                            <span className={cn(
+                              "text-[10px] font-bold px-2 py-0.5 rounded-full border",
+                              (act.participationType === 'Team Work' || act.category === 'Team Work')
+                                ? "bg-lime-50 text-lime-800 border-lime-200"
+                                : "bg-blue-50 text-blue-800 border-blue-200"
+                            )}>
+                              {act.participationType || (act.category === 'Team Work' ? 'Team Work' : 'Individual Participation')}
+                            </span>
+                            {act.primaryVector && (
+                              <span className="text-[10px] font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded">
+                                Vector: {act.primaryVector}
+                              </span>
+                            )}
                           </div>
-                          <p className="text-xs text-slate-500 mt-1 flex items-center gap-2">
+                          <p className="text-xs text-slate-500 flex items-center gap-2">
                             <span className="font-medium text-slate-700">{act.category || 'Uncategorized'}</span>
                             {act.hoursPerWeek && <span>• {act.hoursPerWeek} hrs/wk</span>}
                             {act.weeksPerYear && <span>• {act.weeksPerYear} wks/yr</span>}
                           </p>
                           {act.description && <p className="text-xs text-slate-600 mt-2 bg-white p-2.5 rounded-lg border border-slate-100">{act.description}</p>}
                         </div>
-                        {act.verified ? (
-                          <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full uppercase tracking-wider border border-emerald-200">
-                            Verified
-                          </span>
-                        ) : (
-                          <span className="text-[10px] bg-slate-100 text-slate-600 font-medium px-2 py-0.5 rounded">
-                            Pending Verification
-                          </span>
-                        )}
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {act.verified ? (
+                            <span className="text-[10px] bg-emerald-100 text-emerald-800 font-bold px-2.5 py-1 rounded-full uppercase tracking-wider border border-emerald-200 flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" /> Verified by Counselor
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                const n = [...extracurriculars];
+                                n[idx].verified = true;
+                                setExtracurriculars(n);
+                                onUpdate({
+                                  ...student,
+                                  extracurriculars: n,
+                                  activities: [
+                                    {
+                                      id: Math.random().toString(),
+                                      date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+                                      type: 'VERIFIED',
+                                      description: `Counselor verified activity: "${act.title || act.name}" (${act.participationType || 'Participation'})`
+                                    },
+                                    ...student.activities
+                                  ]
+                                });
+                              }}
+                              className="text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg transition-colors flex items-center gap-1 shadow-2xs cursor-pointer"
+                            >
+                              <Check className="w-3.5 h-3.5" /> Approve & Verify
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   )}

@@ -325,6 +325,101 @@ export default function StudentDashboard() {
         </div>
       </div>
 
+      {/* NOTIFICATION CENTER AT TOP OF DASHBOARD */}
+      <Card className="border-indigo-100/80 shadow-sm bg-gradient-to-br from-indigo-50/40 via-white to-white overflow-hidden">
+        <CardHeader className="pb-3 border-b border-indigo-100/60">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 bg-indigo-600 text-white rounded-xl shadow-xs">
+                <Bell className="w-4 h-4" />
+              </div>
+              <div>
+                <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  Notifications & Counselor Action Items
+                  {unreadCount > 0 && (
+                    <span className="bg-rose-500 text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full shadow-2xs">
+                      {unreadCount} Unread
+                    </span>
+                  )}
+                </CardTitle>
+                <CardDescription className="text-xs">
+                  Real-time alerts, document verification updates, upcoming meetings, and counselor assignments.
+                </CardDescription>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between sm:justify-end gap-2">
+              <div className="flex gap-1 bg-slate-100/80 p-1 rounded-xl">
+                {(['ALL', 'UNREAD', 'URGENT'] as const).map(filter => (
+                  <button
+                    key={filter}
+                    onClick={() => setNotificationFilter(filter)}
+                    className={cn(
+                      "px-3 py-1 text-xs font-bold rounded-lg transition-all",
+                      notificationFilter === filter 
+                        ? "bg-white text-indigo-700 shadow-2xs" 
+                        : "text-slate-600 hover:text-slate-900"
+                    )}
+                  >
+                    {filter === 'ALL' ? 'All' : filter === 'UNREAD' ? 'Unread' : 'Urgent'}
+                  </button>
+                ))}
+              </div>
+
+              {unreadCount > 0 && (
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={markAllAsRead} 
+                  className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 h-8 px-2.5"
+                >
+                  Mark all read
+                </Button>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent className="p-4">
+          {filteredNotifications.length === 0 ? (
+            <div className="text-center py-6 text-slate-400 text-xs italic bg-white/50 rounded-xl border border-dashed border-slate-200">
+              No notifications matching your filter.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {filteredNotifications.map(n => (
+                <div 
+                  key={n.id} 
+                  onClick={() => toggleRead(n.id)}
+                  className={cn(
+                    "p-3.5 rounded-xl border transition-all cursor-pointer space-y-1.5 relative hover:shadow-xs",
+                    n.read 
+                      ? "bg-slate-50/70 border-slate-200/80 opacity-80" 
+                      : "bg-white border-indigo-200 shadow-2xs hover:border-indigo-400 ring-1 ring-indigo-500/10"
+                  )}
+                >
+                  <div className="flex items-center justify-between text-xs">
+                    <span className={cn(
+                      "font-bold text-[10px] uppercase px-2 py-0.5 rounded tracking-wider",
+                      n.type === 'URGENT' ? "bg-rose-100 text-rose-800" :
+                      n.type === 'COUNSELOR' ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
+                    )}>
+                      {n.type}
+                    </span>
+                    <span className="text-[10px] text-slate-400">{n.timestamp}</span>
+                  </div>
+                  <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between gap-2">
+                    <span className="truncate">{n.title}</span>
+                    {!n.read && <span className="w-2 h-2 rounded-full bg-indigo-600 shrink-0" />}
+                  </h4>
+                  <p className="text-xs text-slate-600 leading-snug line-clamp-2">{n.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* TOP ROW STATS & CHARTS */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {/* Task Breakdown Chart */}
@@ -428,182 +523,88 @@ export default function StudentDashboard() {
         </Card>
       </div>
 
-      {/* NOTIFICATION CENTER & ACTIVITY FEED GRID */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* NOTIFICATION CENTER CARD (1 Column) */}
-        <Card className="border-slate-200 shadow-sm flex flex-col h-full">
-          <CardHeader className="pb-3 border-b border-slate-100">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
-                  <Bell className="w-4 h-4" />
-                </div>
-                <div>
-                  <CardTitle className="text-base font-bold text-slate-900">Notification Center</CardTitle>
-                  <CardDescription className="text-xs">Real-time alerts & action items</CardDescription>
-                </div>
-              </div>
-              {unreadCount > 0 && (
-                <span className="bg-rose-500 text-white font-extrabold text-[10px] px-2 py-0.5 rounded-full">
-                  {unreadCount} New
-                </span>
-              )}
+      {/* ACTIVITIES FEED STREAM (Full Width) */}
+      <Card className="border-slate-200 shadow-sm flex flex-col">
+        <CardHeader className="pb-3 border-b border-slate-100">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Clock className="w-4 h-4 text-indigo-600" /> Student Activities & Counselor Updates
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Real-time activity trail covering meetings, task stages, essay progress, document status, and counselor logs.
+              </CardDescription>
             </div>
 
-            <div className="flex items-center justify-between mt-3 pt-2">
-              <div className="flex gap-1">
+            {/* Activity Filter Buttons */}
+            <div className="flex flex-wrap gap-1">
+              {(['ALL', 'MEETING', 'TASK', 'ESSAY', 'COUNSELOR_LOG'] as const).map(f => (
                 <button
-                  onClick={() => setNotificationFilter('ALL')}
-                  className={cn("px-2.5 py-1 text-xs font-bold rounded-lg transition-colors", notificationFilter === 'ALL' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}
-                >
-                  All
-                </button>
-                <button
-                  onClick={() => setNotificationFilter('UNREAD')}
-                  className={cn("px-2.5 py-1 text-xs font-bold rounded-lg transition-colors", notificationFilter === 'UNREAD' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}
-                >
-                  Unread
-                </button>
-                <button
-                  onClick={() => setNotificationFilter('URGENT')}
-                  className={cn("px-2.5 py-1 text-xs font-bold rounded-lg transition-colors", notificationFilter === 'URGENT' ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200")}
-                >
-                  Urgent
-                </button>
-              </div>
-
-              {unreadCount > 0 && (
-                <button 
-                  onClick={markAllAsRead} 
-                  className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800"
-                >
-                  Mark all as read
-                </button>
-              )}
-            </div>
-          </CardHeader>
-
-          <CardContent className="p-4 flex-1 space-y-3 max-h-[480px] overflow-y-auto">
-            {filteredNotifications.length === 0 ? (
-              <div className="text-center py-8 text-slate-400 text-xs italic">
-                No notifications matching filter.
-              </div>
-            ) : (
-              filteredNotifications.map(n => (
-                <div 
-                  key={n.id} 
-                  onClick={() => toggleRead(n.id)}
+                  key={f}
+                  onClick={() => setActivityFilter(f)}
                   className={cn(
-                    "p-3 rounded-xl border transition-all cursor-pointer space-y-1 relative",
-                    n.read ? "bg-slate-50 border-slate-200 opacity-75" : "bg-white border-indigo-200 shadow-sm hover:border-indigo-300"
+                    "px-2.5 py-1 text-[11px] font-bold rounded-lg transition-colors uppercase tracking-wider",
+                    activityFilter === f ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                   )}
                 >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className={cn(
-                      "font-bold text-[10px] uppercase px-2 py-0.5 rounded tracking-wider",
-                      n.type === 'URGENT' ? "bg-rose-100 text-rose-800" :
-                      n.type === 'COUNSELOR' ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
-                    )}>
-                      {n.type}
-                    </span>
-                    <span className="text-[10px] text-slate-400">{n.timestamp}</span>
-                  </div>
-                  <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between">
-                    {n.title}
-                    {!n.read && <span className="w-2 h-2 rounded-full bg-indigo-600" />}
-                  </h4>
-                  <p className="text-xs text-slate-600 leading-snug">{n.message}</p>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
-
-        {/* ACTIVITIES FEED STREAM (2 Columns) */}
-        <Card className="border-slate-200 shadow-sm lg:col-span-2 flex flex-col h-full">
-          <CardHeader className="pb-3 border-b border-slate-100">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-indigo-600" /> Student Activities & Counselor Updates
-                </CardTitle>
-                <CardDescription className="text-xs">
-                  Real-time activity trail covering meetings, task stages, essay progress, document status, and counselor logs.
-                </CardDescription>
-              </div>
-
-              {/* Activity Filter Buttons */}
-              <div className="flex flex-wrap gap-1">
-                {(['ALL', 'MEETING', 'TASK', 'ESSAY', 'COUNSELOR_LOG'] as const).map(f => (
-                  <button
-                    key={f}
-                    onClick={() => setActivityFilter(f)}
-                    className={cn(
-                      "px-2.5 py-1 text-[11px] font-bold rounded-lg transition-colors uppercase tracking-wider",
-                      activityFilter === f ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                    )}
-                  >
-                    {f === 'COUNSELOR_LOG' ? 'Counselor' : f}
-                  </button>
-                ))}
-              </div>
+                  {f === 'COUNSELOR_LOG' ? 'Counselor' : f}
+                </button>
+              ))}
             </div>
-          </CardHeader>
+          </div>
+        </CardHeader>
 
-          <CardContent className="p-5 flex-1 max-h-[480px] overflow-y-auto">
-            {filteredActivities.length === 0 ? (
-              <div className="text-center py-12 text-slate-400 text-xs italic">
-                No recorded activities found for this category.
-              </div>
-            ) : (
-              <div className="relative pl-6 space-y-5 border-l-2 border-indigo-100 ml-2">
-                {filteredActivities.map(act => (
-                  <div key={act.id} className="relative group">
-                    {/* Icon indicator bullet */}
-                    <span className={cn(
-                      "absolute -left-[31px] w-3.5 h-3.5 rounded-full ring-4 ring-white flex items-center justify-center",
-                      act.category === 'MEETING' ? 'bg-blue-600' :
-                      act.category === 'TASK' ? 'bg-indigo-600' :
-                      act.category === 'ESSAY' ? 'bg-purple-600' :
-                      act.category === 'DOCUMENT' ? 'bg-emerald-600' : 'bg-amber-600'
-                    )} />
+        <CardContent className="p-5 max-h-[550px] overflow-y-auto">
+          {filteredActivities.length === 0 ? (
+            <div className="text-center py-12 text-slate-400 text-xs italic">
+              No recorded activities found for this category.
+            </div>
+          ) : (
+            <div className="relative pl-6 space-y-5 border-l-2 border-indigo-100 ml-2">
+              {filteredActivities.map(act => (
+                <div key={act.id} className="relative group">
+                  {/* Icon indicator bullet */}
+                  <span className={cn(
+                    "absolute -left-[31px] w-3.5 h-3.5 rounded-full ring-4 ring-white flex items-center justify-center",
+                    act.category === 'MEETING' ? 'bg-blue-600' :
+                    act.category === 'TASK' ? 'bg-indigo-600' :
+                    act.category === 'ESSAY' ? 'bg-purple-600' :
+                    act.category === 'DOCUMENT' ? 'bg-emerald-600' : 'bg-amber-600'
+                  )} />
 
-                    <div className="bg-slate-50 hover:bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm transition-all space-y-1.5">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <span className={cn(
-                            "text-[10px] font-extrabold uppercase px-2 py-0.5 rounded tracking-wider",
-                            act.statusColor || "bg-slate-200 text-slate-800"
-                          )}>
-                            {act.category.replace('_', ' ')}
+                  <div className="bg-slate-50 hover:bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm transition-all space-y-1.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className={cn(
+                          "text-[10px] font-extrabold uppercase px-2 py-0.5 rounded tracking-wider",
+                          act.statusColor || "bg-slate-200 text-slate-800"
+                        )}>
+                          {act.category.replace('_', ' ')}
+                        </span>
+                        {act.statusBadge && (
+                          <span className="text-[10px] font-semibold bg-white border border-slate-200 px-2 py-0.5 rounded text-slate-700">
+                            {act.statusBadge}
                           </span>
-                          {act.statusBadge && (
-                            <span className="text-[10px] font-semibold bg-white border border-slate-200 px-2 py-0.5 rounded text-slate-700">
-                              {act.statusBadge}
-                            </span>
-                          )}
-                        </div>
-                        <span className="text-[11px] font-medium text-slate-400">{act.timestamp}</span>
+                        )}
                       </div>
-
-                      <h4 className="text-xs font-bold text-slate-900">{act.title}</h4>
-                      <p className="text-xs text-slate-600 leading-relaxed">{act.description}</p>
-
-                      {act.performedBy && (
-                        <p className="text-[10px] text-slate-400 pt-1">
-                          Action by: <span className="font-semibold text-slate-600">{act.performedBy}</span>
-                        </p>
-                      )}
+                      <span className="text-[11px] font-medium text-slate-400">{act.timestamp}</span>
                     </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
 
-      </div>
+                    <h4 className="text-xs font-bold text-slate-900">{act.title}</h4>
+                    <p className="text-xs text-slate-600 leading-relaxed">{act.description}</p>
+
+                    {act.performedBy && (
+                      <p className="text-[10px] text-slate-400 pt-1">
+                        Action by: <span className="font-semibold text-slate-600">{act.performedBy}</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

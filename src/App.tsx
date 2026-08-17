@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { DatabaseProvider, useDatabase } from './context/DatabaseContext';
+import ErrorBoundary from './components/ErrorBoundary';
 import AppLayout from './components/layout/AppLayout';
 import Login from './pages/Login';
 import StudentDashboard from './pages/student/Dashboard';
@@ -29,40 +30,42 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
 
 export default function App() {
   return (
-    <DatabaseProvider>
-      <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        
-        {/* Student Routes */}
-        <Route path="/student" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<StudentDashboard />} />
-          <Route path="profile" element={<StudentProfile />} />
-          <Route path="universities" element={<StudentUniversities />} />
-          <Route path="schedules" element={<StudentSchedule />} />
-          <Route path="vault" element={<StudentVault />} />
-          <Route path="essays" element={<StudentEssays />} />
-          <Route path="tasks" element={<StudentTasks />} />
-          <Route path="competency-radar" element={<CompetencyRadar />} />
-        </Route>
+    <ErrorBoundary>
+      <DatabaseProvider>
+        <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+          
+          {/* Student Routes */}
+          <Route path="/student" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<StudentDashboard />} />
+            <Route path="profile" element={<StudentProfile />} />
+            <Route path="universities" element={<StudentUniversities />} />
+            <Route path="schedules" element={<StudentSchedule />} />
+            <Route path="vault" element={<StudentVault />} />
+            <Route path="essays" element={<StudentEssays />} />
+            <Route path="tasks" element={<StudentTasks />} />
+            <Route path="competency-radar" element={<CompetencyRadar />} />
+          </Route>
 
-        {/* Team Routes */}
-        <Route path="/team" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
-          <Route index element={<Navigate to="dashboard" replace />} />
-          <Route path="dashboard" element={<TeamDashboard />} />
-          <Route path="scheduler" element={<TeamScheduler />} />
-          <Route path="vault" element={<TeamVault />} />
-          <Route path="evaluator" element={<Evaluator />} />
-          <Route path="users" element={<TeamUsers />} />
-          <Route path="batches" element={<Batches />} />
-          <Route path="settings" element={<TeamSettings />} />
-        </Route>
+          {/* Team Routes */}
+          <Route path="/team" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+            <Route index element={<Navigate to="dashboard" replace />} />
+            <Route path="dashboard" element={<TeamDashboard />} />
+            <Route path="scheduler" element={<TeamScheduler />} />
+            <Route path="vault" element={<TeamVault />} />
+            <Route path="evaluator" element={<Evaluator />} />
+            <Route path="users" element={<TeamUsers />} />
+            <Route path="batches" element={<Batches />} />
+            <Route path="settings" element={<TeamSettings />} />
+          </Route>
 
-        {/* Fallback route */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
-      </Routes>
-    </BrowserRouter>
-    </DatabaseProvider>
+          {/* Fallback route */}
+          <Route path="*" element={<Navigate to="/login" replace />} />
+        </Routes>
+      </BrowserRouter>
+      </DatabaseProvider>
+    </ErrorBoundary>
   );
 }

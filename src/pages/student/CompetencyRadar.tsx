@@ -274,6 +274,9 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
   // Selected major view mode: 'major1' | 'major2' | preset id
   const [selectedMajorSource, setSelectedMajorSource] = useState<string>('major1');
 
+  // Class-wise vs Overall Filter State
+  const [gradeFilter, setGradeFilter] = useState<'ALL' | 'Grade 8' | 'Grade 9' | 'Grade 10' | 'Grade 11' | 'Grade 12'>('ALL');
+
   // Extract Profile Activities from Section 6 (Profile Building Extracurriculars)
   const profileActivities: ActivityRecord[] = useMemo(() => {
     // Prefer student.extracurriculars array (Section 6 Profile Building)
@@ -301,6 +304,18 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
       const hpw = parseFloat(act.hoursPerWeek) || 5;
       const wpy = parseFloat(act.weeksPerYear) || 30;
 
+      // Extract years/classes safely whether it's an array, string, or number
+      let actYears = '';
+      if (Array.isArray(act.classes)) {
+        actYears = act.classes.join(', ');
+      } else if (Array.isArray(act.grades)) {
+        actYears = act.grades.join(', ');
+      } else if (Array.isArray(act.years)) {
+        actYears = act.years.join(', ');
+      } else {
+        actYears = String(act.classes || act.grades || act.grade || act.class || act.years || act.date || '');
+      }
+
       result.push({
         id: String(key),
         title: rawTitle,
@@ -310,12 +325,77 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
         hoursPerWeek: Math.min(168, Math.max(1, hpw)),
         weeksPerYear: Math.min(52, Math.max(1, wpy)),
         description: act.description || `${act.organization ? act.organization + ' - ' : ''}${rawTitle}`,
-        years: act.classes || act.years || act.date || ''
+        years: actYears
       });
     });
 
     return result;
   }, [currentStudent]);
+
+  // Apply Class-wise Filter
+  const filteredActivities = useMemo(() => {
+    if (gradeFilter === 'ALL') return profileActivities;
+    
+    // Extract target grade number, e.g. "Grade 8" -> "8", "Grade 9" -> "9", "Grade 10" -> "10", "Grade 11" -> "11", "Grade 12" -> "12"
+    const numMatch = gradeFilter.match(/\d+/);
+    if (!numMatch) return profileActivities;
+    const num = numMatch[0];
+    const targetNum = parseInt(num, 10);
+
+    return profileActivities.filter(act => {
+      if (!act.years || !act.years.trim()) return false;
+      const y = act.years.toLowerCase();
+
+      // 1. Direct class/grade keyword matches
+      if (
+        y.includes(`class ${num}`) ||
+        y.includes(`grade ${num}`) ||
+        y.includes(`class-${num}`) ||
+        y.includes(`grade-${num}`) ||
+        y.includes(`class_${num}`) ||
+        y.includes(`grade_${num}`) ||
+        y.includes(`${num}th`) ||
+        y.includes(`class ${num}th`) ||
+        y.includes(`grade ${num}th`) ||
+        y.includes(`gr ${num}`) ||
+        y.includes(`gr${num}`) ||
+        y.includes(`c${num}`) ||
+        y.includes(`g${num}`)
+      ) {
+        return true;
+      }
+
+      // 2. Exact standalone number token match (boundary check so '9' doesn't match '2019' or '19')
+      const regexExact = new RegExp(`\\b${num}\\b`);
+      if (regexExact.test(y)) return true;
+
+      // 3. Numeric range check, e.g. "9-12", "8 - 12", "9 to 11", "9th-12th", "class 9 - class 12"
+      const rangeRegex = /(\d+)\s*[-–—to]+\s*(\d+)/g;
+      let match;
+      while ((match = rangeRegex.exec(y)) !== null) {
+        const start = parseInt(match[1], 10);
+        const end = parseInt(match[2], 10);
+        if (!isNaN(start) && !isNaN(end) && !isNaN(targetNum)) {
+          // Verify valid grade bounds (e.g. 6 to 12)
+          if (start <= 14 && end <= 14) {
+            if (targetNum >= start && targetNum <= end) return true;
+          }
+        }
+      }
+
+      if (
+        y.includes('all grades') || 
+        y.includes('all classes') || 
+        y.includes('high school') || 
+        y.includes('all high school') ||
+        y.includes('all years')
+      ) {
+        return true;
+      }
+
+      return false;
+    });
+  }, [profileActivities, gradeFilter]);
 
   // Skill Vector Calculation Engine mapped against Domain Coverage Matrix & Core Competency Vectors
   const { competencyScores, matchedActivitiesByVector, totalAnnualHours, activityBreakdown } = useMemo(() => {
@@ -341,7 +421,7 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
 
     const breakdowns: any[] = [];
 
-    profileActivities.forEach(act => {
+    filteredActivities.forEach(act => {
       const annualHours = act.hoursPerWeek * act.weeksPerYear;
       hoursSum += annualHours;
 
@@ -485,7 +565,7 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
       totalAnnualHours: hoursSum,
       activityBreakdown: breakdowns
     };
-  }, [profileActivities]);
+  }, [filteredActivities]);
 
   // Target Major Info & Benchmark Spikes
   const currentMajorInfo = useMemo(() => {
@@ -562,7 +642,7 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
   // Portfolio Commitment Depth Calculations
   const portfolioCommitmentDepth = useMemo(() => {
     const totalHours = activityBreakdown.reduce((sum, a) => sum + (a.annualHours || 0), 0);
-    const highCommitmentCount = profileActivities.filter(a => {
+    const highCommitmentCount = filteredActivities.filter(a => {
       const h = (Number(a.hoursPerWeek) || 0) * (Number(a.weeksPerYear) || 0);
       const isLeader = /president|founder|captain|lead|head|chair|director|chief|initiator|creator/i.test(a.role || '');
       return h >= 80 || isLeader;
@@ -578,8 +658,8 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
       tierBadge = 'bg-blue-100 text-blue-800 border-blue-300';
     }
 
-    const totalWeeklyHours = profileActivities.reduce((acc, a) => acc + (Number(a.hoursPerWeek) || 0), 0);
-    const avgWeeklyHours = profileActivities.length > 0 ? (totalWeeklyHours / profileActivities.length).toFixed(1) : '0';
+    const totalWeeklyHours = filteredActivities.reduce((acc, a) => acc + (Number(a.hoursPerWeek) || 0), 0);
+    const avgWeeklyHours = filteredActivities.length > 0 ? (totalWeeklyHours / filteredActivities.length).toFixed(1) : '0';
 
     return {
       totalHours,
@@ -588,7 +668,7 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
       tierBadge,
       avgWeeklyHours
     };
-  }, [activityBreakdown, profileActivities]);
+  }, [activityBreakdown, filteredActivities]);
 
   // Portfolio Engagement Width Calculations
   const portfolioEngagementWidth = useMemo(() => {
@@ -606,12 +686,12 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
 
     return {
       activeVectorsCount,
-      totalActivitiesCount: profileActivities.length,
+      totalActivitiesCount: filteredActivities.length,
       widthLabel,
       widthBadge,
       coveredPct: Math.round((activeVectorsCount / 6) * 100)
     };
-  }, [competencyScores, profileActivities]);
+  }, [competencyScores, filteredActivities]);
 
   // SVG Spider Radar Coordinates Calculation
   const CX = 180;
@@ -688,11 +768,15 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
           {/* Top Metric Bar */}
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 shrink-0">
             <div className="bg-white/10 backdrop-blur-md border border-white/10 rounded-2xl p-3 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-300 block">Logged Activities</span>
-              <span className="text-xl font-extrabold text-white">{profileActivities.length}</span>
+              <span className="text-[10px] uppercase font-bold text-slate-300 block">
+                {gradeFilter === 'ALL' ? 'Logged Activities' : `${gradeFilter} Activities`}
+              </span>
+              <span className="text-xl font-extrabold text-white">{filteredActivities.length}</span>
             </div>
             <div className="bg-white/10 backdrop-blur-md border border-white/10 rounded-2xl p-3 text-center">
-              <span className="text-[10px] uppercase font-bold text-slate-300 block">Annual Hours</span>
+              <span className="text-[10px] uppercase font-bold text-slate-300 block">
+                {gradeFilter === 'ALL' ? 'Annual Hours' : `${gradeFilter} Hours`}
+              </span>
               <span className="text-xl font-extrabold text-emerald-400">{totalAnnualHours}h</span>
             </div>
             <div className="col-span-2 sm:col-span-1 bg-white/10 backdrop-blur-md border border-white/10 rounded-2xl p-3 text-center">
@@ -808,6 +892,44 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
         </div>
       )}
 
+      {/* Class-wise vs Overall Filter Toolbar */}
+      <div className="bg-white border border-slate-200/90 rounded-2xl p-4 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 bg-indigo-50 text-indigo-600 rounded-xl">
+            <Calendar className="w-4 h-4" />
+          </div>
+          <div>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-900 flex items-center gap-2">
+              Performance & Spike Timeline Filter
+              <span className="text-[10px] font-semibold text-indigo-600 bg-indigo-50 border border-indigo-100 px-2 py-0.5 rounded-full">
+                {filteredActivities.length} Activities Evaluated
+              </span>
+            </h3>
+            <p className="text-[11px] text-slate-500">
+              Filter competencies by individual grade levels (9–12) or inspect your overall cumulative portfolio trajectory.
+            </p>
+          </div>
+        </div>
+
+        {/* Grade Filter Buttons */}
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {(['ALL', 'Grade 8', 'Grade 9', 'Grade 10', 'Grade 11', 'Grade 12'] as const).map(g => (
+            <button
+              key={g}
+              onClick={() => setGradeFilter(g)}
+              className={cn(
+                "px-3 py-1.5 text-xs font-bold rounded-xl transition-all border cursor-pointer",
+                gradeFilter === g
+                  ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
+                  : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+              )}
+            >
+              {g === 'ALL' ? 'Overall Cumulative' : g}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Main Two-Column Layout */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
@@ -911,7 +1033,7 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
                     <Briefcase className="w-4 h-4 text-indigo-600" /> Admissions Activity Vault
                   </h3>
                   <span className="text-[10px] font-extrabold bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">
-                    {profileActivities.length} / 10 Max
+                    {filteredActivities.length} {gradeFilter === 'ALL' ? 'Total' : `in ${gradeFilter}`}
                   </span>
                 </div>
                 <p className="text-[11px] text-slate-500 pt-0.5 leading-relaxed">
@@ -998,17 +1120,34 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
               ) : (
                 <div className="col-span-2 p-8 text-center text-slate-400 border border-dashed border-slate-200 rounded-2xl space-y-3">
                   <Info className="w-8 h-8 text-indigo-400 mx-auto" />
-                  <p className="font-semibold text-slate-700 text-xs">No profile building activities recorded yet</p>
-                  <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
-                    Add leadership roles, research projects, clubs, and honors in Section 6 (Profile Building).
+                  <p className="font-semibold text-slate-700 text-xs">
+                    {profileActivities.length > 0
+                      ? `No extracurricular activities recorded specifically for ${gradeFilter}`
+                      : 'No profile building activities recorded yet'}
                   </p>
-                  {!isTeamView && (
-                    <Link to="/student/profile" className="inline-block pt-1">
-                      <Button className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs h-8 px-4 rounded-xl">
-                        Go to Section 6 (Profile Building)
+                  <p className="text-[11px] text-slate-500 max-w-sm mx-auto">
+                    {profileActivities.length > 0
+                      ? `You have ${profileActivities.length} total activities recorded in your portfolio. Switch to Overall Cumulative or tag this grade in Section 6.`
+                      : 'Add leadership roles, research projects, clubs, and honors in Section 6 (Profile Building).'}
+                  </p>
+                  <div className="flex items-center justify-center gap-2 pt-1 flex-wrap">
+                    {gradeFilter !== 'ALL' && profileActivities.length > 0 && (
+                      <Button 
+                        variant="outline"
+                        onClick={() => setGradeFilter('ALL')}
+                        className="border-indigo-200 text-indigo-700 hover:bg-indigo-50 font-bold text-xs h-8 px-3 rounded-xl cursor-pointer"
+                      >
+                        Show Overall Cumulative ({profileActivities.length})
                       </Button>
-                    </Link>
-                  )}
+                    )}
+                    {!isTeamView && (
+                      <Link to="/student/profile">
+                        <Button className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs h-8 px-4 rounded-xl">
+                          Go to Section 6 (Profile Building)
+                        </Button>
+                      </Link>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
@@ -1344,6 +1483,65 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
                 </div>
               </div>
 
+            </div>
+
+            {/* SOP & ESSAY NARRATIVE STRATEGY: CONNECTIVITY, GAPS & RISK FLAGS */}
+            <div className="p-4 bg-gradient-to-br from-indigo-50/70 via-slate-50 to-blue-50/60 border border-indigo-200/80 rounded-2xl space-y-3.5">
+              <div className="flex items-center justify-between border-b border-indigo-100 pb-2 flex-wrap gap-2">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span className="text-[11px] font-extrabold text-indigo-950 uppercase tracking-wider">
+                    SOP & Essay Narrative Strategy: Spike Connectivity, Gaps & Risk Flags
+                  </span>
+                </div>
+                <span className="text-[10px] font-bold text-indigo-800 bg-indigo-100 border border-indigo-200 px-2.5 py-0.5 rounded-full">
+                  Admissions Essay Alignment
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                {/* 1. Narrative Connectivity */}
+                <div className="bg-white p-3.5 rounded-xl border border-indigo-100 space-y-1.5 shadow-2xs">
+                  <span className="font-bold text-indigo-900 flex items-center gap-1.5 text-[11px] uppercase">
+                    <Target className="w-3.5 h-3.5 text-indigo-600" />
+                    1. Spike Connectivity in SOP
+                  </span>
+                  <p className="text-slate-600 text-[11px] leading-relaxed">
+                    {isSpikeAlignedWithMajor ? (
+                      <>Your <strong>{topCompetency.name}</strong> spike strongly reinforces your <strong>{currentMajorInfo.label}</strong> narrative. In your Statement of Purpose (SOP), open with the genesis of your primary capstone project and trace how it ignited your proposed undergraduate research questions.</>
+                    ) : (
+                      <>Your primary spike in <strong>{topCompetency.name}</strong> provides a unique interdisciplinary angle. Frame this as a complementary superpower in your Common App essay, but ensure your Why Major SOP explicitly highlights foundational course rigor.</>
+                    )}
+                  </p>
+                </div>
+
+                {/* 2. Critical Gaps & Blindspots */}
+                <div className="bg-white p-3.5 rounded-xl border border-indigo-100 space-y-1.5 shadow-2xs">
+                  <span className="font-bold text-amber-900 flex items-center gap-1.5 text-[11px] uppercase">
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                    2. Identified Portfolio Gaps
+                  </span>
+                  <p className="text-slate-600 text-[11px] leading-relaxed">
+                    {identifiedGaps.length > 0 ? (
+                      <>Low vector scores detected in: <strong className="text-amber-800">{identifiedGaps.map(g => g.name).slice(0, 2).join(', ')}</strong>. Admissions committees might perceive a lack of collaborative teamwork or public communication. Address this gap by detailing mentorship, team coordination, or user feedback loops in supplemental essays.</>
+                    ) : (
+                      <>No critical vector gaps detected! Your portfolio demonstrates balanced supporting competencies across all six evaluation axes.</>
+                    )}
+                  </p>
+                </div>
+
+                {/* 3. Risk Flags & Pitfalls to Avoid */}
+                <div className="bg-white p-3.5 rounded-xl border border-rose-100 space-y-1.5 shadow-2xs">
+                  <span className="font-bold text-rose-900 flex items-center gap-1.5 text-[11px] uppercase">
+                    <ShieldCheck className="w-3.5 h-3.5 text-rose-600" />
+                    3. Pitfalls to Avoid in Essays
+                  </span>
+                  <ul className="text-slate-600 text-[10.5px] space-y-1">
+                    <li>• <strong>Avoid Résumé Recitation:</strong> Don't list activity achievements without reflecting on intellectual vulnerability and failures overcome.</li>
+                    <li>• <strong>Clarify Role Ownership:</strong> Clearly distinguish your individual code/design contributions from team deliverables.</li>
+                  </ul>
+                </div>
+              </div>
             </div>
 
           </div>
