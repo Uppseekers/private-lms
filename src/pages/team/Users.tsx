@@ -5,12 +5,13 @@ import { Button } from '@/components/ui/button';
 import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, SlidersHorizontal, Award, Sparkles, CheckSquare } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage, DocumentInfo } from '@/types';
-import { canStaffAccessAllStudents, isStudentAssignedToStaff } from '@/lib/staffPermissions';
+import { canStaffAccessAllStudents, isStudentAssignedToStaff, isUserAdmin } from '@/lib/staffPermissions';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 import CompetencyRadar from '@/pages/student/CompetencyRadar';
 
 export default function TeamUsers() {
   const { students, setStudents, staff, setStaff, currentUser } = useDatabase();
+  const isAdmin = isUserAdmin(currentUser);
   const [activeViewTab, setActiveViewTab] = useState<'students' | 'staff'>('students');
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -138,17 +139,19 @@ export default function TeamUsers() {
                   activeViewTab === 'students' ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                 )}
               >
-                Students ({students.length})
+                Students ({filteredStudents.length})
               </button>
-              <button 
-                onClick={() => setActiveViewTab('staff')}
-                className={cn(
-                  "text-xs font-bold px-3 py-1 rounded-md transition-colors",
-                  activeViewTab === 'staff' ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                )}
-              >
-                Staff & Mentors ({staff.length})
-              </button>
+              {isAdmin && (
+                <button 
+                  onClick={() => setActiveViewTab('staff')}
+                  className={cn(
+                    "text-xs font-bold px-3 py-1 rounded-md transition-colors",
+                    activeViewTab === 'staff' ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  )}
+                >
+                  Staff & Mentors ({staff.length})
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -158,7 +161,7 @@ export default function TeamUsers() {
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input 
               type="text" 
-              placeholder={activeViewTab === 'students' ? "Search student name, email, ID..." : "Search staff name, email, role..."}
+              placeholder={activeViewTab === 'students' || !isAdmin ? "Search student name, email, ID..." : "Search staff name, email, role..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-64 md:w-80 bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -166,7 +169,7 @@ export default function TeamUsers() {
           </div>
 
           {/* Delete Selected Button */}
-          {activeViewTab === 'students' && selectedStudentIds.length > 0 && (
+          {activeViewTab === 'students' && selectedStudentIds.length > 0 && isAdmin && (
             <Button 
               onClick={handleDeleteSelectedStudents}
               className="bg-red-600 hover:bg-red-700 text-white font-bold"
@@ -175,7 +178,7 @@ export default function TeamUsers() {
             </Button>
           )}
 
-          {activeViewTab === 'staff' && selectedStaffIds.length > 0 && (
+          {isAdmin && activeViewTab === 'staff' && selectedStaffIds.length > 0 && (
             <Button 
               onClick={handleDeleteSelectedStaff}
               className="bg-red-600 hover:bg-red-700 text-white font-bold"
@@ -184,7 +187,7 @@ export default function TeamUsers() {
             </Button>
           )}
 
-          {activeViewTab === 'students' && (
+          {(activeViewTab === 'students' || !isAdmin) && (
             <>
               <Button 
                 variant="outline" 
@@ -199,7 +202,7 @@ export default function TeamUsers() {
             </>
           )}
 
-          {activeViewTab === 'staff' && (
+          {isAdmin && activeViewTab === 'staff' && (
             <Button className="bg-blue-600 hover:bg-blue-700 text-white font-bold" onClick={() => setIsAddStaffModalOpen(true)}>
               <Plus className="w-4 h-4 mr-2" /> Add Staff Member
             </Button>
@@ -208,7 +211,7 @@ export default function TeamUsers() {
       </div>
 
       {/* STUDENTS TABLE VIEW */}
-      {activeViewTab === 'students' && (
+      {(activeViewTab === 'students' || !isAdmin) && (
         <Card className="overflow-hidden border-slate-200 shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm whitespace-nowrap">
@@ -298,7 +301,7 @@ export default function TeamUsers() {
       )}
 
       {/* STAFF / TEAM TABLE VIEW */}
-      {activeViewTab === 'staff' && (
+      {isAdmin && activeViewTab === 'staff' && (
         <Card className="overflow-hidden border-slate-200 shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm whitespace-nowrap">
@@ -390,7 +393,7 @@ export default function TeamUsers() {
       )}
 
       {/* Slide-out Drawer for Staff Details */}
-      {selectedStaffMember && (
+      {isAdmin && selectedStaffMember && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm transition-opacity" onClick={() => setSelectedStaffMember(null)} />
           <div className="relative w-full max-w-4xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
@@ -416,7 +419,7 @@ export default function TeamUsers() {
       )}
 
       {/* Add Staff Member Modal */}
-      {isAddStaffModalOpen && (
+      {isAdmin && isAddStaffModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-2xl w-full max-w-md shadow-xl my-8 p-6 space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">

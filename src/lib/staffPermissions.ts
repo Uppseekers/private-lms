@@ -1,15 +1,29 @@
 import { StaffMember, Student } from '@/types';
 
 /**
+ * Checks if the current staff member has administrative privileges.
+ * System Admins, Operations Leads, Developers, or the primary admin email have admin access.
+ */
+export function isUserAdmin(currentUser?: StaffMember | null): boolean {
+  if (!currentUser) return false;
+  const roleUpper = (currentUser.role || '').toUpperCase();
+  const emailLower = (currentUser.email || '').toLowerCase();
+  return (
+    roleUpper === 'SYSTEM_ADMIN' ||
+    roleUpper === 'ADMIN' ||
+    roleUpper === 'OPERATIONS_LEAD' ||
+    roleUpper === 'DEVELOPER' ||
+    emailLower === 'uppseekers@gmail.com'
+  );
+}
+
+/**
  * Determines whether a staff member has global/unrestricted access to all students in the database.
  * Admin roles (SYSTEM_ADMIN, OPERATIONS_LEAD, DEVELOPER) or staff with students === 'All' have global access.
  */
 export function canStaffAccessAllStudents(currentUser?: StaffMember | null): boolean {
   if (!currentUser) return false;
-  const roleUpper = (currentUser.role || '').toUpperCase();
-  if (roleUpper === 'SYSTEM_ADMIN' || roleUpper === 'OPERATIONS_LEAD' || roleUpper === 'DEVELOPER') {
-    return true;
-  }
+  if (isUserAdmin(currentUser)) return true;
   if (currentUser.students === 'All' || currentUser.students === 'ALL') {
     return true;
   }
