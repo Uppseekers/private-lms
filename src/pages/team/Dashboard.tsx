@@ -25,11 +25,11 @@ import {
 import { cn } from '@/lib/utils';
 
 export default function TeamDashboard() {
-  const { students, batches, events, staff, updateStudent, currentUser } = useDatabase();
+  const { students, batches, events, staff, updateStudent, currentUser, permissionsMatrix } = useDatabase();
 
   const scopedStudents = useMemo(() => {
-    return getScopedStudentsForStaff(students, currentUser);
-  }, [students, currentUser]);
+    return getScopedStudentsForStaff(students, currentUser, permissionsMatrix);
+  }, [students, currentUser, permissionsMatrix]);
 
   // Date & Timeframe Evaluation Filters for Tasks Chart
   const [dateEvalMode, setDateEvalMode] = useState<'DUE_DATE' | 'TASK_DATE'>('DUE_DATE');

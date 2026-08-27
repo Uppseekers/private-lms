@@ -33,7 +33,7 @@ interface ExtendedSubmission {
 }
 
 export default function Evaluator() {
-  const { students, updateStudent, currentUser } = useDatabase();
+  const { students, updateStudent, currentUser, permissionsMatrix } = useDatabase();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStudentFilter, setSelectedStudentFilter] = useState('ALL');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('ALL');
@@ -54,7 +54,7 @@ export default function Evaluator() {
   const [taskFeedback, setTaskFeedback] = useState('');
 
   // Scoped student list based on staff permissions
-  const scopedStudents = getScopedStudentsForStaff(students, currentUser);
+  const scopedStudents = getScopedStudentsForStaff(students, currentUser, permissionsMatrix);
 
   // Flatten all submissions (essays + tasks) from scoped students
   const allSubmissions: ExtendedSubmission[] = scopedStudents.flatMap(student => {

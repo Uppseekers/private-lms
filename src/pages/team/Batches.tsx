@@ -9,10 +9,10 @@ import {
   BookOpen, UserMinus, CheckSquare, Sparkles, Filter, ExternalLink, CalendarDays
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { isUserAdmin } from '@/lib/staffPermissions';
+import { isUserAdmin, canStaffAccessAllStudents } from '@/lib/staffPermissions';
 
 export default function Batches() {
-  const { batches, setBatches, staff, currentUser, students } = useDatabase();
+  const { batches, setBatches, staff, currentUser, students, permissionsMatrix } = useDatabase();
   
   // Navigation tabs: 'all' | 'master' | 'sub' | 'sessions' | 'roster'
   const [activeTab, setActiveTab] = useState<'all' | 'master' | 'sub' | 'sessions' | 'roster'>('all');
@@ -51,11 +51,12 @@ export default function Batches() {
   const [newSessionMeetingLink, setNewSessionMeetingLink] = useState('');
 
   const isAdmin = isUserAdmin(currentUser);
+  const hasGlobalScope = isAdmin || canStaffAccessAllStudents(currentUser, permissionsMatrix);
 
   // Filter batches based on role, tab, search query, and subject filter
   const visibleBatches = batches.filter(batch => {
-    // Non-admin can only see batches where they are assigned as mentor
-    if (!isAdmin && !batch.mentors.some(m => m.toLowerCase() === (currentUser?.name || '').toLowerCase())) {
+    // Non-global staff can only see batches where they are assigned as mentor
+    if (!hasGlobalScope && !batch.mentors.some(m => m.toLowerCase() === (currentUser?.name || '').toLowerCase())) {
       return false;
     }
     

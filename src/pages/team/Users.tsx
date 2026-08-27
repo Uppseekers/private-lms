@@ -10,7 +10,7 @@ import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 import CompetencyRadar from '@/pages/student/CompetencyRadar';
 
 export default function TeamUsers() {
-  const { students, setStudents, staff, setStaff, currentUser } = useDatabase();
+  const { students, setStudents, staff, setStaff, currentUser, permissionsMatrix } = useDatabase();
   const isAdmin = isUserAdmin(currentUser);
   const [activeViewTab, setActiveViewTab] = useState<'students' | 'staff'>('students');
   const [searchQuery, setSearchQuery] = useState('');
@@ -27,8 +27,8 @@ export default function TeamUsers() {
   const [selectedStaffMember, setSelectedStaffMember] = useState<StaffMember | null>(null);
 
   const filteredStudents = students.filter(s => {
-    if (!canStaffAccessAllStudents(currentUser)) {
-      if (!isStudentAssignedToStaff(s, currentUser)) return false;
+    if (!canStaffAccessAllStudents(currentUser, permissionsMatrix)) {
+      if (!isStudentAssignedToStaff(s, currentUser, permissionsMatrix)) return false;
     }
     return s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
            s.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -3384,20 +3384,14 @@ function StaffDetailDrawer({
   onClose: () => void; 
   onSelectStudent?: (student: Student) => void;
 }) {
-  const { students, events, updateStudent } = useDatabase();
+  const { students, events, updateStudent, permissionsMatrix } = useDatabase();
   const [activeTab, setActiveTab] = useState<'students' | 'tasks' | 'logs'>('students');
   const [logSearchQuery, setLogSearchQuery] = useState('');
 
   // 1. Assigned Students
   const assignedStudents = React.useMemo(() => {
-    return students.filter(s => 
-      (s.counselor && s.counselor.toLowerCase() === staffMember.name.toLowerCase()) ||
-      (s.researchMentor && s.researchMentor.toLowerCase() === staffMember.name.toLowerCase()) ||
-      (s.satVerbalMentor && s.satVerbalMentor.toLowerCase() === staffMember.name.toLowerCase()) ||
-      (s.satMathMentor && s.satMathMentor.toLowerCase() === staffMember.name.toLowerCase()) ||
-      (staffMember.students && staffMember.students.toLowerCase().includes('all'))
-    );
-  }, [students, staffMember]);
+    return students.filter(s => isStudentAssignedToStaff(s, staffMember, permissionsMatrix));
+  }, [students, staffMember, permissionsMatrix]);
 
   // 2. Staff Task details
   const staffTasks = React.useMemo(() => {

@@ -23,11 +23,11 @@ interface DocumentInfo {
 const initialDocuments: any[] = [];
 
 export default function TeamVault() {
-  const { students, updateStudent, currentUser } = useDatabase();
+  const { students, updateStudent, currentUser, permissionsMatrix } = useDatabase();
   const [documents, setDocuments] = useState<DocumentInfo[]>([]);
 
   React.useEffect(() => {
-    const scopedStudents = getScopedStudentsForStaff(students, currentUser);
+    const scopedStudents = getScopedStudentsForStaff(students, currentUser, permissionsMatrix);
     const allDocs = scopedStudents.flatMap(s => (s.documents || []).map(d => ({
       ...d,
       studentId: s.id,
@@ -35,14 +35,14 @@ export default function TeamVault() {
       fileExt: 'pdf'
     })));
     setDocuments(allDocs as unknown as DocumentInfo[]);
-  }, [students, currentUser]);
+  }, [students, currentUser, permissionsMatrix]);
   const [activeTab, setActiveTab] = useState('Pending Verification');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStudentFilter, setSelectedStudentFilter] = useState('ALL');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('ALL');
   const [selectedDateFilter, setSelectedDateFilter] = useState<'ALL' | '7d' | '30d' | '90d' | 'this_year'>('ALL');
 
-  const scopedStudents = React.useMemo(() => getScopedStudentsForStaff(students, currentUser), [students, currentUser]);
+  const scopedStudents = React.useMemo(() => getScopedStudentsForStaff(students, currentUser, permissionsMatrix), [students, currentUser, permissionsMatrix]);
 
   // Extract all unique categories present in documents
   const allCategories = React.useMemo(() => {

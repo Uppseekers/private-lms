@@ -142,14 +142,7 @@ const roles = [
 const defaultPermissionsMatrix: Record<string, PermissionCategory[]> = roles.reduce((acc, role) => {
   const clonedTemplate = JSON.parse(JSON.stringify(permissionCategoriesTemplate)) as PermissionCategory[];
   
-  if (role === 'SYSTEM_ADMIN' || role === 'DEVELOPER') {
-    clonedTemplate.forEach(cat => {
-      cat.items.forEach(item => {
-        item.enabled = true;
-        if (item.scope) item.scope = 'Global Scope';
-      });
-    });
-  } else if (role === 'OPERATIONS_LEAD') {
+  if (role === 'SYSTEM_ADMIN' || role === 'DEVELOPER' || role === 'OPERATIONS_LEAD' || role === 'CATEGORY_MANAGER') {
     clonedTemplate.forEach(cat => {
       cat.items.forEach(item => {
         item.enabled = true;

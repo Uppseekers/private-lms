@@ -8,9 +8,10 @@ import {
 import { useDatabase } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
 import { MeetingMOM, MeetingResourceLink, MeetingTask, OperationalLog } from '@/types';
+import { canStaffAccessAllStudents, isUserAdmin, isStudentAssignedToStaff } from '@/lib/staffPermissions';
 
 export default function TeamScheduler() {
-  const { events, setEvents, currentUser, batches, students, updateStudent } = useDatabase();
+  const { events, setEvents, currentUser, batches, students, updateStudent, permissionsMatrix } = useDatabase();
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
@@ -78,32 +79,19 @@ export default function TeamScheduler() {
   };
 
   // 1. ROLE-BASED STUDENT VISIBILITY FOR SCHEDULING
-  const isAdmin = currentUser.role === 'SYSTEM_ADMIN' || currentUser.role === 'OPERATIONS_LEAD' || currentUser.role === 'DEVELOPER' || currentUser.students === 'All';
+  const hasGlobalScope = isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix);
 
   const assignedStudents = students.filter(s => {
-    if (isAdmin) return true;
-    const roleUpper = (currentUser.role || '').toUpperCase();
-    if (roleUpper.includes('COUNSELOR') || roleUpper.includes('COUNSELLOR')) {
-      return s.counselor === currentUser.name;
-    }
-    if (roleUpper.includes('RESEARCH')) {
-      return s.researchMentor === currentUser.name;
-    }
-    if (roleUpper.includes('SAT') || roleUpper.includes('VERBAL') || roleUpper.includes('MATH')) {
-      return s.satVerbalMentor === currentUser.name || s.satMathMentor === currentUser.name;
-    }
-    return s.counselor === currentUser.name ||
-           s.researchMentor === currentUser.name ||
-           s.satVerbalMentor === currentUser.name ||
-           s.satMathMentor === currentUser.name;
+    if (hasGlobalScope) return true;
+    return isStudentAssignedToStaff(s, currentUser, permissionsMatrix);
   });
 
-  const visibleBatches = isAdmin 
+  const visibleBatches = hasGlobalScope 
     ? batches 
-    : batches.filter(b => b.mentors.includes(currentUser.name));
+    : batches.filter(b => b.mentors.some(m => m.toLowerCase() === (currentUser?.name || '').toLowerCase()));
 
   const visibleEvents = events.filter((e: any) => {
-    if (isAdmin) return true;
+    if (hasGlobalScope) return true;
     if (e.host === currentUser.name) return true;
     if (e.batch) {
       const batch = batches.find((b: any) => b.id === e.batch);

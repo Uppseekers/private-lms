@@ -45,6 +45,7 @@ export default function TeamSettings() {
   const [formEmail, setFormEmail] = useState('');
   const [formRole, setFormRole] = useState('');
   const [formPassword, setFormPassword] = useState('');
+  const [formScope, setFormScope] = useState<'Global Scope' | 'Assigned Scope'>('Assigned Scope');
   
   // Assignment state
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
@@ -81,8 +82,9 @@ export default function TeamSettings() {
     setEditingId(null);
     setFormName('');
     setFormEmail('');
-    setFormRole('');
+    setFormRole('COUNSELOR');
     setFormPassword('');
+    setFormScope('Assigned Scope');
     setIsModalOpen(true);
   };
 
@@ -93,16 +95,32 @@ export default function TeamSettings() {
     setFormEmail(member.email);
     setFormRole(member.role);
     setFormPassword(member.password || '');
+    const isGlobal = (member.students || '').toLowerCase().includes('all') || 
+                     (member.students || '').toLowerCase().includes('global') ||
+                     member.role === 'CATEGORY_MANAGER' || 
+                     member.role === 'SYSTEM_ADMIN';
+    setFormScope(isGlobal ? 'Global Scope' : 'Assigned Scope');
     setIsModalOpen(true);
   };
 
   const saveStaff = () => {
     if (!formName || !formEmail || !formRole) return;
     
+    const assignedScopeStr = formScope === 'Global Scope' || formRole === 'CATEGORY_MANAGER' || formRole === 'SYSTEM_ADMIN'
+      ? 'All'
+      : '0 Students';
+
     if (isEditMode && editingId) {
       const updatedStaff = staff.map(s => 
         s.id === editingId 
-          ? { ...s, name: formName, email: formEmail, role: formRole, password: formPassword || s.password } 
+          ? { 
+              ...s, 
+              name: formName, 
+              email: formEmail, 
+              role: formRole, 
+              password: formPassword || s.password,
+              students: formScope === 'Global Scope' || formRole === 'CATEGORY_MANAGER' || formRole === 'SYSTEM_ADMIN' ? 'All' : (s.students === 'All' ? '0 Students' : s.students)
+            } 
           : s
       );
       setStaff(updatedStaff);
@@ -119,7 +137,7 @@ export default function TeamSettings() {
         }).catch(console.error);
       }
       
-      addAuditLog(`Updated user ${formName} (Role: ${formRole})`);
+      addAuditLog(`Updated user ${formName} (Role: ${formRole}, Scope: ${formScope})`);
     } else {
       const generatedPassword = formPassword || Math.random().toString(36).slice(-8) + Math.floor(Math.random() * 10);
       const newMember: StaffMember = {
@@ -127,7 +145,7 @@ export default function TeamSettings() {
         name: formName,
         email: formEmail,
         role: formRole,
-        students: '0 Students',
+        students: assignedScopeStr,
         status: 'Active',
         password: generatedPassword
       };
@@ -142,7 +160,7 @@ export default function TeamSettings() {
         body: JSON.stringify(newMember)
       }).catch(console.error);
 
-      addAuditLog(`Added new user ${formName} (Role: ${formRole})`);
+      addAuditLog(`Added new user ${formName} (Role: ${formRole}, Scope: ${formScope})`);
     }
     
     setIsModalOpen(false);
@@ -351,8 +369,16 @@ export default function TeamSettings() {
                       {member.password || '---'}
                     </td>
                     <td className="px-6 py-4 text-slate-600 font-medium">
-                      {member.students}
-                      <Button variant="ghost" size="sm" onClick={() => openAssignModal(member)} className="text-xs ml-2 text-indigo-600 hover:text-indigo-700 underline p-0 h-auto font-semibold">Assign</Button>
+                      {(member.students || '').toLowerCase().includes('all') || (member.students || '').toLowerCase().includes('global') || member.role === 'CATEGORY_MANAGER' || member.role === 'SYSTEM_ADMIN' ? (
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-md text-xs font-bold border border-emerald-200">
+                          <Shield className="w-3 h-3 text-emerald-600" /> Global Scope (All Students)
+                        </span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-slate-700 font-semibold">{member.students || '0 Students'}</span>
+                          <Button variant="ghost" size="sm" onClick={() => openAssignModal(member)} className="text-xs text-indigo-600 hover:text-indigo-700 underline p-0 h-auto font-semibold">Assign</Button>
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4">
                       <span className={cn("flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider", member.status === 'Active' ? 'text-emerald-600' : 'text-slate-400')}>
@@ -896,9 +922,20 @@ export default function TeamSettings() {
                 <label className="block text-xs font-bold text-slate-700 mb-1">Password (Optional)</label>
                 <input value={formPassword} onChange={e => setFormPassword(e.target.value)} type="text" placeholder="Auto-generate if empty" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4" />
                 <label className="block text-xs font-bold text-slate-700 mb-1">Role Assignment</label>
-                <select value={formRole} onChange={e => setFormRole(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <select value={formRole} onChange={e => {
+                  setFormRole(e.target.value);
+                  if (e.target.value === 'CATEGORY_MANAGER' || e.target.value === 'SYSTEM_ADMIN' || e.target.value === 'OPERATIONS_LEAD') {
+                    setFormScope('Global Scope');
+                  }
+                }} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4">
                   <option value="">Select Role</option>
                   {roles.map(r => <option key={r} value={r}>{r.replace(/_/g, ' ')}</option>)}
+                </select>
+
+                <label className="block text-xs font-bold text-slate-700 mb-1">Student Access Scope</label>
+                <select value={formScope} onChange={e => setFormScope(e.target.value as any)} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  <option value="Global Scope">Global Scope (Access All Students Across All Counselors/Mentors)</option>
+                  <option value="Assigned Scope">Assigned Scope (Access Only Explicitly Assigned Students)</option>
                 </select>
               </div>
             </div>
