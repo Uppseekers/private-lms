@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { GraduationCap } from 'lucide-react';
@@ -246,15 +246,7 @@ export default function Login() {
                 />
               </div>
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm font-medium text-slate-700">Password</label>
-                  <Link 
-                    to={email ? `/reset-password?email=${encodeURIComponent(email)}` : '/reset-password'}
-                    className="text-xs font-medium text-blue-600 hover:text-blue-800 transition hover:underline"
-                  >
-                    Forgot / Change password?
-                  </Link>
-                </div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
                 <input 
                   type="password" 
                   value={password}
