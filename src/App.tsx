@@ -4,6 +4,7 @@ import { DatabaseProvider, useDatabase } from './context/DatabaseContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import AppLayout from './components/layout/AppLayout';
 import Login from './pages/Login';
+import ResetPassword from './pages/ResetPassword';
 import StudentDashboard from './pages/student/Dashboard';
 import TeamDashboard from './pages/team/Dashboard';
 import StudentProfile from './pages/student/Profile';
@@ -35,6 +36,7 @@ export default function App() {
         <BrowserRouter>
         <Routes>
           <Route path="/login" element={<Login />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           
           {/* Student Routes */}
           <Route path="/student" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>

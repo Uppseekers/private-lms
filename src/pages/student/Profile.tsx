@@ -2,9 +2,10 @@ import { useDatabase } from '@/context/DatabaseContext';
 import React, { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { CheckCircle2, Upload, Plus, ShieldCheck, Clock, FileText, AlertCircle, Trash2, Edit3, X, Calendar } from 'lucide-react';
+import { CheckCircle2, Upload, Plus, ShieldCheck, Clock, FileText, AlertCircle, Trash2, Edit3, X, Calendar, Key, Mail } from 'lucide-react';
 import { INDIAN_CITIES, WORLD_COUNTRIES } from '@/data/locationAndUniData';
 import { cn } from '@/lib/utils';
+import ChangePasswordModal from '@/components/ChangePasswordModal';
 
 const ALL_CLASSES = ['Class 9', 'Class 10', 'Class 11', 'Class 12'];
 
@@ -80,6 +81,7 @@ export default function StudentProfile() {
   const initialProfileActivities = (student?.extracurriculars || []).filter((a: any) => !a.activityType && !a.performedBy && !a.attendees);
   const [activities, setActivities] = useState<any[]>(initialProfileActivities);
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [editingActivityIdx, setEditingActivityIdx] = useState<number | null>(null);
   
   // Activity form state
@@ -481,6 +483,36 @@ export default function StudentProfile() {
           </div>
         </div>
       </Section>
+
+      <Section title="7. Account Security & Password" description="Manage your login credentials. You can trigger an email with a secure password reset link and verification code.">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="font-bold text-slate-800 text-sm">Registered Email:</span>
+              <span className="font-mono text-xs bg-white px-2.5 py-1 rounded-md border border-slate-200 text-slate-700 font-semibold">{student?.email || currentUser?.email || 'N/A'}</span>
+            </div>
+            <p className="text-xs text-slate-500">
+              Need to update your password? Click below to send a secure reset link and code to your registered email ID.
+            </p>
+          </div>
+          <Button
+            type="button"
+            onClick={() => setIsChangePasswordOpen(true)}
+            className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shrink-0 shadow-sm"
+          >
+            <Key className="w-3.5 h-3.5 mr-1.5" />
+            Change Password (Send Email)
+          </Button>
+        </div>
+      </Section>
+
+      {/* Change Password Modal for Student */}
+      <ChangePasswordModal
+        isOpen={isChangePasswordOpen}
+        onClose={() => setIsChangePasswordOpen(false)}
+        userEmail={student?.email || currentUser?.email || ''}
+        userName={student?.name || currentUser?.name || 'Student'}
+      />
 
       {/* Activity Modal */}
       {isActivityModalOpen && (

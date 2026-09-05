@@ -162,7 +162,7 @@ export interface SessionRating {
 }
 
 export interface EventItem {
-  id?: string;
+  id: string;
   title?: string;
   stream?: string;
   type?: string;
@@ -175,9 +175,22 @@ export interface EventItem {
   organiser?: string;
   attendees?: any;
   students?: any;
+  studentId?: string;
+  batch?: string;
   status?: string;
   link?: string;
   location?: string;
+  isRecurring?: boolean;
+  seriesId?: string;
+  sessionNumber?: number;
+  totalSessionsInSeries?: number;
+  recurrenceRule?: string;
+  notes?: string;
+  assignments?: string;
+  moms?: MeetingMOM[];
+  ratings?: SessionRating[];
+  resources?: MeetingResourceLink[];
+  tasks?: MeetingTask[];
 }
 
 export interface MeetingMOM {
@@ -215,6 +228,19 @@ export interface MeetingTask {
   verified?: boolean;
 }
 
+export interface PortalCredential {
+  id: string;
+  title: string;
+  category: 'University Portal' | 'Application System' | 'Testing & Scores' | 'Financial Aid & Scholarships' | 'Visa & Embassy' | 'Other' | string;
+  websiteUrl?: string;
+  username: string;
+  password?: string;
+  pinOrCode?: string;
+  linkedUniversity?: string;
+  notes?: string;
+  lastUpdated: string;
+}
+
 export interface Student {
   tasks?: Task[];
   id: string;
@@ -240,6 +266,7 @@ export interface Student {
   documents: DocumentInfo[];
   essays: Essay[];
   password?: string;
+  credentials?: PortalCredential[];
 }
 
 export enum Role {
@@ -260,6 +287,7 @@ export interface BatchClassSession {
   notes?: string;
   joinedStudentIds: string[]; // student IDs who joined/attended
   absentStudentIds?: string[]; // student IDs who were absent / not joined
+  seriesId?: string;
 }
 
 export interface Batch {

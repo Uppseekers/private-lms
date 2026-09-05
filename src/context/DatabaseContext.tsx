@@ -33,6 +33,12 @@ export interface EventItem {
   ratings?: SessionRating[];
   resources?: MeetingResourceLink[];
   tasks?: MeetingTask[];
+  date?: string;
+  isRecurring?: boolean;
+  seriesId?: string;
+  sessionNumber?: number;
+  totalSessionsInSeries?: number;
+  recurrenceRule?: string;
 }
 
 export interface PermissionCategory {
@@ -511,7 +517,7 @@ interface DatabaseContextType {
   staff: StaffMember[];
   setStaff: (staff: StaffMember[]) => void;
   currentUser: StaffMember;
-  setCurrentUser: (user: StaffMember) => void;
+  setCurrentUser: (user: StaffMember | ((prev: StaffMember) => StaffMember)) => void;
   isAuthenticated: boolean;
   setIsAuthenticated: (val: boolean) => void;
   permissionsMatrix: Record<string, PermissionCategory[]>;
@@ -530,7 +536,10 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   const [students, setStudentsState] = useState<Student[]>(() => {
     const saved = localStorage.getItem('uppseekers_students_v2');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
     }
     return initialStudents;
   });
@@ -538,7 +547,10 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   const [staff, setStaffState] = useState<StaffMember[]>(() => {
     const saved = localStorage.getItem('uppseekers_staff_v2');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch (e) {}
     }
     return initialStaff;
   });
@@ -549,8 +561,23 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       try {
         const parsed = JSON.parse(saved);
         const merged = { ...defaultPermissionsMatrix };
-        for (const role of Object.keys(parsed)) {
-           if (merged[role]) merged[role] = parsed[role];
+        if (parsed && typeof parsed === 'object') {
+          for (const role of Object.keys(parsed)) {
+             if (merged[role] && Array.isArray(parsed[role])) merged[role] = parsed[role];
+          }
+        }
+        // Ensure CATEGORY_MANAGER and Admin roles always retain Global Scope
+        if (merged['CATEGORY_MANAGER'] && Array.isArray(merged['CATEGORY_MANAGER'])) {
+          merged['CATEGORY_MANAGER'].forEach(cat => {
+            if (cat && Array.isArray(cat.items)) {
+              cat.items.forEach(item => {
+                if (item) {
+                  item.enabled = true;
+                  if (item.scope) item.scope = 'Global Scope';
+                }
+              });
+            }
+          });
         }
         return merged;
       } catch(e) {}
@@ -566,7 +593,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         if (parsed && (parsed.email || parsed.id)) return parsed;
       } catch (e) {}
     }
-    return staff.find(s => s.role === 'SYSTEM_ADMIN') || staff[0];
+    return initialStaff.find(s => s.role === 'SYSTEM_ADMIN') || initialStaff[0];
   });
 
   const [isAuthenticated, setIsAuthenticatedState] = useState<boolean>(() => {
@@ -633,7 +660,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             phone: '+91 9876543210',
             intake: 'Fall 2026',
             school: 'Delhi Public School',
-            counselor: 'Admin',
+            counselor: 'Sarah Jenkins',
+            researchMentor: 'Dr. Vikram Roy',
             readiness: 75,
             countries: ['USA', 'UK'],
             password: 'Student@123',
@@ -649,7 +677,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             phone: '+91 9812345678',
             intake: 'Fall 2026',
             school: 'The Doon School',
-            counselor: 'Admin',
+            counselor: 'Sarah Jenkins',
+            satVerbalMentor: 'Elena Rostova',
             readiness: 50,
             countries: ['USA', 'Canada'],
             password: 'Student@123',
@@ -666,6 +695,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             intake: 'Fall 2026',
             school: 'St. Xavier High School',
             counselor: 'Admin',
+            researchMentor: 'Dr. Vikram Roy',
             readiness: 85,
             countries: ['USA', 'UK'],
             password: 'Student@123',
@@ -805,7 +835,25 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             name: 'Sarah Jenkins',
             email: 'sarah@uppseekers.com',
             role: 'COUNSELOR',
-            students: '12 Students',
+            students: '2 Students',
+            status: 'Active',
+            password: 'Staff@123'
+          },
+          {
+            id: '3',
+            name: 'Dr. Vikram Roy',
+            email: 'vikram.roy@uppseekers.com',
+            role: 'RESEARCH_GUIDE',
+            students: '2 Students',
+            status: 'Active',
+            password: 'Staff@123'
+          },
+          {
+            id: '4',
+            name: 'Marcus Vance',
+            email: 'marcus@uppseekers.com',
+            role: 'CATEGORY_MANAGER',
+            students: 'All',
             status: 'Active',
             password: 'Staff@123'
           }
@@ -1058,18 +1106,25 @@ function calculateReadiness(student: Student): number {
 
   const [events, setEventsState] = useState<EventItem[]>(() => {
     const saved = localStorage.getItem('uppseekers_events_v2');
-    if (saved) { try { return JSON.parse(saved); } catch(e) {} }
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      } catch(e) {}
+    }
     return initialEvents;
   });
 
   const setEvents = async (newEvents: EventItem[]) => {
-    const deleted = events.filter(prev => !newEvents.some(n => n.id === prev.id));
+    const validNewEvents = Array.isArray(newEvents) ? newEvents : [];
+    const currentEvents = Array.isArray(events) ? events : [];
+    const deleted = currentEvents.filter(prev => !validNewEvents.some(n => n.id === prev.id));
     deleted.forEach(d => {
       if (d.id) deleteDoc(doc(db, 'events', d.id)).catch(console.error);
     });
-    setEventsState(newEvents);
-    safeLocalStorageSet('uppseekers_events_v2', newEvents);
-    newEvents.forEach(e => {
+    setEventsState(validNewEvents);
+    safeLocalStorageSet('uppseekers_events_v2', validNewEvents);
+    validNewEvents.forEach(e => {
       if (e.id) {
         setDoc(doc(db, 'events', e.id), JSON.parse(JSON.stringify(e))).catch(console.error);
       }
@@ -1078,26 +1133,31 @@ function calculateReadiness(student: Student): number {
     fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify(newEvents)
+      body: JSON.stringify(validNewEvents)
     }).catch(console.error);
   };
 
   const [batches, setBatchesState] = useState<Batch[]>(() => {
     const saved = localStorage.getItem('uppseekers_batches_v2');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
     }
     return initialBatches;
   });
 
   const setBatches = async (newBatches: Batch[]) => {
-    const deleted = batches.filter(prev => !newBatches.some(n => n.id === prev.id));
+    const validNewBatches = Array.isArray(newBatches) ? newBatches : [];
+    const currentBatches = Array.isArray(batches) ? batches : [];
+    const deleted = currentBatches.filter(prev => !validNewBatches.some(n => n.id === prev.id));
     deleted.forEach(d => {
       if (d.id) deleteDoc(doc(db, 'batches', d.id)).catch(console.error);
     });
-    setBatchesState(newBatches);
-    safeLocalStorageSet('uppseekers_batches_v2', newBatches);
-    newBatches.forEach(b => {
+    setBatchesState(validNewBatches);
+    safeLocalStorageSet('uppseekers_batches_v2', validNewBatches);
+    validNewBatches.forEach(b => {
       if (b.id) {
         setDoc(doc(db, 'batches', b.id), JSON.parse(JSON.stringify(b))).catch(console.error);
       }

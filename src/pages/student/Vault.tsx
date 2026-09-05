@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { UploadCloud, CheckCircle2, AlertCircle, Clock, X, Trash2, Eye, Download, FileText, Search, Filter } from 'lucide-react';
+import { UploadCloud, CheckCircle2, AlertCircle, Clock, X, Trash2, Eye, Download, FileText, Search, Filter, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDatabase } from '@/context/DatabaseContext';
+import PortalCredentialsManager from '@/components/PortalCredentialsManager';
+import { PortalCredential } from '@/types';
 
 interface DocumentInfo {
   id: string;
@@ -89,6 +91,45 @@ export default function StudentVault() {
   const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0];
   if (!student) return null;
   const documents: DocumentInfo[] = (student.documents || []) as DocumentInfo[];
+
+  const [vaultMode, setVaultMode] = useState<'documents' | 'credentials'>('documents');
+
+  const currentCredentials: PortalCredential[] = useMemo(() => {
+    if (student.credentials && student.credentials.length > 0) {
+      return student.credentials;
+    }
+    return [
+      {
+        id: 'CRED-SAMPLE-1',
+        title: 'Common Application',
+        category: 'Application System',
+        websiteUrl: 'https://apply.commonapp.org',
+        username: student.email || 'anya.patel@example.com',
+        password: 'Pass#2026!Apply',
+        pinOrCode: 'CAID: 8849201',
+        notes: 'Submitted early applications. Remember to check recommender submission status.',
+        lastUpdated: 'Aug 24, 2026'
+      },
+      {
+        id: 'CRED-SAMPLE-2',
+        title: 'College Board (SAT & AP)',
+        category: 'Testing & Scores',
+        websiteUrl: 'https://mysat.collegeboard.org',
+        username: student.email || 'anya.patel@example.com',
+        password: 'SatBoard#Score26',
+        pinOrCode: 'CBID: 94821039',
+        notes: 'SAT official score reports sent to target schools.',
+        lastUpdated: 'Aug 15, 2026'
+      }
+    ];
+  }, [student.credentials, student.email]);
+
+  const handleUpdateCredentials = (newCredentials: PortalCredential[]) => {
+    updateStudent({
+      ...student,
+      credentials: newCredentials
+    });
+  };
 
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('All');
@@ -263,15 +304,54 @@ export default function StudentVault() {
     <div className="max-w-7xl mx-auto space-y-6 pb-12">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">My Document Vault</h2>
-          <p className="text-sm text-slate-500 font-medium">Securely upload and manage your official documents and drafts.</p>
+          <h2 className="text-2xl font-bold text-slate-900 tracking-tight">My Student Vault</h2>
+          <p className="text-sm text-slate-500 font-medium">
+            Centralized hub for official documents, academic records, and university portal logins.
+          </p>
         </div>
-        <Button onClick={handleOpenUpload} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shrink-0">
-          <UploadCloud className="w-4 h-4 mr-2" /> Upload New Document
-        </Button>
+        {vaultMode === 'documents' && (
+          <Button onClick={handleOpenUpload} className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white shrink-0">
+            <UploadCloud className="w-4 h-4 mr-2" /> Upload New Document
+          </Button>
+        )}
       </div>
 
-      {/* Filter toolbar */}
+      {/* Mode Switcher */}
+      <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200/80 w-full sm:w-auto self-start gap-1">
+        <button
+          onClick={() => setVaultMode('documents')}
+          className={cn(
+            "flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2",
+            vaultMode === 'documents'
+              ? "bg-white text-slate-900 shadow-xs border border-slate-200/60"
+              : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/50"
+          )}
+        >
+          <FileText className="w-4 h-4 text-blue-600" />
+          <span>Official Documents ({documents.length})</span>
+        </button>
+        <button
+          onClick={() => setVaultMode('credentials')}
+          className={cn(
+            "flex-1 sm:flex-initial px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2",
+            vaultMode === 'credentials'
+              ? "bg-white text-slate-900 shadow-xs border border-slate-200/60"
+              : "text-slate-500 hover:text-slate-800 hover:bg-slate-200/50"
+          )}
+        >
+          <KeyRound className="w-4 h-4 text-indigo-600" />
+          <span>Website Logins & Passwords ({currentCredentials.length})</span>
+        </button>
+      </div>
+
+      {vaultMode === 'credentials' ? (
+        <PortalCredentialsManager
+          student={{ ...student, credentials: currentCredentials }}
+          onUpdateCredentials={handleUpdateCredentials}
+        />
+      ) : (
+        <>
+          {/* Filter toolbar */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
         <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center">
           <div className="relative flex-1">
@@ -645,6 +725,8 @@ export default function StudentVault() {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

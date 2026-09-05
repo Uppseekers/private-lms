@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useDatabase } from '@/context/DatabaseContext';
@@ -6,12 +7,13 @@ import { Batch, BatchClassSession, Student } from '@/types';
 import { 
   Users, Search, Plus, Video, UserCircle, MoreVertical, Layers, GraduationCap, 
   X, UserPlus, Trash2, Edit, CheckCircle2, Clock, Calendar, AlertCircle, 
-  BookOpen, UserMinus, CheckSquare, Sparkles, Filter, ExternalLink, CalendarDays
+  BookOpen, UserMinus, CheckSquare, Sparkles, Filter, ExternalLink, CalendarDays, Repeat
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isUserAdmin, canStaffAccessAllStudents } from '@/lib/staffPermissions';
 
 export default function Batches() {
+  const navigate = useNavigate();
   const { batches, setBatches, staff, currentUser, students, permissionsMatrix } = useDatabase();
   
   // Navigation tabs: 'all' | 'master' | 'sub' | 'sessions' | 'roster'
@@ -249,7 +251,7 @@ export default function Batches() {
   };
 
   // Create batch handler
-  const handleCreateBatch = () => {
+  const handleCreateBatch = (scheduleAfter = false) => {
     if (!newBatchName.trim()) return;
     const batchId = 'BATCH-' + Math.floor(1000 + Math.random() * 9000);
     const newBatch: Batch = {
@@ -262,23 +264,11 @@ export default function Batches() {
       completedSessions: parseInt(newBatchCompletedSessions) || 0,
       mentors: newBatchMentor ? [newBatchMentor] : (isAdmin ? [] : [currentUser?.name || 'Admin']),
       students: [],
-      meetingLink: meetingLink.trim() || ('https://zoom.us/j/' + Math.floor(1000000000 + Math.random() * 9000000000)),
+      meetingLink: meetingLink.trim() || ('https://meet.google.com/' + Math.random().toString(36).substring(2, 5) + '-' + Math.random().toString(36).substring(2, 6) + '-' + Math.random().toString(36).substring(2, 5)),
       scheduleDayTime: newBatchSchedule.trim(),
       description: newBatchDescription.trim(),
       status: 'Upcoming',
-      sessions: [
-        {
-          id: 'SES-01',
-          sessionNumber: 1,
-          title: 'Orientation & Diagnostic Assessment',
-          topic: 'Diagnostic Framework & Study Plan',
-          date: new Date().toISOString().split('T')[0],
-          time: '6:00 PM EST',
-          status: 'Upcoming',
-          meetingLink: meetingLink.trim() || 'https://zoom.us',
-          joinedStudentIds: []
-        }
-      ]
+      sessions: []
     };
     
     setBatches([...batches, newBatch]);
@@ -294,6 +284,10 @@ export default function Batches() {
     setMeetingLink('');
     setNewBatchSchedule('Mon, Wed & Fri • 6:00 PM EST');
     setNewBatchDescription('');
+
+    if (scheduleAfter) {
+      navigate(`/team/scheduler?batchId=${batchId}&recurring=true`);
+    }
   };
 
   // Edit batch handler
@@ -593,6 +587,17 @@ export default function Batches() {
                     </td>
 
                     <td className="px-6 py-4 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                      {/* Schedule Recurring Classes */}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => navigate(`/team/scheduler?batchId=${batch.id}&recurring=true`)}
+                        className="text-purple-700 border-purple-200 hover:bg-purple-50 text-xs font-semibold"
+                        title="Schedule Recurring Classes for this batch in Class Scheduler"
+                      >
+                        <Repeat className="w-3.5 h-3.5 mr-1 text-purple-600" /> Schedule
+                      </Button>
+
                       {/* Join Meeting */}
                       <Button
                         variant="outline"
@@ -704,6 +709,15 @@ export default function Batches() {
                   </div>
 
                   <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => navigate(`/team/scheduler?batchId=${batch.id}&recurring=true`)}
+                      className="text-xs h-7 px-2 border-purple-200 hover:bg-purple-50 text-purple-700 font-bold flex items-center gap-1"
+                      title="Schedule Recurring Classes in Class Scheduler"
+                    >
+                      <Repeat className="w-3 h-3 text-purple-600" /> Recurring Scheduler
+                    </Button>
                     {isAdmin && (
                       <Button
                         variant="outline"
@@ -1021,10 +1035,13 @@ export default function Batches() {
               </div>
             </div>
 
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2.5">
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-wrap justify-end gap-2">
               <Button variant="ghost" onClick={() => setIsCreateModalOpen(false)}>Cancel</Button>
-              <Button className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold" onClick={handleCreateBatch}>
-                Create Batch
+              <Button variant="outline" className="border-slate-300 hover:bg-slate-100 text-slate-700" onClick={() => handleCreateBatch(false)}>
+                Create Batch Only
+              </Button>
+              <Button className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold flex items-center gap-1.5" onClick={() => handleCreateBatch(true)}>
+                <Repeat className="w-4 h-4" /> Create & Schedule Recurring Classes
               </Button>
             </div>
           </div>

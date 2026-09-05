@@ -1,21 +1,35 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { 
   Plus, Search, Users, Video, Edit, Trash2, X, RefreshCw, 
-  FileText, Link as LinkIcon, CheckCircle2, Star, MessageSquare, ClipboardList, Paperclip 
+  FileText, Link as LinkIcon, CheckCircle2, Star, MessageSquare, ClipboardList, Paperclip,
+  Repeat, Calendar, CalendarDays, ChevronDown, ChevronUp, Layers, Clock, Sparkles, AlertCircle
 } from 'lucide-react';
-import { useDatabase } from '@/context/DatabaseContext';
+import { useDatabase, EventItem } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
-import { MeetingMOM, MeetingResourceLink, MeetingTask, OperationalLog } from '@/types';
+import { MeetingMOM, MeetingResourceLink, MeetingTask, OperationalLog, BatchClassSession } from '@/types';
 import { canStaffAccessAllStudents, isUserAdmin, isStudentAssignedToStaff } from '@/lib/staffPermissions';
+import { 
+  DAY_OF_WEEK_OPTIONS, 
+  SCHEDULE_DAY_PRESETS, 
+  generateRecurringDates, 
+  formatScheduleSummary, 
+  addMonthsToDateString,
+  formatPreviewDate
+} from '@/lib/recurringSchedule';
 
 export default function TeamScheduler() {
-  const { events, setEvents, currentUser, batches, students, updateStudent, permissionsMatrix } = useDatabase();
+  const { events, setEvents, currentUser, batches, setBatches, students, updateStudent, permissionsMatrix } = useDatabase();
+  const [searchParams, setSearchParams] = useSearchParams();
   
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingEventId, setEditingEventId] = useState<string | null>(null);
   const [audienceType, setAudienceType] = useState('individual');
+  const [scheduleMode, setScheduleMode] = useState<'single' | 'recurring'>('single');
+  const [showAllPreviewDates, setShowAllPreviewDates] = useState(false);
+  const [eventToDelete, setEventToDelete] = useState<any | null>(null);
   
   // Post-session modal state
   const [activeSessionModalEvt, setActiveSessionModalEvt] = useState<any | null>(null);
@@ -41,18 +55,20 @@ export default function TeamScheduler() {
   const [resUrl, setResUrl] = useState('');
 
   // Form State
+  const todayStr = new Date().toISOString().split('T')[0];
   const [formData, setFormData] = useState({
     stream: 'Counselling (1-on-1)',
     title: '',
-    date: '',
-    startTime: '',
-    endTime: '',
-    location: '',
+    date: todayStr,
+    startDate: todayStr,
+    endDate: addMonthsToDateString(todayStr, 2),
+    selectedDays: [1, 3, 5] as number[], // Mon, Wed, Fri
+    startTime: '18:00',
+    endTime: '19:30',
+    location: 'https://meet.google.com',
     notes: '',
     assignments: '',
-    isRecurring: false,
-    recurrenceType: 'weekly',
-    recurrenceCount: 1,
+    titleNumbering: true,
   });
   
   const [selectedStudentId, setSelectedStudentId] = useState('');
@@ -111,42 +127,66 @@ export default function TeamScheduler() {
            (e.stream || '').toLowerCase().includes(q);
   }).sort((a: any, b: any) => new Date(a.day || a.date).getTime() - new Date(b.day || b.date).getTime());
 
-  const handleOpenModal = () => {
+  const handleOpenModal = (preselectedBatchId?: string) => {
     setEditingEventId(null);
+    const today = new Date().toISOString().split('T')[0];
+    const targetBatch = preselectedBatchId ? batches.find(b => b.id === preselectedBatchId) : null;
+
     setFormData({
-      stream: 'Counselling (1-on-1)',
-      title: '',
-      date: new Date().toISOString().split('T')[0],
-      startTime: '10:00',
-      endTime: '11:00',
-      location: 'https://meet.google.com',
+      stream: targetBatch?.subject === 'SAT' ? 'SAT Verbal Prep' : (targetBatch?.subject === 'Research' ? 'Research Mentoring' : 'Counselling (1-on-1)'),
+      title: targetBatch ? `${targetBatch.name} Class Session` : '',
+      date: today,
+      startDate: today,
+      endDate: addMonthsToDateString(today, 2),
+      selectedDays: [1, 3, 5],
+      startTime: '18:00',
+      endTime: '19:30',
+      location: targetBatch?.meetingLink || 'https://meet.google.com',
       notes: '',
       assignments: '',
-      isRecurring: false,
-      recurrenceType: 'weekly',
-      recurrenceCount: 1,
+      titleNumbering: true,
     });
-    setSelectedStudentId(assignedStudents[0]?.id || '');
-    setSelectedBatchId('');
-    setAudienceType('individual');
+    setShowAllPreviewDates(false);
+
+    if (preselectedBatchId) {
+      setAudienceType('batch');
+      setSelectedBatchId(preselectedBatchId);
+      setScheduleMode('recurring');
+    } else {
+      setSelectedStudentId(assignedStudents[0]?.id || '');
+      setSelectedBatchId('');
+      setAudienceType('individual');
+      setScheduleMode('single');
+    }
     setIsModalOpen(true);
   };
 
+  useEffect(() => {
+    const batchIdParam = searchParams.get('batchId');
+    if (batchIdParam && batches.length > 0) {
+      handleOpenModal(batchIdParam);
+    }
+  }, [searchParams, batches]);
+
   const handleEditEvent = (evt: any) => {
     setEditingEventId(evt.id);
+    const isRec = !!(evt.isRecurring || evt.seriesId);
+    setScheduleMode(isRec ? 'recurring' : 'single');
     setFormData({
       stream: evt.stream || 'Counselling (1-on-1)',
       title: evt.title || '',
-      date: evt.date || evt.day || '',
-      startTime: (evt.time || '10:00').split(' - ')[0] || '10:00',
-      endTime: (evt.time || '11:00').split(' - ')[1] || '11:00',
+      date: evt.date || evt.day || new Date().toISOString().split('T')[0],
+      startDate: evt.date || evt.day || new Date().toISOString().split('T')[0],
+      endDate: addMonthsToDateString(evt.date || evt.day || new Date().toISOString().split('T')[0], 2),
+      selectedDays: [1, 3, 5],
+      startTime: (evt.time || '18:00').split(' - ')[0] || '18:00',
+      endTime: (evt.time || '19:30').split(' - ')[1] || '19:30',
       location: evt.location || evt.link || '',
       notes: evt.notes || '',
       assignments: evt.assignments || '',
-      isRecurring: false,
-      recurrenceType: 'weekly',
-      recurrenceCount: 1
+      titleNumbering: true,
     });
+    setShowAllPreviewDates(false);
     if (evt.batch) {
       setAudienceType('batch');
       setSelectedBatchId(evt.batch);
@@ -157,18 +197,65 @@ export default function TeamScheduler() {
     setIsModalOpen(true);
   };
 
-  const handleCloseModal = () => setIsModalOpen(false);
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setEditingEventId(null);
+  };
 
-  const handleDelete = (id: string) => {
-    if (confirm('Are you sure you want to delete this class event?')) {
-      setEvents(events.filter((e: any) => e.id !== id));
+  const handleDeleteClick = (evt: any) => {
+    if (evt.seriesId) {
+      setEventToDelete(evt);
+    } else {
+      if (window.confirm('Are you sure you want to permanently delete this class event?')) {
+        setEvents(events.filter((e: any) => e.id !== evt.id));
+      }
     }
   };
 
+  const handleDeleteSingleSession = () => {
+    if (!eventToDelete) return;
+    setEvents(events.filter((e: any) => e.id !== eventToDelete.id));
+    setEventToDelete(null);
+  };
+
+  const handleDeleteEntireSeries = () => {
+    if (!eventToDelete || !eventToDelete.seriesId) return;
+    const targetSeriesId = eventToDelete.seriesId;
+    setEvents(events.filter((e: any) => e.seriesId !== targetSeriesId));
+    
+    // Also remove series from batch sessions if linked
+    if (eventToDelete.batch) {
+      setBatches(batches.map(b => {
+        if (b.id === eventToDelete.batch && b.sessions) {
+          const updatedSessions = b.sessions.filter(s => s.seriesId !== targetSeriesId);
+          return {
+            ...b,
+            sessions: updatedSessions,
+            totalSessions: Math.max(updatedSessions.length, 1)
+          };
+        }
+        return b;
+      }));
+    }
+    setEventToDelete(null);
+  };
+
   const handlePublish = () => {
-    if (!formData.title.trim() || !formData.date || !formData.startTime) {
-      alert("Please fill required fields (Title, Date, Start Time).");
+    if (!formData.title.trim()) {
+      alert("Please enter a session title.");
       return;
+    }
+
+    if (scheduleMode === 'single') {
+      if (!formData.date || !formData.startTime) {
+        alert("Please specify Date and Start Time.");
+        return;
+      }
+    } else {
+      if (!formData.startDate || !formData.endDate || formData.selectedDays.length === 0) {
+        alert("Please specify From Date, To Date, and at least one Day of the Week.");
+        return;
+      }
     }
 
     const targetStudent = students.find(s => s.id === selectedStudentId);
@@ -177,65 +264,193 @@ export default function TeamScheduler() {
       ? (targetBatch?.name || 'Batch Cohort') 
       : (targetStudent ? targetStudent.name : 'All Assigned Students');
 
-    const duration = formData.endTime ? `${formData.startTime} - ${formData.endTime}` : '1 hr';
-    const baseId = 'EVT-' + Math.floor(Math.random() * 100000);
-    
-    let occurrences: string[] = [];
-    if (formData.isRecurring) {
-      const count = Math.max(1, Math.min(10, formData.recurrenceCount));
-      let currentDate = new Date(formData.date);
-      for (let i = 0; i < count; i++) {
-        occurrences.push(new Date(currentDate).toISOString().split('T')[0]);
-        if (formData.recurrenceType === 'daily') {
-          currentDate.setDate(currentDate.getDate() + 1);
-        } else if (formData.recurrenceType === 'weekly') {
-          currentDate.setDate(currentDate.getDate() + 7);
-        }
-      }
-    } else {
-      occurrences.push(formData.date);
-    }
-    
-    const newEvents = occurrences.map((dateStr, idx) => ({
-      id: baseId + '-' + idx,
-      day: dateStr,
-      date: dateStr,
-      time: formData.startTime + (formData.endTime ? ` - ${formData.endTime}` : ''),
-      duration: '1 hr',
-      stream: formData.stream,
-      title: formData.title,
-      batch: audienceType === 'batch' ? selectedBatchId : undefined,
-      students: studentLabel,
-      studentId: audienceType === 'individual' ? selectedStudentId : undefined,
-      location: formData.location || 'https://meet.google.com',
-      notes: formData.notes,
-      assignments: formData.assignments,
-      host: currentUser.name || 'Staff Mentor',
-      status: 'Scheduled' as const,
-      moms: [],
-      ratings: [],
-      resources: [],
-      tasks: []
-    }));
-    
-    setEvents([...events, ...newEvents]);
+    const durationStr = formData.endTime ? `${formData.startTime} - ${formData.endTime}` : '1 hr';
+    const locationLink = formData.location.trim() || 'https://meet.google.com';
 
-    // Push Operational Log if individual student target
-    if (audienceType === 'individual' && targetStudent) {
-      const logEntry: OperationalLog = {
-        id: 'LOG-' + Date.now(),
-        timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-        performedBy: currentUser.name || 'Staff Member',
-        role: currentUser.role || 'MENTOR',
-        studentId: targetStudent.id,
-        activityType: 'Meeting Scheduled',
-        description: `Scheduled meeting "${formData.title}" on ${formData.date} at ${formData.startTime}`,
-        link: formData.location
-      };
-      updateStudent({
-        ...targetStudent,
-        operationalLogs: [logEntry, ...(targetStudent.operationalLogs || [])]
+    // 1. EDIT EXISTING EVENT
+    if (editingEventId) {
+      setEvents(events.map((e: any) => {
+        if (e.id === editingEventId) {
+          return {
+            ...e,
+            title: formData.title,
+            stream: formData.stream,
+            day: formData.date,
+            date: formData.date,
+            time: formData.startTime + (formData.endTime ? ` - ${formData.endTime}` : ''),
+            duration: durationStr,
+            location: locationLink,
+            notes: formData.notes,
+            assignments: formData.assignments,
+            batch: audienceType === 'batch' ? selectedBatchId : undefined,
+            studentId: audienceType === 'individual' ? selectedStudentId : undefined,
+            students: studentLabel
+          };
+        }
+        return e;
+      }));
+      handleCloseModal();
+      return;
+    }
+
+    // 2. RECURRING SERIES CREATION (Date Range & Days of Week)
+    if (scheduleMode === 'recurring') {
+      const occurrences = generateRecurringDates(formData.startDate, formData.endDate, formData.selectedDays);
+      if (occurrences.length === 0) {
+        alert("No meeting dates fell within the selected date range and days of the week. Please check that From Date is before To Date and day of week matches.");
+        return;
+      }
+
+      const seriesId = 'SERIES-' + Date.now();
+      const recurrenceSummary = formatScheduleSummary(formData.selectedDays, formData.startTime, formData.endTime);
+
+      const newEvents: EventItem[] = occurrences.map((dateStr, idx) => {
+        const sessionTitle = formData.titleNumbering 
+          ? (audienceType === 'batch' ? `${formData.title} • Lecture #${idx + 1}` : `${formData.title} (Session #${idx + 1})`)
+          : formData.title;
+
+        return {
+          id: `EVT-${Date.now()}-${idx}`,
+          day: dateStr,
+          date: dateStr,
+          time: formData.startTime + (formData.endTime ? ` - ${formData.endTime}` : ''),
+          duration: durationStr,
+          stream: formData.stream,
+          title: sessionTitle,
+          batch: audienceType === 'batch' ? selectedBatchId : undefined,
+          students: studentLabel,
+          studentId: audienceType === 'individual' ? selectedStudentId : undefined,
+          location: locationLink, // The SAME persistent meeting link across all instances
+          notes: formData.notes,
+          assignments: formData.assignments,
+          host: currentUser.name || 'Staff Mentor',
+          status: 'Scheduled' as const,
+          isRecurring: true,
+          seriesId,
+          sessionNumber: idx + 1,
+          totalSessionsInSeries: occurrences.length,
+          recurrenceRule: recurrenceSummary,
+          moms: [],
+          ratings: [],
+          resources: [],
+          tasks: []
+        };
       });
+
+      setEvents([...events, ...newEvents]);
+
+      // If scheduled for a batch, ALSO synchronize directly into the batch's sessions and metadata!
+      if (audienceType === 'batch' && targetBatch) {
+        const existingSessions = targetBatch.sessions || [];
+        const startSessionNum = existingSessions.length;
+
+        const newBatchSessions: BatchClassSession[] = occurrences.map((dateStr, idx) => ({
+          id: 'SES-' + Math.floor(1000 + Math.random() * 9000),
+          sessionNumber: startSessionNum + idx + 1,
+          title: formData.titleNumbering ? `${formData.title} - Lecture #${startSessionNum + idx + 1}` : formData.title,
+          topic: formData.notes?.slice(0, 100) || `${formData.stream} Core Curriculum Module`,
+          date: dateStr,
+          time: formData.startTime + (formData.endTime ? ` - ${formData.endTime}` : ''),
+          status: 'Upcoming' as const,
+          meetingLink: locationLink, // SAME meeting link
+          joinedStudentIds: [],
+          seriesId
+        }));
+
+        const updatedBatch = {
+          ...targetBatch,
+          sessions: [...existingSessions, ...newBatchSessions],
+          totalSessions: Math.max(targetBatch.totalSessions || 10, existingSessions.length + newBatchSessions.length),
+          scheduleDayTime: recurrenceSummary,
+          meetingLink: targetBatch.meetingLink || locationLink
+        };
+
+        setBatches(batches.map(b => b.id === targetBatch.id ? updatedBatch : b));
+      }
+
+      // If scheduled for individual student, add operational log
+      if (audienceType === 'individual' && targetStudent) {
+        const logEntry: OperationalLog = {
+          id: 'LOG-' + Date.now(),
+          timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+          performedBy: currentUser.name || 'Staff Member',
+          role: currentUser.role || 'MENTOR',
+          studentId: targetStudent.id,
+          activityType: 'Meeting Scheduled',
+          description: `Scheduled recurring series (${occurrences.length} sessions) "${formData.title}" from ${formData.startDate} to ${formData.endDate} (${recurrenceSummary})`,
+          link: locationLink
+        };
+        updateStudent({
+          ...targetStudent,
+          operationalLogs: [logEntry, ...(targetStudent.operationalLogs || [])]
+        });
+      }
+
+    } else {
+      // 3. SINGLE SESSION CREATION
+      const baseId = 'EVT-' + Math.floor(Math.random() * 100000);
+      const singleEvent: EventItem = {
+        id: baseId,
+        day: formData.date,
+        date: formData.date,
+        time: formData.startTime + (formData.endTime ? ` - ${formData.endTime}` : ''),
+        duration: durationStr,
+        stream: formData.stream,
+        title: formData.title,
+        batch: audienceType === 'batch' ? selectedBatchId : undefined,
+        students: studentLabel,
+        studentId: audienceType === 'individual' ? selectedStudentId : undefined,
+        location: locationLink,
+        notes: formData.notes,
+        assignments: formData.assignments,
+        host: currentUser.name || 'Staff Mentor',
+        status: 'Scheduled' as const,
+        moms: [],
+        ratings: [],
+        resources: [],
+        tasks: []
+      };
+
+      setEvents([...events, singleEvent]);
+
+      if (audienceType === 'batch' && targetBatch) {
+        const existingSessions = targetBatch.sessions || [];
+        const newBatchSession: BatchClassSession = {
+          id: 'SES-' + Math.floor(1000 + Math.random() * 9000),
+          sessionNumber: existingSessions.length + 1,
+          title: formData.title,
+          topic: formData.notes?.slice(0, 100) || `${formData.stream} Session`,
+          date: formData.date,
+          time: formData.startTime + (formData.endTime ? ` - ${formData.endTime}` : ''),
+          status: 'Upcoming' as const,
+          meetingLink: locationLink,
+          joinedStudentIds: []
+        };
+        const updatedBatch = {
+          ...targetBatch,
+          sessions: [...existingSessions, newBatchSession],
+          totalSessions: Math.max(targetBatch.totalSessions || 10, existingSessions.length + 1),
+          meetingLink: targetBatch.meetingLink || locationLink
+        };
+        setBatches(batches.map(b => b.id === targetBatch.id ? updatedBatch : b));
+      }
+
+      if (audienceType === 'individual' && targetStudent) {
+        const logEntry: OperationalLog = {
+          id: 'LOG-' + Date.now(),
+          timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+          performedBy: currentUser.name || 'Staff Member',
+          role: currentUser.role || 'MENTOR',
+          studentId: targetStudent.id,
+          activityType: 'Meeting Scheduled',
+          description: `Scheduled meeting "${formData.title}" on ${formData.date} at ${formData.startTime}`,
+          link: locationLink
+        };
+        updateStudent({
+          ...targetStudent,
+          operationalLogs: [logEntry, ...(targetStudent.operationalLogs || [])]
+        });
+      }
     }
 
     handleCloseModal();
@@ -437,7 +652,7 @@ export default function TeamScheduler() {
           <h2 className="text-xl font-bold text-slate-900 tracking-tight">Class Scheduler</h2>
           <p className="text-xs text-slate-500 mt-0.5">Role-based student visibility, session notes, ratings, and follow-up assignments.</p>
         </div>
-        <Button onClick={handleOpenModal} className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4 py-2 rounded-lg font-semibold shadow-sm">
+        <Button onClick={() => handleOpenModal()} className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4 py-2 rounded-lg font-semibold shadow-sm">
           <Plus className="w-4 h-4 mr-1.5" /> Schedule Class
         </Button>
       </div>
@@ -569,66 +784,310 @@ export default function TeamScheduler() {
                 </div>
               </div>
 
-              {/* Date & Times */}
-              <div className="grid grid-cols-3 gap-3">
-                 <div>
-                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Date *</label>
-                    <input 
-                      type="date" 
-                      value={formData.date}
-                      onChange={(e) => setFormData({...formData, date: e.target.value})}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
-                    />
-                 </div>
-                 <div>
-                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">Start Time *</label>
-                    <input 
-                      type="time" 
-                      value={formData.startTime}
-                      onChange={(e) => setFormData({...formData, startTime: e.target.value})}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
-                    />
-                 </div>
-                 <div>
-                    <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1 block">End Time</label>
-                    <input 
-                      type="time" 
-                      value={formData.endTime}
-                      onChange={(e) => setFormData({...formData, endTime: e.target.value})}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
-                    />
-                 </div>
+              {/* Schedule Type Selection (Single vs Recurring Range) */}
+              <div>
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Session Frequency & Type</label>
+                <div className="bg-slate-100/80 p-1 rounded-xl flex items-center gap-1 border border-slate-200/60">
+                  <button
+                    type="button"
+                    onClick={() => setScheduleMode('single')}
+                    className={cn(
+                      "flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5",
+                      scheduleMode === 'single' ? "bg-white text-slate-900 shadow-sm" : "text-slate-500 hover:text-slate-800"
+                    )}
+                  >
+                    <Calendar className="w-3.5 h-3.5" /> Single Session
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setScheduleMode('recurring')}
+                    className={cn(
+                      "flex-1 py-1.5 px-3 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5",
+                      scheduleMode === 'recurring' ? "bg-white text-indigo-700 shadow-sm border border-indigo-100" : "text-slate-500 hover:text-slate-800"
+                    )}
+                  >
+                    <Repeat className="w-3.5 h-3.5 text-indigo-600" /> Recurring Series (Date Range & Days)
+                  </button>
+                </div>
               </div>
 
-              {/* Location Link */}
+              {/* Date & Times Configuration */}
+              {scheduleMode === 'single' ? (
+                /* SINGLE SESSION DATE INPUTS */
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/70 p-3.5 rounded-xl border border-slate-200/70">
+                   <div>
+                      <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Date *</label>
+                      <input 
+                        type="date" 
+                        value={formData.date}
+                        onChange={(e) => setFormData({...formData, date: e.target.value})}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                      />
+                   </div>
+                   <div>
+                      <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Start Time *</label>
+                      <input 
+                        type="time" 
+                        value={formData.startTime}
+                        onChange={(e) => setFormData({...formData, startTime: e.target.value})}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                      />
+                   </div>
+                   <div>
+                      <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">End Time</label>
+                      <input 
+                        type="time" 
+                        value={formData.endTime}
+                        onChange={(e) => setFormData({...formData, endTime: e.target.value})}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                      />
+                   </div>
+                </div>
+              ) : (
+                /* RECURRING DATE RANGE & DAYS OF WEEK CONFIGURATION */
+                <div className="space-y-4 bg-indigo-50/40 p-4 rounded-xl border border-indigo-100/80">
+                  {/* Date Range: From Date to To Date */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[11px] font-bold text-indigo-950 uppercase tracking-wider flex items-center gap-1.5">
+                        <CalendarDays className="w-3.5 h-3.5 text-indigo-600" /> Date Range (From Date to Date) *
+                      </label>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => setFormData(p => ({ ...p, endDate: addMonthsToDateString(p.startDate || todayStr, 1) }))}
+                          className="px-2 py-0.5 text-[10px] font-bold bg-white text-indigo-700 hover:bg-indigo-50 rounded border border-indigo-200"
+                        >
+                          +1 Mo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData(p => ({ ...p, endDate: addMonthsToDateString(p.startDate || todayStr, 2) }))}
+                          className="px-2 py-0.5 text-[10px] font-bold bg-white text-indigo-700 hover:bg-indigo-50 rounded border border-indigo-200"
+                        >
+                          +2 Mo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData(p => ({ ...p, endDate: addMonthsToDateString(p.startDate || todayStr, 3) }))}
+                          className="px-2 py-0.5 text-[10px] font-bold bg-white text-indigo-700 hover:bg-indigo-50 rounded border border-indigo-200"
+                        >
+                          +3 Mo
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <span className="text-[10px] text-slate-500 font-semibold mb-1 block">From Start Date</span>
+                        <input 
+                          type="date" 
+                          value={formData.startDate}
+                          onChange={(e) => setFormData({...formData, startDate: e.target.value})}
+                          className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800" 
+                        />
+                      </div>
+                      <div>
+                        <span className="text-[10px] text-slate-500 font-semibold mb-1 block">To End Date</span>
+                        <input 
+                          type="date" 
+                          value={formData.endDate}
+                          min={formData.startDate}
+                          onChange={(e) => setFormData({...formData, endDate: e.target.value})}
+                          className="w-full bg-white border border-indigo-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800" 
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Days of the Week Selection */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-[11px] font-bold text-indigo-950 uppercase tracking-wider">
+                        Days of the Week *
+                      </label>
+                      <div className="flex items-center gap-1">
+                        {SCHEDULE_DAY_PRESETS.map((preset, idx) => (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => setFormData(p => ({ ...p, selectedDays: preset.days }))}
+                            className={cn(
+                              "px-2 py-0.5 text-[10px] font-semibold rounded border transition-colors",
+                              JSON.stringify(formData.selectedDays.slice().sort()) === JSON.stringify(preset.days.slice().sort())
+                                ? "bg-indigo-600 text-white border-indigo-600 font-bold"
+                                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                            )}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-1.5">
+                      {DAY_OF_WEEK_OPTIONS.map((day) => {
+                        const isSelected = formData.selectedDays.includes(day.value);
+                        return (
+                          <button
+                            key={day.value}
+                            type="button"
+                            onClick={() => {
+                              setFormData(p => {
+                                const exists = p.selectedDays.includes(day.value);
+                                const nextDays = exists 
+                                  ? p.selectedDays.filter(d => d !== day.value)
+                                  : [...p.selectedDays, day.value].sort();
+                                return { ...p, selectedDays: nextDays };
+                              });
+                            }}
+                            className={cn(
+                              "py-2 px-1 rounded-lg text-xs font-bold transition-all flex flex-col items-center justify-center border",
+                              isSelected
+                                ? "bg-indigo-600 text-white border-indigo-700 shadow-sm"
+                                : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/30"
+                            )}
+                          >
+                            <span>{day.short}</span>
+                            <span className="text-[9px] font-normal opacity-80 mt-0.5">{isSelected ? '✓' : '+'}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Time Range */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="text-[11px] font-bold text-indigo-950 uppercase tracking-wider mb-1 block">Class Start Time *</label>
+                      <input 
+                        type="time" 
+                        value={formData.startTime}
+                        onChange={(e) => setFormData({...formData, startTime: e.target.value})}
+                        className="w-full bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-indigo-950 uppercase tracking-wider mb-1 block">Class End Time</label>
+                      <input 
+                        type="time" 
+                        value={formData.endTime}
+                        onChange={(e) => setFormData({...formData, endTime: e.target.value})}
+                        className="w-full bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                      />
+                    </div>
+                  </div>
+
+                  {/* Numbering Option */}
+                  <div className="flex items-center gap-2 pt-1">
+                    <input 
+                      type="checkbox" 
+                      id="titleNumbering"
+                      checked={formData.titleNumbering}
+                      onChange={(e) => setFormData(p => ({ ...p, titleNumbering: e.target.checked }))}
+                      className="accent-indigo-600 w-4 h-4 rounded"
+                    />
+                    <label htmlFor="titleNumbering" className="text-xs text-slate-700 font-medium cursor-pointer">
+                      Auto-number session titles (e.g. <em>{formData.title || 'Session'} • Lecture #1, #2...</em>)
+                    </label>
+                  </div>
+
+                  {/* Live Recurring Calculation Card */}
+                  {(() => {
+                    const occurrences = generateRecurringDates(formData.startDate, formData.endDate, formData.selectedDays);
+                    const scheduleSummary = formatScheduleSummary(formData.selectedDays, formData.startTime, formData.endTime);
+                    return (
+                      <div className="bg-white rounded-xl p-3 border border-indigo-200 shadow-sm space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <Sparkles className="w-4 h-4 text-indigo-600" />
+                            <span className="font-bold text-slate-900 text-xs">Series Schedule Preview</span>
+                          </div>
+                          <span className={cn(
+                            "px-2 py-0.5 rounded-full text-[11px] font-bold",
+                            occurrences.length > 0 ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
+                          )}>
+                            {occurrences.length} Sessions Total
+                          </span>
+                        </div>
+
+                        <p className="text-xs text-indigo-900 font-semibold">{scheduleSummary}</p>
+                        <p className="text-[11px] text-slate-500">
+                          Date Range: <strong>{formatPreviewDate(formData.startDate)}</strong> to <strong>{formatPreviewDate(formData.endDate)}</strong>
+                        </p>
+
+                        {/* Interactive preview pills */}
+                        {occurrences.length > 0 && (
+                          <div className="pt-1 border-t border-slate-100">
+                            <div className="flex items-center justify-between text-[10px] text-slate-400 font-medium mb-1.5">
+                              <span>Generated Class Dates:</span>
+                              {occurrences.length > 6 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setShowAllPreviewDates(!showAllPreviewDates)}
+                                  className="text-indigo-600 font-bold hover:underline"
+                                >
+                                  {showAllPreviewDates ? 'Show Less' : `View All ${occurrences.length}`}
+                                </button>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto">
+                              {(showAllPreviewDates ? occurrences : occurrences.slice(0, 6)).map((d, i) => (
+                                <span key={d} className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 text-[10px] font-mono border border-slate-200">
+                                  #{i + 1}: {formatPreviewDate(d)}
+                                </span>
+                              ))}
+                              {!showAllPreviewDates && occurrences.length > 6 && (
+                                <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 text-[10px] font-bold">
+                                  +{occurrences.length - 6} more
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {/* Location Link (Persistent across all sessions) */}
               <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Google Meet / Zoom URL</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+                    Google Meet / Zoom URL (Persistent Link)
+                  </label>
+                  <span className="text-[10px] text-indigo-600 font-medium">Same meeting for all sessions</span>
+                </div>
                 <input 
                   type="text" 
                   value={formData.location}
                   onChange={(e) => setFormData({...formData, location: e.target.value})}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs" 
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800" 
                   placeholder="https://meet.google.com/..."
                 />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Students and mentors will join using this exact meeting link for every session in this series.
+                </p>
               </div>
 
               {/* Pre-Read Notes */}
               <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pre-Read Agenda / Notes for Student</label>
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pre-Read Agenda / Notes for Students</label>
                 <textarea 
                   rows={2} 
                   value={formData.notes}
                   onChange={(e) => setFormData({...formData, notes: e.target.value})}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs resize-none" 
-                  placeholder="Items student should review prior to call..."
+                  placeholder="Items students should review prior to call..."
                 ></textarea>
               </div>
             </div>
             
             <div className="px-6 py-3 border-t border-slate-100 flex justify-end gap-2 bg-slate-50 shrink-0">
               <Button variant="ghost" size="sm" onClick={handleCloseModal} className="text-xs">Cancel</Button>
-              <Button size="sm" className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4" onClick={handlePublish}>
-                {editingEventId ? 'Save Changes' : 'Schedule Session'}
+              <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4" onClick={handlePublish}>
+                {editingEventId ? 'Save Changes' : (scheduleMode === 'recurring' ? 'Create Recurring Series' : 'Schedule Session')}
               </Button>
             </div>
           </div>
@@ -692,6 +1151,11 @@ export default function TeamScheduler() {
                   <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-[10px] font-bold uppercase tracking-wider border border-blue-100">
                     {evt.stream}
                   </span>
+                  {evt.isRecurring && (
+                    <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded text-[10px] font-bold uppercase tracking-wider border border-purple-200 flex items-center gap-1">
+                      <Repeat className="w-3 h-3 text-purple-600" /> Session #{evt.sessionNumber || 1} of {evt.totalSessionsInSeries || '?'}
+                    </span>
+                  )}
                   <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                     inPast ? 'bg-slate-100 text-slate-700' : evt.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'
                   }`}>
@@ -701,6 +1165,13 @@ export default function TeamScheduler() {
                 </div>
 
                 <h4 className="text-base font-bold text-slate-900">{evt.title}</h4>
+
+                {evt.recurrenceRule && (
+                  <p className="text-[11px] text-purple-700 font-medium flex items-center gap-1.5">
+                    <CalendarDays className="w-3.5 h-3.5 text-purple-500" />
+                    <span>Series: {evt.recurrenceRule}</span>
+                  </p>
+                )}
 
                 <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600">
                   <span className="flex items-center gap-1">
@@ -773,7 +1244,13 @@ export default function TeamScheduler() {
                   <Edit className="w-3.5 h-3.5" />
                 </Button>
 
-                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50" onClick={() => handleDelete(evt.id)}>
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50" 
+                  onClick={() => handleDeleteClick(evt)}
+                  title={evt.seriesId ? "Delete Session or Series" : "Delete Session"}
+                >
                   <Trash2 className="w-3.5 h-3.5" />
                 </Button>
               </div>
@@ -782,6 +1259,58 @@ export default function TeamScheduler() {
           })
         )}
       </div>
+
+      {/* RECURRING SERIES DELETE CONFIRMATION MODAL */}
+      {eventToDelete && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
+            <div className="p-5 border-b border-slate-100 flex items-start justify-between bg-red-50/50">
+              <div className="flex items-center gap-2 text-red-600 font-bold">
+                <AlertCircle className="w-5 h-5" />
+                <span>Delete Recurring Session</span>
+              </div>
+              <button onClick={() => setEventToDelete(null)} className="text-slate-400 hover:text-slate-600">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="p-5 space-y-3 text-xs text-slate-600">
+              <p className="font-semibold text-slate-800 text-sm">
+                "{eventToDelete.title}"
+              </p>
+              <p>
+                This meeting is part of a recurring series (Session #{eventToDelete.sessionNumber || 1} of {eventToDelete.totalSessionsInSeries || 'multiple'}).
+              </p>
+              <p className="text-slate-500">
+                Would you like to delete only this individual session on <strong>{eventToDelete.day || eventToDelete.date}</strong>, or delete all sessions in this recurring series?
+              </p>
+            </div>
+
+            <div className="p-4 border-t border-slate-100 bg-slate-50 flex flex-col gap-2">
+              <Button
+                variant="outline"
+                onClick={handleDeleteSingleSession}
+                className="w-full text-slate-700 border-slate-300 hover:bg-slate-100 text-xs font-semibold"
+              >
+                Delete Only This Session ({eventToDelete.day || eventToDelete.date})
+              </Button>
+              <Button
+                onClick={handleDeleteEntireSeries}
+                className="w-full bg-red-600 hover:bg-red-700 text-white text-xs font-bold"
+              >
+                Delete Entire Series (All {eventToDelete.totalSessionsInSeries || ''} Sessions)
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={() => setEventToDelete(null)}
+                className="w-full text-xs text-slate-500"
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* POST-SESSION ACTIONS MODAL */}
       {activeSessionModalEvt && (

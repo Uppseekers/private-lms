@@ -2,18 +2,21 @@ import React, { useState } from 'react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, SlidersHorizontal, Award, Sparkles, CheckSquare } from 'lucide-react';
+import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, SlidersHorizontal, Award, Sparkles, CheckSquare, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage, DocumentInfo } from '@/types';
 import { canStaffAccessAllStudents, isStudentAssignedToStaff, isUserAdmin } from '@/lib/staffPermissions';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 import CompetencyRadar from '@/pages/student/CompetencyRadar';
+import PortalCredentialsManager from '@/components/PortalCredentialsManager';
+import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
 
 export default function TeamUsers() {
-  const { students, setStudents, staff, setStaff, currentUser, permissionsMatrix } = useDatabase();
+  const { students, setStudents, updateStudent, staff, setStaff, currentUser, permissionsMatrix } = useDatabase();
   const isAdmin = isUserAdmin(currentUser);
   const [activeViewTab, setActiveViewTab] = useState<'students' | 'staff'>('students');
   const [searchQuery, setSearchQuery] = useState('');
+  const [staffFilter, setStaffFilter] = useState<string>('All');
   
   // Selection state
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -25,21 +28,103 @@ export default function TeamUsers() {
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [selectedStaffMember, setSelectedStaffMember] = useState<StaffMember | null>(null);
+  const [userForPasswordChange, setUserForPasswordChange] = useState<TargetUserForPassword | null>(null);
 
-  const filteredStudents = students.filter(s => {
+  const handleSaveUserPassword = async (userId: string, userType: 'student' | 'staff', newPassword: string) => {
+    if (userType === 'student') {
+      const targetStu = students.find(s => s.id === userId);
+      if (targetStu) {
+        const updatedStudent: Student = {
+          ...targetStu,
+          password: newPassword,
+          activities: [
+            {
+              id: 'act_' + Date.now(),
+              date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+              type: 'SYSTEM',
+              description: `Portal password updated by Admin (${currentUser?.name || 'Admin'})`
+            },
+            ...(targetStu.activities || [])
+          ]
+        };
+        updateStudent(updatedStudent);
+        if (selectedStudent?.id === userId) {
+          setSelectedStudent(updatedStudent);
+        }
+      }
+    } else {
+      const updatedStaff = staff.map(s => {
+        if (s.id === userId) {
+          return { ...s, password: newPassword };
+        }
+        return s;
+      });
+      setStaff(updatedStaff);
+      if (selectedStaffMember?.id === userId) {
+        setSelectedStaffMember({ ...selectedStaffMember, password: newPassword });
+      }
+    }
+
+    const token = localStorage.getItem('auth_token') || 'admin_token';
+    try {
+      await fetch('/api/admin/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          userId,
+          newPassword,
+          userType
+        })
+      });
+    } catch (e) {
+      console.warn('Backend password sync error (fallback active):', e);
+    }
+  };
+
+  const filteredStudents = (students || []).filter(s => {
+    if (!s) return false;
     if (!canStaffAccessAllStudents(currentUser, permissionsMatrix)) {
       if (!isStudentAssignedToStaff(s, currentUser, permissionsMatrix)) return false;
     }
-    return s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-           s.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-           s.id.toLowerCase().includes(searchQuery.toLowerCase());
+
+    if (staffFilter !== 'All') {
+      if (staffFilter === 'Unassigned') {
+        const hasAssignment = s.counselor || s.researchMentor || s.satMathMentor || s.satVerbalMentor || (s as any).mentor;
+        if (hasAssignment) return false;
+      } else {
+        const targetStaff = (staff || []).find(st => st && (st.id === staffFilter || (st.name || '').toLowerCase() === staffFilter.toLowerCase()));
+        if (targetStaff) {
+          if (!isStudentAssignedToStaff(s, targetStaff, permissionsMatrix)) return false;
+        } else {
+          const staffName = staffFilter.toLowerCase().trim();
+          const matches = (s.counselor && s.counselor.toLowerCase().includes(staffName)) ||
+                          (s.researchMentor && s.researchMentor.toLowerCase().includes(staffName)) ||
+                          (s.satMathMentor && s.satMathMentor.toLowerCase().includes(staffName)) ||
+                          (s.satVerbalMentor && s.satVerbalMentor.toLowerCase().includes(staffName)) ||
+                          (Boolean((s as any).mentor) && String((s as any).mentor).toLowerCase().includes(staffName));
+          if (!matches) return false;
+        }
+      }
+    }
+
+    const q = (searchQuery || '').toLowerCase();
+    if (!q) return true;
+    return (s.name || '').toLowerCase().includes(q) || 
+           (s.email || '').toLowerCase().includes(q) ||
+           (s.id || '').toLowerCase().includes(q);
   });
 
-  const filteredStaff = staff.filter(m => 
-    m.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    m.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    m.role.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredStaff = (staff || []).filter(m => {
+    if (!m) return false;
+    const q = (searchQuery || '').toLowerCase();
+    if (!q) return true;
+    return (m.name || '').toLowerCase().includes(q) ||
+           (m.email || '').toLowerCase().includes(q) ||
+           (m.role || '').toLowerCase().includes(q);
+  });
 
   const getReadinessColor = (percent: number) => {
     if (percent >= 90) return 'text-green-600';
@@ -168,6 +253,32 @@ export default function TeamUsers() {
             />
           </div>
 
+          {activeViewTab === 'students' && (
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs">
+              <span className="font-bold text-slate-500 uppercase text-[10px] tracking-wider whitespace-nowrap">Scope / Mentor:</span>
+              <select
+                value={staffFilter}
+                onChange={(e) => setStaffFilter(e.target.value)}
+                className="bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer text-xs"
+              >
+                <option value="All">All Students & Counselors ({students.length})</option>
+                <option value="Unassigned">Unassigned Students</option>
+                <optgroup label="Counselors & Mentors">
+                  {(staff || []).map(st => {
+                    if (!st) return null;
+                    const count = (students || []).filter(s => s && isStudentAssignedToStaff(s, st, permissionsMatrix)).length;
+                    const displayRole = (st.role || 'STAFF').replace(/_/g, ' ');
+                    return (
+                      <option key={st.id || st.email} value={st.name || st.id}>
+                        {st.name || 'Staff'} ({displayRole}) — {count} student{count !== 1 ? 's' : ''}
+                      </option>
+                    );
+                  })}
+                </optgroup>
+              </select>
+            </div>
+          )}
+
           {/* Delete Selected Button */}
           {activeViewTab === 'students' && selectedStudentIds.length > 0 && isAdmin && (
             <Button 
@@ -279,6 +390,27 @@ export default function TeamUsers() {
                       <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setSelectedStudent(student)}>
                         View
                       </Button>
+                      {isAdmin && (
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="text-amber-600 hover:text-amber-800 hover:bg-amber-50 p-2"
+                          title="Change Password (Admin Only)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUserForPasswordChange({
+                              id: student.id,
+                              name: student.name,
+                              email: student.email,
+                              role: 'Student',
+                              type: 'student',
+                              currentPassword: student.password || 'Student@123'
+                            });
+                          }}
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </Button>
+                      )}
                       <Button 
                         variant="ghost" 
                         size="sm" 
@@ -361,6 +493,27 @@ export default function TeamUsers() {
                       <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setSelectedStaffMember(member)}>
                         View Details
                       </Button>
+                      {isAdmin && (
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="text-amber-600 hover:text-amber-800 hover:bg-amber-50 p-2"
+                          title="Change Password (Admin Only)"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setUserForPasswordChange({
+                              id: member.id,
+                              name: member.name,
+                              email: member.email,
+                              role: member.role,
+                              type: 'staff',
+                              currentPassword: member.password || 'Staff@123'
+                            });
+                          }}
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </Button>
+                      )}
                       <Button 
                         variant="ghost" 
                         size="sm" 
@@ -454,6 +607,16 @@ export default function TeamUsers() {
             />
           </div>
         </div>
+      )}
+
+      {/* Admin Change Password Modal for Table rows */}
+      {isAdmin && userForPasswordChange && (
+        <ChangeUserPasswordModal
+          isOpen={Boolean(userForPasswordChange)}
+          onClose={() => setUserForPasswordChange(null)}
+          targetUser={userForPasswordChange}
+          onSavePassword={handleSaveUserPassword}
+        />
       )}
     </div>
   );
@@ -674,6 +837,7 @@ function ImportStudentsModal({ onClose, onImport, counselorName }: { onClose: ()
 function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student, onClose: () => void, onUpdate: (s: Student) => void }) {
   const { currentUser } = useDatabase();
   const [activeTab, setActiveTab] = useState('Profile Details');
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
   // State for manual activity logging by counselor
   const [isLoggingManualActivity, setIsLoggingManualActivity] = useState(false);
@@ -733,9 +897,23 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
           <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Student Profile</p>
           <h2 className="text-xl font-bold text-slate-900">{student.name} <span className="text-slate-400 font-medium">({student.id})</span></h2>
         </div>
-        <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
-          <X className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-2">
+          {isUserAdmin(currentUser) && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIsChangePasswordOpen(true)}
+              className="text-xs font-bold border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 flex items-center gap-1.5 shadow-2xs"
+              title="Change password for this student (Admin only)"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-amber-600" />
+              <span>Change Password</span>
+            </Button>
+          )}
+          <button onClick={onClose} className="p-2 hover:bg-slate-200 rounded-full text-slate-500 transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       <div className="flex border-b border-slate-200 px-6 bg-white shrink-0 overflow-x-auto scrollbar-hide">
@@ -1123,6 +1301,48 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
           <EssaysView student={student} onUpdate={onUpdate} />
         )}
       </div>
+
+      {/* Admin Change Password Modal in Student Drawer */}
+      {isUserAdmin(currentUser) && isChangePasswordOpen && (
+        <ChangeUserPasswordModal
+          isOpen={isChangePasswordOpen}
+          onClose={() => setIsChangePasswordOpen(false)}
+          targetUser={{
+            id: student.id,
+            name: student.name,
+            email: student.email,
+            role: 'Student',
+            type: 'student',
+            currentPassword: student.password || 'Student@123'
+          }}
+          onSavePassword={async (userId, type, newPassword) => {
+            const updatedStudent: Student = {
+              ...student,
+              password: newPassword,
+              activities: [
+                {
+                  id: 'act_' + Date.now(),
+                  date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+                  type: 'SYSTEM',
+                  description: `Portal password updated by Admin (${currentUser?.name || 'Admin'})`
+                },
+                ...(student.activities || [])
+              ]
+            };
+            onUpdate(updatedStudent);
+            const token = localStorage.getItem('auth_token') || 'admin_token';
+            try {
+              await fetch('/api/admin/change-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ userId, newPassword, userType: 'student' })
+              });
+            } catch (e) {
+              console.warn('Backend password sync error:', e);
+            }
+          }}
+        />
+      )}
     </>
   );
 }
@@ -2049,6 +2269,8 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
 
 function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
   const documents = student.documents || [];
+  const credentials = student.credentials || [];
+  const [subTab, setSubTab] = useState<'documents' | 'credentials'>('documents');
   const [isUploading, setIsUploading] = useState(false);
   const [previewingDoc, setPreviewingDoc] = useState<any | null>(null);
 
@@ -2070,33 +2292,60 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
         ]
       });
       setIsUploading(false);
-      onUpdate({
-        ...student,
-        activities: [
-          {
-            id: Math.random().toString(),
-            date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-            type: 'UPLOAD',
-            description: 'New document uploaded: New_Document_Scanned.pdf'
-          },
-          ...student.activities
-        ]
-      });
     }, 1000);
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Document Vault</h3>
-        <div className="flex gap-2">
-          <Button onClick={handleUpload} className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm" disabled={isUploading}>
-            {isUploading ? 'Uploading...' : <><Plus className="w-4 h-4 mr-2" /> Upload Document</>}
-          </Button>
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+        <div>
+          <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Student Vault</h3>
+          <p className="text-xs text-slate-500">Official documents, test reports, and website logins for {student.name}</p>
         </div>
+        {subTab === 'documents' && (
+          <div className="flex gap-2">
+            <Button onClick={handleUpload} className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm" disabled={isUploading}>
+              {isUploading ? 'Uploading...' : <><Plus className="w-4 h-4 mr-2" /> Upload Document</>}
+            </Button>
+          </div>
+        )}
       </div>
-      
-      <Card>
+
+      <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/80 w-fit gap-1">
+        <button
+          onClick={() => setSubTab('documents')}
+          className={cn(
+            "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2",
+            subTab === 'documents'
+              ? "bg-white text-slate-900 shadow-xs border border-slate-200/60"
+              : "text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <FileText className="w-3.5 h-3.5 text-blue-600" />
+          <span>Uploaded Documents ({documents.length})</span>
+        </button>
+        <button
+          onClick={() => setSubTab('credentials')}
+          className={cn(
+            "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2",
+            subTab === 'credentials'
+              ? "bg-white text-slate-900 shadow-xs border border-slate-200/60"
+              : "text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
+          <span>Website Logins & Passwords ({credentials.length})</span>
+        </button>
+      </div>
+
+      {subTab === 'credentials' ? (
+        <PortalCredentialsManager
+          student={student}
+          onUpdateCredentials={(newCreds) => onUpdate({ ...student, credentials: newCreds })}
+        />
+      ) : (
+        <>
+          <Card>
         <div className="p-0">
           <table className="w-full text-left text-sm whitespace-nowrap">
             <thead className="bg-white border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
@@ -2213,6 +2462,8 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
             setPreviewingDoc(null);
           }}
         />
+      )}
+        </>
       )}
     </div>
   );
@@ -2770,11 +3021,11 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
                       task.stage === 'NEEDS_REVISION' ? 'bg-red-100 text-red-700' :
                       'bg-green-100 text-green-700'
                     )}>
-                      {task.stage.replace(/_/g, ' ')}
+                      {(task.stage || 'TO_DO').replace(/_/g, ' ')}
                     </span>
                   </td>
                   <td className="px-6 py-4 font-medium text-slate-600">
-                     {task.attachments.length} Files
+                     {(task.attachments || []).length} Files
                   </td>
                   <td className="px-6 py-4 text-right">
                     <Button variant="ghost" size="sm" className="text-blue-600 hover:bg-blue-50" onClick={() => { setSelectedTaskId(task.id); setFeedback(task.feedback || ''); }}>
@@ -2910,6 +3161,7 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
 function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
   const { currentUser, staff } = useDatabase();
   const [isEditing, setIsEditing] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   
   const [formData, setFormData] = useState({
     name: student.name,
@@ -3063,12 +3315,35 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                 )
               )}
             </div>
-            {currentUser && currentUser.role !== 'STUDENT' && student.password && (
-              <div>
-                <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Login Credentials</p>
-                <div className="bg-slate-50 p-3 rounded-lg border border-slate-200">
-                  <p className="text-sm text-slate-900 font-medium"><span className="text-slate-500">Email:</span> {student.email}</p>
-                  <p className="text-sm text-slate-900 font-medium"><span className="text-slate-500">Password:</span> <span className="font-mono">{student.password}</span></p>
+            {isUserAdmin(currentUser) && (
+              <div className="col-span-2 p-4 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Shield className="w-4 h-4 text-amber-600" />
+                    <span className="text-xs font-bold text-amber-900 uppercase tracking-wider">Admin Security & Credentials</span>
+                    <span className="text-[10px] bg-amber-200/60 text-amber-800 font-bold px-2 py-0.5 rounded-full">Admin Only</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    type="button"
+                    onClick={() => setIsChangePasswordOpen(true)}
+                    className="text-xs font-bold border-amber-300 bg-white text-amber-900 hover:bg-amber-100 flex items-center gap-1.5 shadow-2xs h-7 px-2.5"
+                  >
+                    <KeyRound className="w-3.5 h-3.5 text-amber-600" /> Change Password
+                  </Button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="bg-white p-2.5 rounded-lg border border-amber-200/80">
+                    <span className="text-slate-400 font-bold block text-[10px] uppercase">Portal Login Email</span>
+                    <span className="text-slate-800 font-mono font-bold truncate block">{student.email}</span>
+                  </div>
+                  <div className="bg-white p-2.5 rounded-lg border border-amber-200/80 flex items-center justify-between">
+                    <div>
+                      <span className="text-slate-400 font-bold block text-[10px] uppercase">Portal Password</span>
+                      <span className="text-slate-800 font-mono font-bold">{student.password || 'Student@123 (Default)'}</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}
@@ -3370,6 +3645,48 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
           </div>
         </CardContent>
       </Card>
+
+      {/* Admin Change Password Modal in Profile Details */}
+      {isUserAdmin(currentUser) && isChangePasswordOpen && (
+        <ChangeUserPasswordModal
+          isOpen={isChangePasswordOpen}
+          onClose={() => setIsChangePasswordOpen(false)}
+          targetUser={{
+            id: student.id,
+            name: student.name,
+            email: student.email,
+            role: 'Student',
+            type: 'student',
+            currentPassword: student.password || 'Student@123'
+          }}
+          onSavePassword={async (userId, type, newPassword) => {
+            const updatedStudent: Student = {
+              ...student,
+              password: newPassword,
+              activities: [
+                {
+                  id: 'act_' + Date.now(),
+                  date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+                  type: 'SYSTEM',
+                  description: `Portal password updated by Admin (${currentUser?.name || 'Admin'})`
+                },
+                ...(student.activities || [])
+              ]
+            };
+            onUpdate(updatedStudent);
+            const token = localStorage.getItem('auth_token') || 'admin_token';
+            try {
+              await fetch('/api/admin/change-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ userId, newPassword, userType: 'student' })
+              });
+            } catch (e) {
+              console.warn('Backend password sync error:', e);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -3384,9 +3701,10 @@ function StaffDetailDrawer({
   onClose: () => void; 
   onSelectStudent?: (student: Student) => void;
 }) {
-  const { students, events, updateStudent, permissionsMatrix } = useDatabase();
+  const { students, events, updateStudent, permissionsMatrix, currentUser, staff, setStaff } = useDatabase();
   const [activeTab, setActiveTab] = useState<'students' | 'tasks' | 'logs'>('students');
   const [logSearchQuery, setLogSearchQuery] = useState('');
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
   // 1. Assigned Students
   const assignedStudents = React.useMemo(() => {
@@ -3519,13 +3837,45 @@ function StaffDetailDrawer({
           </div>
         </div>
 
-        <button 
-          onClick={onClose}
-          className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
-        >
-          <X className="w-6 h-6" />
-        </button>
+        <div className="flex items-center gap-2">
+          {isUserAdmin(currentUser) && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setIsChangePasswordOpen(true)}
+              className="text-xs font-bold border-amber-400/80 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30 hover:text-white flex items-center gap-1.5 shadow-xs"
+              title="Change Password for this staff member (Admin only)"
+            >
+              <KeyRound className="w-3.5 h-3.5 text-amber-300" />
+              <span>Change Password</span>
+            </Button>
+          )}
+          <button 
+            onClick={onClose}
+            className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+          >
+            <X className="w-6 h-6" />
+          </button>
+        </div>
       </div>
+
+      {/* Admin Security Banner */}
+      {isUserAdmin(currentUser) && (
+        <div className="bg-slate-950 border-b border-amber-500/20 px-6 py-2.5 flex items-center justify-between text-xs text-amber-200 shrink-0">
+          <div className="flex items-center gap-2">
+            <Shield className="w-4 h-4 text-amber-400 shrink-0" />
+            <span>Admin Access: Current Password: <strong className="font-mono text-amber-300">{staffMember.password || 'Staff@123'}</strong></span>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setIsChangePasswordOpen(true)}
+            className="text-xs font-bold text-amber-300 hover:text-white hover:bg-amber-500/20 h-7 px-2.5 flex items-center gap-1"
+          >
+            <KeyRound className="w-3.5 h-3.5" /> Change Password
+          </Button>
+        </div>
+      )}
 
       {/* Metrics Banner */}
       <div className="bg-slate-50 border-b border-slate-200 p-4 grid grid-cols-3 gap-4 text-center shrink-0">
@@ -3741,6 +4091,41 @@ function StaffDetailDrawer({
         )}
 
       </div>
+
+      {/* Admin Change Password Modal in Staff Detail Drawer */}
+      {isUserAdmin(currentUser) && isChangePasswordOpen && (
+        <ChangeUserPasswordModal
+          isOpen={isChangePasswordOpen}
+          onClose={() => setIsChangePasswordOpen(false)}
+          targetUser={{
+            id: staffMember.id,
+            name: staffMember.name,
+            email: staffMember.email,
+            role: staffMember.role,
+            type: 'staff',
+            currentPassword: staffMember.password || 'Staff@123'
+          }}
+          onSavePassword={async (userId, type, newPassword) => {
+            const updatedStaff = staff.map(s => {
+              if (s.id === userId) {
+                return { ...s, password: newPassword };
+              }
+              return s;
+            });
+            setStaff(updatedStaff);
+            const token = localStorage.getItem('auth_token') || 'admin_token';
+            try {
+              await fetch('/api/admin/change-password', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                body: JSON.stringify({ userId, newPassword, userType: 'staff' })
+              });
+            } catch (e) {
+              console.warn('Backend password sync error:', e);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

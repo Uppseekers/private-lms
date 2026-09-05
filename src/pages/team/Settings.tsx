@@ -19,17 +19,22 @@ import {
   FolderTree,
   Bell,
   CalendarDays,
-  CreditCard
+  CreditCard,
+  Download,
+  KeyRound
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDatabase, PermissionCategory } from '@/context/DatabaseContext';
 import { StaffMember } from '@/types';
+import { isUserAdmin } from '@/lib/staffPermissions';
+import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
 
 type TabType = 'staff' | 'permissions' | 'taxonomies' | 'communications' | 'calendar' | 'billing' | 'developer' | 'audit';
 type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | null;
 
 export default function TeamSettings() {
   const { staff, setStaff, currentUser, setCurrentUser, students, setStudents, permissionsMatrix, setPermissionsMatrix, roles } = useDatabase();
+  const isAdmin = isUserAdmin(currentUser);
   const [activeTab, setActiveTab] = useState<TabType>('permissions');
   
   const [searchQuery, setSearchQuery] = useState('');
@@ -40,6 +45,27 @@ export default function TeamSettings() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isEditMode, setIsEditMode] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [userForPasswordChange, setUserForPasswordChange] = useState<TargetUserForPassword | null>(null);
+
+  const handleSaveUserPassword = async (userId: string, userType: 'student' | 'staff', newPassword: string) => {
+    const updatedStaff = staff.map(s => {
+      if (s.id === userId) {
+        return { ...s, password: newPassword };
+      }
+      return s;
+    });
+    setStaff(updatedStaff);
+    const token = localStorage.getItem('auth_token') || 'admin_token';
+    try {
+      await fetch('/api/admin/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ userId, newPassword, userType: 'staff' })
+      });
+    } catch (e) {
+      console.warn('Backend password sync error (fallback active):', e);
+    }
+  };
   
   const [formName, setFormName] = useState('');
   const [formEmail, setFormEmail] = useState('');
@@ -75,6 +101,56 @@ export default function TeamSettings() {
       action
     };
     setAuditLogs(prev => [newLog, ...prev]);
+  };
+
+  const handleDownloadFavicon = (size: number, format: 'png' | 'svg') => {
+    try {
+      if (format === 'svg') {
+        const a = document.createElement('a');
+        a.href = '/favicon.svg';
+        a.download = 'uppseekers-favicon.svg';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+      }
+
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.src = '/favicon.svg';
+      img.onload = () => {
+        try {
+          const canvas = document.createElement('canvas');
+          canvas.width = size;
+          canvas.height = size;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.imageSmoothingEnabled = true;
+            ctx.imageSmoothingQuality = 'high';
+            ctx.drawImage(img, 0, 0, size, size);
+            const dataUrl = canvas.toDataURL('image/png');
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = `uppseekers-favicon-${size}x${size}.png`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+        } catch (err) {
+          console.error('Error generating favicon raster preview:', err);
+        }
+      };
+      img.onerror = () => {
+        const a = document.createElement('a');
+        a.href = '/favicon.svg';
+        a.download = 'uppseekers-favicon.svg';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      };
+    } catch (e) {
+      console.error('Download error:', e);
+    }
   };
 
   const openAddModal = () => {
@@ -168,7 +244,14 @@ export default function TeamSettings() {
 
   const openAssignModal = (member: StaffMember) => {
     setAssignTargetId(member.id);
-    const assigned = students.filter(s => s.counselor === member.name).map(s => s.id);
+    const assigned = students.filter(s => 
+      s.counselor === member.name || 
+      s.researchMentor === member.name || 
+      s.satMathMentor === member.name || 
+      s.satVerbalMentor === member.name ||
+      (s as any).mentor === member.name ||
+      (s as any).counsellor === member.name
+    ).map(s => s.id);
     setAssignedStudentIds(assigned);
     setIsAssignModalOpen(true);
   };
@@ -186,13 +269,28 @@ export default function TeamSettings() {
     const member = staff.find(s => s.id === assignTargetId);
     if (!member) return;
 
+    const roleUpper = (member.role || '').toUpperCase().replace(/[\s-]+/g, '_');
+
     const updatedStudents = students.map(s => {
       if (assignedStudentIds.includes(s.id)) {
-        return { ...s, counselor: member.name };
-      } else if (s.counselor === member.name) {
-        return { ...s, counselor: '' };
+        if (roleUpper === 'RESEARCH_GUIDE') {
+          return { ...s, researchMentor: member.name };
+        } else if (roleUpper === 'SAT_MATH_FACULTY') {
+          return { ...s, satMathMentor: member.name };
+        } else if (roleUpper === 'SAT_VERBAL_FACULTY') {
+          return { ...s, satVerbalMentor: member.name };
+        } else {
+          return { ...s, counselor: member.name, mentor: member.name } as any;
+        }
+      } else {
+        const updated = { ...s } as any;
+        if (updated.counselor === member.name) updated.counselor = '';
+        if (updated.researchMentor === member.name) updated.researchMentor = '';
+        if (updated.satMathMentor === member.name) updated.satMathMentor = '';
+        if (updated.satVerbalMentor === member.name) updated.satVerbalMentor = '';
+        if (updated.mentor === member.name) updated.mentor = '';
+        return updated;
       }
-      return s;
     });
     setStudents(updatedStudents);
 
@@ -201,7 +299,7 @@ export default function TeamSettings() {
     );
     setStaff(updatedStaff);
 
-    addAuditLog(`Updated student assignments for ${member.name}`);
+    addAuditLog(`Updated student assignments for ${member.name} (${assignedStudentIds.length} assigned)`);
     setIsAssignModalOpen(false);
   };
 
@@ -253,7 +351,45 @@ export default function TeamSettings() {
   const [showSaveSuccess, setShowSaveSuccess] = useState(false);
 
   const savePermissions = () => {
-    addAuditLog(`Updated permissions for ${selectedRoleForPerms} role`);
+    // 1. Explicitly persist matrix to state and localStorage
+    setPermissionsMatrix({ ...permissionsMatrix });
+    try {
+      localStorage.setItem('uppseekers_permissions_v2', JSON.stringify(permissionsMatrix));
+    } catch (e) {
+      console.warn('Could not save permissions to localStorage:', e);
+    }
+
+    // 2. Check if selected role has global scope
+    const roleCategories = permissionsMatrix[selectedRoleForPerms] || [];
+    const hasGlobalScope = roleCategories.some(cat => 
+      cat.items.some(item => item.enabled && item.scope && item.scope.toLowerCase().includes('global'))
+    );
+
+    const isManagerRole = selectedRoleForPerms === 'CATEGORY_MANAGER' || 
+                          selectedRoleForPerms.includes('CATEGORY') ||
+                          selectedRoleForPerms === 'OPERATIONS_LEAD' ||
+                          selectedRoleForPerms === 'SYSTEM_ADMIN';
+
+    if (hasGlobalScope || isManagerRole) {
+      // Sync all staff members of this role to have students: 'All'
+      const updatedStaff = staff.map(s => {
+        const sRole = (s.role || '').toUpperCase().replace(/[\s-]+/g, '_');
+        const targetRole = selectedRoleForPerms.toUpperCase().replace(/[\s-]+/g, '_');
+        if (sRole === targetRole) {
+          return { ...s, students: 'All' };
+        }
+        return s;
+      });
+      setStaff(updatedStaff);
+
+      const curRole = (currentUser.role || '').toUpperCase().replace(/[\s-]+/g, '_');
+      const targetRole = selectedRoleForPerms.toUpperCase().replace(/[\s-]+/g, '_');
+      if (curRole === targetRole) {
+        setCurrentUser({ ...currentUser, students: 'All' });
+      }
+    }
+
+    addAuditLog(`Updated & saved permissions for ${selectedRoleForPerms} role (Global Scope: ${hasGlobalScope || isManagerRole ? 'Active' : 'Custom'})`);
     setShowSaveSuccess(true);
     setTimeout(() => {
       setShowSaveSuccess(false);
@@ -347,7 +483,7 @@ export default function TeamSettings() {
                 <tr>
                   <th className="px-6 py-4">Name & Email</th>
                   <th className="px-6 py-4">Role</th>
-                  <th className="px-6 py-4">Password</th>
+                  {isAdmin && <th className="px-6 py-4">Password</th>}
                   <th className="px-6 py-4">Assigned Students</th>
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4 text-right">Actions</th>
@@ -365,9 +501,11 @@ export default function TeamSettings() {
                         {member.role.replace(/_/g, ' ')}
                       </span>
                     </td>
-                    <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                      {member.password || '---'}
-                    </td>
+                    {isAdmin && (
+                      <td className="px-6 py-4 font-mono text-xs text-slate-500">
+                        {member.password || '---'}
+                      </td>
+                    )}
                     <td className="px-6 py-4 text-slate-600 font-medium">
                       {(member.students || '').toLowerCase().includes('all') || (member.students || '').toLowerCase().includes('global') || member.role === 'CATEGORY_MANAGER' || member.role === 'SYSTEM_ADMIN' ? (
                         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-md text-xs font-bold border border-emerald-200">
@@ -386,6 +524,24 @@ export default function TeamSettings() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right space-x-2">
+                      {isAdmin && (
+                        <Button 
+                          onClick={() => setUserForPasswordChange({
+                            id: member.id,
+                            name: member.name,
+                            email: member.email,
+                            role: member.role,
+                            type: 'staff',
+                            currentPassword: member.password || 'Staff@123'
+                          })} 
+                          variant="ghost" 
+                          size="sm" 
+                          className="text-slate-500 hover:text-amber-600"
+                          title="Change Password (Admin Only)"
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </Button>
+                      )}
                       <Button onClick={() => openEditModal(member)} variant="ghost" size="sm" className="text-slate-500 hover:text-indigo-600">
                         <Edit className="w-4 h-4" />
                       </Button>
@@ -865,6 +1021,72 @@ export default function TeamSettings() {
                </div>
              </CardContent>
            </Card>
+
+            {/* BRAND ASSETS & OFFICIAL FAVICON CARD */}
+            <Card className="border-slate-200 shadow-sm md:col-span-2">
+              <CardHeader className="bg-slate-50 border-b border-slate-200 flex flex-row items-center justify-between">
+                <div>
+                  <CardTitle className="text-sm font-bold uppercase tracking-wider text-slate-900">Official Brand Assets & Favicon</CardTitle>
+                  <p className="text-xs text-slate-500 mt-0.5">Download the official application favicon and branding mark in crisp high-resolution pixel formats and vector SVG.</p>
+                </div>
+                <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 font-bold text-xs rounded-md border border-indigo-200">
+                  Active in Browser
+                </span>
+              </CardHeader>
+              <CardContent className="p-6">
+                <div className="flex flex-col md:flex-row items-center gap-8 bg-slate-50/60 p-6 rounded-2xl border border-slate-200">
+                  <div className="flex flex-col items-center">
+                    <div className="w-28 h-28 rounded-3xl bg-gradient-to-tr from-indigo-600 via-indigo-700 to-blue-600 p-1 shadow-xl flex items-center justify-center border-4 border-white">
+                      <img src="/favicon.svg" alt="App Favicon" className="w-20 h-20 drop-shadow-md" />
+                    </div>
+                    <span className="text-[11px] font-mono text-slate-500 mt-2">favicon.svg (512×512)</span>
+                  </div>
+
+                  <div className="flex-1 space-y-3 text-center md:text-left">
+                    <div>
+                      <h4 className="font-bold text-slate-900 text-base">Always Look Up • Graduation Cap Emblem</h4>
+                      <p className="text-xs text-slate-600 mt-1 max-w-xl">
+                        The official favicon geometry features the white mortarboard graduation cap on a royal indigo-to-blue gradient squircle with top-light highlight and soft depth shadow.
+                      </p>
+                    </div>
+
+                    <div className="pt-2 flex flex-wrap gap-2.5 justify-center md:justify-start">
+                      <Button
+                        size="sm"
+                        onClick={() => handleDownloadFavicon(512, 'png')}
+                        className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-sm"
+                      >
+                        <Download className="w-3.5 h-3.5 mr-1.5" /> Download 512×512 PNG
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDownloadFavicon(256, 'png')}
+                        className="border-slate-300 bg-white hover:bg-slate-50 font-bold text-xs text-slate-700"
+                      >
+                        <Download className="w-3.5 h-3.5 mr-1.5" /> 256×256 PNG
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDownloadFavicon(64, 'png')}
+                        className="border-slate-300 bg-white hover:bg-slate-50 font-bold text-xs text-slate-700"
+                      >
+                        <Download className="w-3.5 h-3.5 mr-1.5" /> 64×64 PNG
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleDownloadFavicon(512, 'svg')}
+                        className="border-indigo-200 bg-indigo-50/50 hover:bg-indigo-100/60 font-bold text-xs text-indigo-700"
+                      >
+                        <Download className="w-3.5 h-3.5 mr-1.5" /> Vector SVG
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
         </div>
       )}
 
@@ -919,8 +1141,12 @@ export default function TeamSettings() {
                 <input value={formEmail} onChange={e => setFormEmail(e.target.value)} type="email" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Password (Optional)</label>
-                <input value={formPassword} onChange={e => setFormPassword(e.target.value)} type="text" placeholder="Auto-generate if empty" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4" />
+                {isAdmin && (
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Password (Admin Only)</label>
+                    <input value={formPassword} onChange={e => setFormPassword(e.target.value)} type="text" placeholder="Auto-generate if empty" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4" />
+                  </div>
+                )}
                 <label className="block text-xs font-bold text-slate-700 mb-1">Role Assignment</label>
                 <select value={formRole} onChange={e => {
                   setFormRole(e.target.value);
@@ -981,6 +1207,16 @@ export default function TeamSettings() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Admin Change Password Modal in Team Settings */}
+      {isAdmin && userForPasswordChange && (
+        <ChangeUserPasswordModal
+          isOpen={Boolean(userForPasswordChange)}
+          onClose={() => setUserForPasswordChange(null)}
+          targetUser={userForPasswordChange}
+          onSavePassword={handleSaveUserPassword}
+        />
       )}
     </div>
   );
