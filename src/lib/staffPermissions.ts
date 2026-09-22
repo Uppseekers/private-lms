@@ -197,3 +197,200 @@ export function getScopedStudentsForStaff(
   return students.filter(student => isStudentAssignedToStaff(student, currentUser, permissionsMatrix));
 }
 
+/**
+ * Determines whether a student is allowed to view an event in their schedule or dashboard.
+ * Requirements:
+ * - Only sessions where the student has been explicitly added by the counselor (by studentId, studentIds, or matching student name).
+ * - In batches case, ONLY students assigned/enrolled in that batch will get these sessions in their schedule.
+ * - Different students MUST NEVER see scheduled sessions of other students.
+ */
+export function canStudentAccessEvent(
+  event: any,
+  student?: any | null,
+  batches: any[] = []
+): boolean {
+  if (!student || !event) return false;
+
+  const studentId = (student.id || '').trim().toLowerCase();
+  const studentName = (student.name || '').trim().toLowerCase();
+  const studentEmail = (student.email || '').trim().toLowerCase();
+
+  // 1. Batch Case:
+  // In batches case, ONLY students assigned/enrolled in that batch will get these sessions at their schedules
+  if (event.batch) {
+    const targetBatch = batches.find(b => 
+      b.id === event.batch || 
+      (b.name && b.name.toLowerCase() === String(event.batch).toLowerCase())
+    );
+    if (!targetBatch || !Array.isArray(targetBatch.students)) {
+      return false;
+    }
+    return targetBatch.students.some((sidOrName: string) => {
+      if (!sidOrName) return false;
+      const clean = String(sidOrName).trim().toLowerCase();
+      return clean === studentId || clean === studentName;
+    });
+  }
+
+  // 2. Individual Sessions:
+  // Must only be visible to the specific student added for the session
+
+  // Direct studentId match
+  if (event.studentId) {
+    return String(event.studentId).trim().toLowerCase() === studentId;
+  }
+
+  // studentIds array match
+  if (Array.isArray(event.studentIds) && event.studentIds.length > 0) {
+    return event.studentIds.some((sid: string) => String(sid).trim().toLowerCase() === studentId);
+  }
+
+  // Attendees array match
+  if (Array.isArray(event.attendees) && event.attendees.length > 0) {
+    return event.attendees.some((att: any) => {
+      if (typeof att === 'string') {
+        const clean = att.trim().toLowerCase();
+        return clean === studentId || clean === studentName || clean === studentEmail;
+      }
+      if (att && typeof att === 'object') {
+        const attId = (att.id || '').trim().toLowerCase();
+        const attEmail = (att.email || '').trim().toLowerCase();
+        const attName = (att.name || '').trim().toLowerCase();
+        return (
+          (attId && attId === studentId) ||
+          (attEmail && attEmail === studentEmail) ||
+          (attName && attName === studentName)
+        );
+      }
+      return false;
+    });
+  }
+
+  // Check 'students' string field (when counselor typed or selected the student name)
+  if (typeof event.students === 'string' && event.students.trim()) {
+    const studentsStr = event.students.trim().toLowerCase();
+    
+    // Disallow generic or placeholder labels (which would over-expose to other students)
+    const genericPlaceholders = [
+      'all', 
+      'all students', 
+      'all assigned students', 
+      '15 students', 
+      'batch cohort',
+      'batch',
+      'general'
+    ];
+    if (genericPlaceholders.includes(studentsStr)) {
+      return false;
+    }
+
+    // Exact or comma-separated name match
+    if (studentName) {
+      if (studentsStr === studentName) return true;
+      const tokens = studentsStr.split(/[,;&+]/).map(s => s.trim());
+      if (tokens.includes(studentName)) return true;
+    }
+
+    // Direct ID in string
+    if (studentId && (studentsStr === studentId || studentsStr.split(/[,;&+]/).map(s => s.trim()).includes(studentId))) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Determines whether a staff member has access to view, manage, or join a scheduled session.
+ * Requirements:
+ * - Only team (admin / global management), assigned counselor, and respective student-mentor
+ *   should have the access and meet details in their schedule.
+ * - In batches case, assigned mentors of the batch have access to their batch's sessions and meet details.
+ * - Other staff members do not have access to sessions of students they do not mentor or counsel.
+ */
+export function canStaffAccessEvent(
+  event: any,
+  currentUser: StaffMember | null,
+  students: Student[] = [],
+  batches: any[] = [],
+  permissionsMatrix?: Record<string, any[]>
+): boolean {
+  if (!currentUser || !event) return false;
+
+  // 1. Team administrators and management have full access to all schedules and meet details
+  if (isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix)) {
+    return true;
+  }
+
+  const staffName = (currentUser.name || '').trim().toLowerCase();
+  const staffEmail = (currentUser.email || '').trim().toLowerCase();
+  const staffId = (currentUser.id || '').trim().toLowerCase();
+
+  const matchesStaff = (val?: string) => {
+    if (!val) return false;
+    const clean = val.toLowerCase().trim();
+    return (
+      clean === staffName ||
+      clean === staffEmail ||
+      clean === staffId ||
+      (staffName.length > 2 && clean.includes(staffName)) ||
+      (clean.length > 2 && staffName.includes(clean))
+    );
+  };
+
+  // 2. Event Host, Organiser, or Assigned By
+  if (matchesStaff(event.host) || matchesStaff(event.organiser) || matchesStaff(event.assignedBy)) {
+    return true;
+  }
+
+  // 3. Attendees array match
+  if (Array.isArray(event.attendees) && event.attendees.length > 0) {
+    const isAttending = event.attendees.some((att: any) => {
+      if (typeof att === 'string') return matchesStaff(att);
+      if (att && typeof att === 'object') {
+        return matchesStaff(att.id) || matchesStaff(att.name) || matchesStaff(att.email);
+      }
+      return false;
+    });
+    if (isAttending) return true;
+  }
+
+  // 4. Batch Session Access:
+  // If the event belongs to a batch, ONLY mentors assigned to that batch (or admin team) have access
+  if (event.batch) {
+    const batch = batches.find(b => 
+      b.id === event.batch || 
+      (b.name && b.name.toLowerCase() === String(event.batch).toLowerCase())
+    );
+    if (batch && Array.isArray(batch.mentors)) {
+      if (batch.mentors.some((m: string) => matchesStaff(m))) {
+        return true;
+      }
+    }
+    // If it's a batch session and current staff is NOT an assigned mentor for this batch, do not grant access
+    return false;
+  }
+
+  // 5. Individual Student Session Access:
+  // The student's assigned counselor and respective student-mentors have access
+  let targetStudent: Student | undefined;
+  if (event.studentId) {
+    targetStudent = students.find(s => s.id === event.studentId);
+  }
+  if (!targetStudent && typeof event.students === 'string' && event.students.trim()) {
+    const studentsField = event.students.trim().toLowerCase();
+    targetStudent = students.find(s => {
+      if (!s.name) return false;
+      const sName = s.name.toLowerCase();
+      return studentsField === sName || studentsField.includes(sName);
+    });
+  }
+
+  if (targetStudent) {
+    return isStudentAssignedToStaff(targetStudent, currentUser, permissionsMatrix);
+  }
+
+  return false;
+}
+
+

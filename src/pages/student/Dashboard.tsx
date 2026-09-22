@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
+import { canStudentAccessEvent } from '@/lib/staffPermissions';
 
 interface ActivityItem {
   id: string;
@@ -65,8 +66,8 @@ export default function StudentDashboard() {
   const operationalLogs = student?.operationalLogs || [];
   const profileActivities = student?.activities || [];
 
-  const studentBatches = batches.filter(b => b.students?.includes(student?.id));
-  const studentEvents = events.filter(e => studentBatches.some(b => b.id === e.batch) || e.students?.includes(student?.id));
+  const studentBatches = batches.filter(b => b.students?.includes(student?.id) || b.students?.includes(student?.name));
+  const studentEvents = events.filter(e => canStudentAccessEvent(e, student, batches));
 
   // --- 1. TASK BREAKDOWN DATA ---
   const completedTasks = tasks.filter((t: any) => t.stage === 'COMPLETED').length;

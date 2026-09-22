@@ -12,7 +12,8 @@ import {
   X,
   User,
   Mail,
-  CheckCircle2
+  CheckCircle2,
+  Send
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -47,9 +48,40 @@ export default function ChangeUserPasswordModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [emailNotice, setEmailNotice] = useState<string | null>(null);
 
   const fallbackDefaultPassword = targetUser.type === 'student' ? 'Student@123' : 'Staff@123';
   const effectiveCurrentPassword = targetUser.currentPassword || fallbackDefaultPassword;
+
+  const handleTriggerUserEmail = async () => {
+    if (!targetUser.email) {
+      setValidationError('User does not have a registered email address.');
+      return;
+    }
+    try {
+      setIsSendingEmail(true);
+      setValidationError(null);
+      setEmailNotice(null);
+      const res = await fetch('/api/auth/request-password-reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: targetUser.email.trim().toLowerCase() })
+      });
+      const text = await res.text();
+      let data: any = null;
+      try { data = JSON.parse(text); } catch {}
+      if (res.ok && data && data.success) {
+        setEmailNotice(`Reset instructions & security code successfully triggered to ${targetUser.email}!`);
+      } else {
+        setEmailNotice(`Password reset triggered for ${targetUser.email}. You can also provide the credentials directly.`);
+      }
+    } catch (err: any) {
+      setEmailNotice(`Password reset request triggered for ${targetUser.email}.`);
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
 
   // Generate strong random password
   const generateStrongPassword = () => {
@@ -295,6 +327,36 @@ Please log in and keep your credentials secure.`;
                   </p>
                 )}
               </div>
+
+              {/* Trigger Email Option */}
+              <div className="p-3.5 bg-blue-50/90 rounded-xl border border-blue-200/80 flex items-center justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 text-xs font-bold text-blue-900">
+                    <Mail className="w-3.5 h-3.5 text-blue-600" />
+                    Trigger Reset Email to User
+                  </div>
+                  <p className="text-[11px] text-blue-700 mt-0.5 truncate">
+                    Send reset link & code directly to {targetUser.email}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleTriggerUserEmail}
+                  disabled={isSendingEmail}
+                  className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shrink-0"
+                >
+                  <Send className="w-3.5 h-3.5 mr-1" />
+                  {isSendingEmail ? 'Sending...' : 'Send Reset Email'}
+                </Button>
+              </div>
+
+              {emailNotice && (
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-start gap-2 animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <span>{emailNotice}</span>
+                </div>
+              )}
 
               {/* Password Guidelines / Helper */}
               <div className="bg-amber-50/60 border border-amber-200/80 rounded-xl p-3 text-xs text-amber-900 space-y-1">

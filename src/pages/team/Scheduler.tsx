@@ -10,7 +10,7 @@ import {
 import { useDatabase, EventItem } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
 import { MeetingMOM, MeetingResourceLink, MeetingTask, OperationalLog, BatchClassSession } from '@/types';
-import { canStaffAccessAllStudents, isUserAdmin, isStudentAssignedToStaff } from '@/lib/staffPermissions';
+import { canStaffAccessAllStudents, isUserAdmin, isStudentAssignedToStaff, canStaffAccessEvent } from '@/lib/staffPermissions';
 import { 
   DAY_OF_WEEK_OPTIONS, 
   SCHEDULE_DAY_PRESETS, 
@@ -107,13 +107,7 @@ export default function TeamScheduler() {
     : batches.filter(b => b.mentors.some(m => m.toLowerCase() === (currentUser?.name || '').toLowerCase()));
 
   const visibleEvents = events.filter((e: any) => {
-    if (hasGlobalScope) return true;
-    if (e.host === currentUser.name) return true;
-    if (e.batch) {
-      const batch = batches.find((b: any) => b.id === e.batch);
-      if (batch && batch.mentors.includes(currentUser.name)) return true;
-    }
-    return false;
+    return canStaffAccessEvent(e, currentUser, students, batches, permissionsMatrix);
   }).filter((e: any) => {
     if (horizonFilter === 'upcoming') {
       if (isEventInPast(e)) return false;
@@ -258,11 +252,23 @@ export default function TeamScheduler() {
       }
     }
 
+    if (audienceType === 'individual') {
+      if (!selectedStudentId) {
+        alert("Please select the student who will attend this session.");
+        return;
+      }
+    } else {
+      if (!selectedBatchId) {
+        alert("Please select the batch cohort for this session.");
+        return;
+      }
+    }
+
     const targetStudent = students.find(s => s.id === selectedStudentId);
     const targetBatch = batches.find(b => b.id === selectedBatchId);
     const studentLabel = audienceType === 'batch' 
       ? (targetBatch?.name || 'Batch Cohort') 
-      : (targetStudent ? targetStudent.name : 'All Assigned Students');
+      : (targetStudent ? targetStudent.name : '');
 
     const durationStr = formData.endTime ? `${formData.startTime} - ${formData.endTime}` : '1 hr';
     const locationLink = formData.location.trim() || 'https://meet.google.com';

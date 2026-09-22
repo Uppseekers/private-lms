@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 import { useDatabase } from '@/context/DatabaseContext';
 import { normalizeTaskStage, normalizeTaskCategory } from '@/lib/taskActivityUtils';
-import { getScopedStudentsForStaff, canStaffAccessAllStudents } from '@/lib/staffPermissions';
+import { getScopedStudentsForStaff, canStaffAccessAllStudents, canStaffAccessEvent } from '@/lib/staffPermissions';
 import { 
   Users, BookOpen, CheckSquare, Clock, Filter, Search, 
   CheckCircle2, AlertCircle, ArrowUpRight, Calendar, UserCheck, 
@@ -201,10 +201,15 @@ export default function TeamDashboard() {
     });
   };
 
+  // Scoped events accessible by the logged-in staff member
+  const accessibleEvents = useMemo(() => {
+    return events.filter(evt => canStaffAccessEvent(evt, currentUser, students, batches, permissionsMatrix));
+  }, [events, currentUser, students, batches, permissionsMatrix]);
+
   // Day-wise Scheduled vs Completed Meetings Filtered Events
   const daywiseFilteredEvents = useMemo(() => {
     return filterEventsList(
-      events,
+      accessibleEvents,
       daywiseTimeframe,
       daywiseCustomFrom,
       daywiseCustomTo,
@@ -212,7 +217,7 @@ export default function TeamDashboard() {
       daywiseBatchSearch,
       daywiseStudentSearch
     );
-  }, [events, daywiseTimeframe, daywiseCustomFrom, daywiseCustomTo, daywiseStaffSearch, daywiseBatchSearch, daywiseStudentSearch]);
+  }, [accessibleEvents, daywiseTimeframe, daywiseCustomFrom, daywiseCustomTo, daywiseStaffSearch, daywiseBatchSearch, daywiseStudentSearch]);
 
   // Day-wise Scheduled vs Completed Meetings Chart Data
   const dayWiseMeetingData = useMemo(() => {
@@ -244,7 +249,7 @@ export default function TeamDashboard() {
   // Meetings List View Filtered Events
   const meetingsListFilteredEvents = useMemo(() => {
     return filterEventsList(
-      events,
+      accessibleEvents,
       listTimeframe,
       listCustomFrom,
       listCustomTo,
@@ -252,7 +257,7 @@ export default function TeamDashboard() {
       listBatchSearch,
       listStudentSearch
     );
-  }, [events, listTimeframe, listCustomFrom, listCustomTo, listStaffSearch, listBatchSearch, listStudentSearch]);
+  }, [accessibleEvents, listTimeframe, listCustomFrom, listCustomTo, listStaffSearch, listBatchSearch, listStudentSearch]);
 
   // 1. Intake Data calculation
   const intakeData = useMemo(() => {
@@ -308,8 +313,8 @@ export default function TeamDashboard() {
       });
     });
 
-    // From Meeting Post-Session Tasks
-    events.forEach(evt => {
+    // From Meeting Post-Session Tasks (Filtered by accessible events)
+    accessibleEvents.forEach(evt => {
       (evt.tasks || []).forEach((mt: any) => {
         const studentObj = students.find(s => s.id === mt.assignedToStudentId);
         const targetStudentId = mt.assignedToStudentId || studentObj?.id;
@@ -339,7 +344,7 @@ export default function TeamDashboard() {
     });
 
     return taskList;
-  }, [students, scopedStudents, events, currentUser]);
+  }, [students, scopedStudents, accessibleEvents, currentUser]);
 
   // 4. Stage-wise Tasks Chart Filtering Logic
   const filteredTasksForChart = useMemo(() => {

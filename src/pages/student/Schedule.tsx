@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SessionRating } from '@/types';
+import { canStudentAccessEvent } from '@/lib/staffPermissions';
 
 export default function StudentSchedule() {
   const { currentUser, events, setEvents, batches } = useDatabase();
@@ -40,16 +41,11 @@ export default function StudentSchedule() {
   
   const streams = ['All Streams', 'Counselling (1-on-1)', 'SAT Prep', 'Research Mentoring'];
 
-  // Match events relevant to this student
-  const studentBatches = batches.filter(b => b.students?.includes(student?.id) || b.students?.includes(student?.name));
-  const studentBatchNames = studentBatches.map(b => b.name);
-
-  const studentEvents = events.filter((e: any) => {
-    if (e.studentId && e.studentId === student.id) return true;
-    if (e.students && (e.students.toLowerCase().includes(student.name?.toLowerCase() || '') || e.students === 'All')) return true;
-    if (e.batch && studentBatchNames.includes(e.batch)) return true;
-    return true; // Default show relevant calendar items
-  });
+  // Strictly filter events to ONLY those this student has access to:
+  // 1. Explicitly added by the counselor for the session
+  // 2. Enrolled in the batch (in batches case, only assigned students will get these sessions in their schedule)
+  // 3. Different students MUST NEVER see scheduled sessions of other students
+  const studentEvents = events.filter((e: any) => canStudentAccessEvent(e, student, batches));
 
   const formattedEvents = studentEvents.map((e: any) => ({
     ...e,

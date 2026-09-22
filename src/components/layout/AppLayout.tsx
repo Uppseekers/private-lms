@@ -25,13 +25,16 @@ import {
   Clock,
   AlertCircle,
   Sparkles,
-  BookOpen
+  BookOpen,
+  Key,
+  Mail
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getScopedStudentsForStaff } from '@/lib/staffPermissions';
 import { Role } from '@/types';
 import { useDatabase } from '@/context/DatabaseContext';
 import { GoogleSheetsSyncModal } from '@/components/GoogleSheetsSyncModal';
+import ChangePasswordModal from '@/components/ChangePasswordModal';
 
 interface SidebarItem {
   name: string;
@@ -70,6 +73,8 @@ export default function AppLayout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [readNotifIds, setReadNotifIds] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem('uppseekers_read_notifications') || '[]');
@@ -80,13 +85,15 @@ export default function AppLayout() {
   const [notifFilter, setNotifFilter] = useState<'ALL' | 'TASKS' | 'DOCS' | 'ESSAYS'>('ALL');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const notifDropdownRef = useRef<HTMLDivElement>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   const { currentUser, permissionsMatrix, staff, students, setCurrentUser, setIsAuthenticated } = useDatabase();
   
-  // Close mobile drawer and notifications on navigation/click-outside
+  // Close mobile drawer, notifications, and user menu on navigation/click-outside
   useEffect(() => {
     setIsMobileMenuOpen(false);
     setIsNotificationOpen(false);
+    setIsUserMenuOpen(false);
   }, [location.pathname]);
 
   useEffect(() => {
@@ -94,12 +101,13 @@ export default function AppLayout() {
       if (notifDropdownRef.current && !notifDropdownRef.current.contains(e.target as Node)) {
         setIsNotificationOpen(false);
       }
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
     };
-    if (isNotificationOpen) {
-      document.addEventListener('mousedown', handleClickOutside);
-    }
+    document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isNotificationOpen]);
+  }, []);
 
   const markAllAsRead = () => {
     const allIds = notifications.map(n => n.id);
@@ -385,17 +393,31 @@ export default function AppLayout() {
           </nav>
         </div>
         
-        <div className="p-4 border-t border-slate-100">
+        <div className="p-4 border-t border-slate-100 space-y-1.5">
+          <button
+            onClick={() => setIsChangePasswordOpen(true)}
+            className="flex items-center gap-3 p-2 w-full rounded-xl hover:bg-slate-50 transition-colors text-left text-slate-700 hover:text-blue-600 group"
+            title="Change password or trigger email reset"
+          >
+            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 group-hover:bg-blue-100 transition-colors">
+              <Key className="h-4 w-4" />
+            </div>
+            <div className="overflow-hidden min-w-0 flex-1">
+              <p className="text-xs font-semibold truncate text-slate-800 group-hover:text-blue-600">Change Password</p>
+              <p className="text-[10px] text-slate-400 truncate">Via email verification</p>
+            </div>
+          </button>
+
           <button
             onClick={handleLogout}
             className="flex items-center gap-3 p-2 w-full rounded-xl hover:bg-slate-50 transition-colors text-left"
           >
-            <div className="w-10 h-10 rounded-full bg-slate-200 flex-shrink-0 flex items-center justify-center">
-               <LogOut className="h-5 w-5 text-slate-500" />
+            <div className="w-8 h-8 rounded-lg bg-slate-100 text-slate-500 flex-shrink-0 flex items-center justify-center">
+               <LogOut className="h-4 w-4" />
             </div>
-            <div className="overflow-hidden">
-              <p className="text-sm font-semibold truncate text-slate-900">{isTeam ? currentUser.name : 'Sign Out'}</p>
-              <p className="text-xs text-slate-400 truncate">{isTeam ? currentUser.role : 'End Session'}</p>
+            <div className="overflow-hidden min-w-0 flex-1">
+              <p className="text-xs font-semibold truncate text-slate-900">{isTeam ? currentUser.name : 'Sign Out'}</p>
+              <p className="text-[10px] text-slate-400 truncate">{isTeam ? currentUser.role : 'End Session'}</p>
             </div>
           </button>
         </div>
@@ -451,17 +473,33 @@ export default function AppLayout() {
               </nav>
             </div>
 
-            <div className="p-4 border-t border-slate-100 bg-slate-50">
+            <div className="p-4 border-t border-slate-100 bg-slate-50 space-y-2">
+              <button
+                onClick={() => {
+                  setIsMobileMenuOpen(false);
+                  setIsChangePasswordOpen(true);
+                }}
+                className="flex items-center gap-3 p-2.5 w-full bg-white rounded-xl border border-slate-200 text-left shadow-2xs hover:bg-slate-100 transition-colors"
+              >
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                  <Key className="h-4 w-4" />
+                </div>
+                <div className="overflow-hidden min-w-0 flex-1">
+                  <p className="text-xs font-bold truncate text-slate-900">Change Password</p>
+                  <p className="text-[10px] text-slate-500 truncate">Via email verification</p>
+                </div>
+              </button>
+
               <button
                 onClick={handleLogout}
                 className="flex items-center gap-3 p-2.5 w-full bg-white rounded-xl border border-slate-200 text-left shadow-2xs hover:bg-slate-100 transition-colors"
               >
-                <div className="w-9 h-9 rounded-full bg-slate-100 flex-shrink-0 flex items-center justify-center">
-                  <LogOut className="h-4 h-4 text-slate-600" />
+                <div className="w-8 h-8 rounded-lg bg-slate-100 flex items-center justify-center shrink-0">
+                  <LogOut className="h-4 w-4 text-slate-600" />
                 </div>
                 <div className="overflow-hidden min-w-0 flex-1">
-                  <p className="text-sm font-bold truncate text-slate-900">{isTeam ? currentUser.name : 'Sign Out'}</p>
-                  <p className="text-xs text-slate-400 truncate">{isTeam ? currentUser.role : 'End Session'}</p>
+                  <p className="text-xs font-bold truncate text-slate-900">{isTeam ? currentUser.name : 'Sign Out'}</p>
+                  <p className="text-[10px] text-slate-400 truncate">{isTeam ? currentUser.role : 'End Session'}</p>
                 </div>
               </button>
             </div>
@@ -651,19 +689,69 @@ export default function AppLayout() {
               )}
             </div>
 
-            <div 
-              onClick={() => {
-                if (isTeam) {
-                  navigate('/team/users');
-                } else {
-                  navigate('/student/profile');
-                }
-              }}
-              title={`${accountName} - Click to view Profile`}
-              className="w-8 h-8 rounded-full bg-indigo-100 hover:bg-indigo-200 hover:scale-105 transition-all flex items-center justify-center text-indigo-700 font-bold text-xs relative cursor-pointer shadow-2xs border border-indigo-200 shrink-0"
-            >
-              {userInitials}
-              <div className="absolute top-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></div>
+            {/* User Account Dropdown */}
+            <div className="relative" ref={userMenuRef}>
+              <button 
+                onClick={() => setIsUserMenuOpen(!isUserMenuOpen)}
+                title={`${accountName} (${currentUser?.email || ''}) - Account Menu`}
+                className="w-8 h-8 rounded-full bg-indigo-100 hover:bg-indigo-200 hover:scale-105 transition-all flex items-center justify-center text-indigo-700 font-bold text-xs relative cursor-pointer shadow-2xs border border-indigo-200 shrink-0"
+              >
+                {userInitials}
+                <div className="absolute top-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></div>
+              </button>
+
+              {isUserMenuOpen && (
+                <div className="absolute right-0 mt-2 w-64 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                  <div className="p-3 bg-slate-50 border-b border-slate-100">
+                    <p className="text-xs font-bold text-slate-900 truncate">{accountName}</p>
+                    <p className="text-[11px] text-slate-500 truncate">{currentUser?.email || 'No email registered'}</p>
+                    <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                      <Shield className="w-2.5 h-2.5" />
+                      <span>{currentUser?.role || (isTeam ? 'Staff' : 'Student')}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-1.5 space-y-0.5 text-xs">
+                    <button
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        setIsChangePasswordOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-blue-50 hover:text-blue-700 rounded-xl font-medium transition-colors text-left"
+                    >
+                      <Key className="w-4 h-4 text-blue-600" />
+                      <div>
+                        <div className="font-semibold text-slate-800">Change Password</div>
+                        <div className="text-[10px] text-slate-400">Trigger email reset link</div>
+                      </div>
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        navigate(isTeam ? '/team/users' : '/student/profile');
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-slate-700 hover:bg-slate-50 rounded-xl font-medium transition-colors text-left"
+                    >
+                      <User className="w-4 h-4 text-slate-500" />
+                      <span>My Profile</span>
+                    </button>
+
+                    <div className="my-1 border-t border-slate-100" />
+
+                    <button
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        handleLogout();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-xl font-medium transition-colors text-left"
+                    >
+                      <LogOut className="w-4 h-4 text-rose-500" />
+                      <span>Sign Out</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -904,6 +992,14 @@ export default function AppLayout() {
         <GoogleSheetsSyncModal 
           isOpen={isSheetsModalOpen} 
           onClose={() => setIsSheetsModalOpen(false)} 
+        />
+
+        {/* Change Password Modal for all logged in users */}
+        <ChangePasswordModal
+          isOpen={isChangePasswordOpen}
+          onClose={() => setIsChangePasswordOpen(false)}
+          userEmail={currentUser?.email || ''}
+          userName={currentUser?.name || ''}
         />
       </main>
     </div>
