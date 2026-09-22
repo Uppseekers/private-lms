@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { GraduationCap } from 'lucide-react';
+import { GraduationCap, Lock, Mail } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
-import { auth, googleAuthProvider, db } from '@/lib/firebase';
-import { signInWithPopup } from 'firebase/auth';
+import { db } from '@/lib/firebase';
 import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
 
 export default function Login() {
@@ -134,84 +133,6 @@ export default function Login() {
     setError('Invalid email or password');
   };
 
-  const handleGoogleLogin = async () => {
-    setError('');
-    setLoading(true);
-    try {
-      const result = await signInWithPopup(auth, googleAuthProvider);
-      const user = result.user;
-      const userEmail = user.email || '';
-      
-      localStorage.setItem('auth_user_email', userEmail);
-      localStorage.setItem('auth_token', `google_${user.uid}_${userEmail}`);
-
-      // Check if this Google user is staff or student in state or Firestore
-      const staffUser = staff.find(s => s.email.toLowerCase() === userEmail.toLowerCase());
-      if (staffUser) {
-        setCurrentUser(staffUser);
-        setIsAuthenticated(true);
-        navigate('/team/dashboard');
-        return;
-      }
-
-      const studentUser = students.find(s => s.email.toLowerCase() === userEmail.toLowerCase());
-      if (studentUser) {
-        setCurrentUser({
-          ...studentUser,
-          role: 'STUDENT',
-          status: 'Active',
-        } as any);
-        setIsAuthenticated(true);
-        navigate('/student/dashboard');
-        return;
-      }
-
-      // Default to System Admin if uppseekers email, else Student profile
-      if (userEmail.toLowerCase().includes('uppseekers')) {
-        const adminStaff = {
-          id: user.uid,
-          name: user.displayName || 'Admin',
-          email: userEmail,
-          role: 'SYSTEM_ADMIN',
-          students: 'All',
-          status: 'Active' as const
-        };
-        await setDoc(doc(db, 'staff', user.uid), JSON.parse(JSON.stringify(adminStaff))).catch(() => {});
-        setCurrentUser(adminStaff);
-        setIsAuthenticated(true);
-        navigate('/team/dashboard');
-      } else {
-        const newStudent = {
-          id: `STU-${user.uid.slice(0, 6)}`,
-          name: user.displayName || 'Student',
-          email: userEmail,
-          phone: '',
-          intake: 'Fall 2026',
-          countries: ['USA'],
-          school: '',
-          counselor: 'Unassigned',
-          readiness: 0,
-          role: 'STUDENT' as const,
-          status: 'Active' as const,
-          activities: [],
-          shortlist: [],
-          documents: [],
-          essays: []
-        };
-        await setDoc(doc(db, 'students', newStudent.id), JSON.parse(JSON.stringify(newStudent))).catch(() => {});
-        setCurrentUser(newStudent as any);
-        setIsAuthenticated(true);
-        navigate('/student/dashboard');
-      }
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || 'Google Login failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
@@ -246,15 +167,7 @@ export default function Login() {
                 />
               </div>
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="block text-sm font-medium text-slate-700">Password</label>
-                  <Link 
-                    to={email ? `/reset-password?email=${encodeURIComponent(email)}` : '/reset-password'}
-                    className="text-xs font-medium text-blue-600 hover:text-blue-800 transition hover:underline"
-                  >
-                    Forgot / Change password?
-                  </Link>
-                </div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
                 <input 
                   type="password" 
                   value={password}
@@ -268,25 +181,15 @@ export default function Login() {
                 disabled={loading}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 mt-2"
               >
-                Sign In with Email
+                {loading ? 'Signing in...' : 'Sign In'}
               </Button>
             </form>
-            
-            <div className="mt-4 relative flex items-center">
-              <div className="flex-grow border-t border-slate-200"></div>
-              <span className="flex-shrink-0 mx-4 text-slate-400 text-sm">Or</span>
-              <div className="flex-grow border-t border-slate-200"></div>
-            </div>
 
-            <Button 
-              type="button"
-              variant="outline"
-              disabled={loading}
-              onClick={handleGoogleLogin}
-              className="w-full mt-4 bg-white border-slate-200 text-slate-700 hover:bg-slate-50 font-medium py-2.5"
-            >
-              {loading ? 'Signing in...' : 'Sign In with Google'}
-            </Button>
+            <div className="mt-6 pt-4 border-t border-slate-100 text-center">
+              <p className="text-xs text-slate-500">
+                Need to set or change your password? Please contact your platform administrator for a direct password update.
+              </p>
+            </div>
           </CardContent>
         </Card>
       </div>
