@@ -10,6 +10,7 @@ import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 import CompetencyRadar from '@/pages/student/CompetencyRadar';
 import PortalCredentialsManager from '@/components/PortalCredentialsManager';
 import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
+import BulkCounselorTransferModal from '@/components/BulkCounselorTransferModal';
 
 export default function TeamUsers() {
   const { students, setStudents, updateStudent, staff, setStaff, currentUser, permissionsMatrix } = useDatabase();
@@ -22,10 +23,12 @@ export default function TeamUsers() {
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
   const [selectedStaffIds, setSelectedStaffIds] = useState<string[]>([]);
   
-  // Modals
+  // Modals & Feedback
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isAddStaffModalOpen, setIsAddStaffModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isBulkTransferModalOpen, setIsBulkTransferModalOpen] = useState(false);
+  const [transferSuccessMessage, setTransferSuccessMessage] = useState<string | null>(null);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
   const [selectedStaffMember, setSelectedStaffMember] = useState<StaffMember | null>(null);
   const [userForPasswordChange, setUserForPasswordChange] = useState<TargetUserForPassword | null>(null);
@@ -279,14 +282,32 @@ export default function TeamUsers() {
             </div>
           )}
 
-          {/* Delete Selected Button */}
-          {activeViewTab === 'students' && selectedStudentIds.length > 0 && isAdmin && (
-            <Button 
-              onClick={handleDeleteSelectedStudents}
-              className="bg-red-600 hover:bg-red-700 text-white font-bold"
-            >
-              <Trash2 className="w-4 h-4 mr-2" /> Delete Selected ({selectedStudentIds.length})
-            </Button>
+          {/* Bulk Action Buttons */}
+          {activeViewTab === 'students' && selectedStudentIds.length > 0 && (
+            <div className="flex items-center gap-2">
+              <Button 
+                onClick={() => setIsBulkTransferModalOpen(true)}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold shadow-xs"
+              >
+                <UserCheck className="w-4 h-4 mr-2" /> Bulk Assign Counselor ({selectedStudentIds.length})
+              </Button>
+              {isAdmin && (
+                <Button 
+                  onClick={handleDeleteSelectedStudents}
+                  className="bg-red-600 hover:bg-red-700 text-white font-bold"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" /> Delete Selected ({selectedStudentIds.length})
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSelectedStudentIds([])}
+                className="text-xs text-slate-500 hover:text-slate-800"
+              >
+                Deselect All
+              </Button>
+            </div>
           )}
 
           {isAdmin && activeViewTab === 'staff' && selectedStaffIds.length > 0 && (
@@ -320,6 +341,51 @@ export default function TeamUsers() {
           )}
         </div>
       </div>
+
+      {/* Success alert banner */}
+      {transferSuccessMessage && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-2xl p-3.5 flex items-center justify-between text-xs font-semibold animate-in fade-in shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{transferSuccessMessage}</span>
+          </div>
+          <button onClick={() => setTransferSuccessMessage(null)} className="text-emerald-700 hover:text-emerald-900 p-1 rounded-md">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Active selection banner */}
+      {activeViewTab === 'students' && selectedStudentIds.length > 0 && (
+        <div className="bg-indigo-50 border border-indigo-200/90 rounded-2xl p-3.5 px-4 flex flex-wrap items-center justify-between gap-3 text-indigo-950 animate-in fade-in shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 animate-pulse" />
+            <span className="text-xs font-bold text-indigo-950">
+              {selectedStudentIds.length} student{selectedStudentIds.length > 1 ? 's' : ''} selected
+            </span>
+            <span className="text-xs text-indigo-700 hidden sm:inline font-medium">
+              — Bulk transfer counselor, research guide, and SAT educator assignments directly across student database
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => setIsBulkTransferModalOpen(true)}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-2xs"
+            >
+              <UserCheck className="w-3.5 h-3.5 mr-1.5" /> Transfer Counselor
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setSelectedStudentIds([])}
+              className="text-xs font-semibold text-slate-600 hover:text-slate-900"
+            >
+              Clear Selection
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* STUDENTS TABLE VIEW */}
       {(activeViewTab === 'students' || !isAdmin) && (
@@ -389,6 +455,19 @@ export default function TeamUsers() {
                     <td className="px-6 py-4 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
                       <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setSelectedStudent(student)}>
                         View
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 p-2"
+                        title="Assign / Transfer Counselor"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedStudentIds([student.id]);
+                          setIsBulkTransferModalOpen(true);
+                        }}
+                      >
+                        <UserCheck className="w-4 h-4" />
                       </Button>
                       {isAdmin && (
                         <Button 
@@ -618,6 +697,23 @@ export default function TeamUsers() {
           onSavePassword={handleSaveUserPassword}
         />
       )}
+
+      {/* Bulk Counselor & Mentor Transfer Modal */}
+      <BulkCounselorTransferModal
+        isOpen={isBulkTransferModalOpen}
+        onClose={() => setIsBulkTransferModalOpen(false)}
+        selectedStudentIds={selectedStudentIds}
+        students={students}
+        staff={staff}
+        currentUser={currentUser}
+        onConfirmTransfer={(updatedStudents) => {
+          setStudents(updatedStudents);
+          setTransferSuccessMessage(
+            `Successfully transferred assignments for ${selectedStudentIds.length} student${selectedStudentIds.length > 1 ? 's' : ''}.`
+          );
+          setSelectedStudentIds([]);
+        }}
+      />
     </div>
   );
 }

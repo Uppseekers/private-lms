@@ -337,7 +337,7 @@ export default function CompetencyRadar({ student: customStudent, isTeamView = f
     if (gradeFilter === 'ALL') return profileActivities;
     
     // Extract target grade number, e.g. "Grade 8" -> "8", "Grade 9" -> "9", "Grade 10" -> "10", "Grade 11" -> "11", "Grade 12" -> "12"
-    const numMatch = gradeFilter.match(/\d+/);
+    const numMatch = typeof gradeFilter === 'string' ? gradeFilter.match(/\d+/) : null;
     if (!numMatch) return profileActivities;
     const num = numMatch[0];
     const targetNum = parseInt(num, 10);

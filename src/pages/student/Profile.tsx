@@ -69,8 +69,45 @@ const fullIntakeOptions = intakeYears.flatMap(yr => intakeTerms.map(term => `${t
 export default function StudentProfile() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
-  const { updateStudent, currentUser } = useDatabase();
-  const student = currentUser as any;
+  const { updateStudent, currentUser, students, staff } = useDatabase();
+  
+  // Resolve live, complete student record from database
+  const student = students.find(s => 
+    (currentUser?.id && s.id === currentUser.id) || 
+    (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
+  ) || (currentUser as any);
+
+  // Look up staff details for assigned mentors
+  const counselorStaff = staff.find(st => 
+    st && student?.counselor && (
+      st.name === student.counselor || 
+      st.name?.toLowerCase() === student.counselor?.toLowerCase()
+    )
+  );
+
+  const researchMentorName = student?.researchMentor || (student as any)?.researchGuide;
+  const researchStaff = staff.find(st => 
+    st && researchMentorName && (
+      st.name === researchMentorName || 
+      st.name?.toLowerCase() === researchMentorName?.toLowerCase()
+    )
+  );
+
+  const satVerbalName = student?.satVerbalMentor || student?.satMentor || (student as any)?.satEducator;
+  const satVerbalStaff = staff.find(st => 
+    st && satVerbalName && (
+      st.name === satVerbalName || 
+      st.name?.toLowerCase() === satVerbalName?.toLowerCase()
+    )
+  );
+
+  const satMathName = student?.satMathMentor;
+  const satMathStaff = staff.find(st => 
+    st && satMathName && (
+      st.name === satMathName || 
+      st.name?.toLowerCase() === satMathName?.toLowerCase()
+    )
+  );
 
   // Split intake into term and year if present
   const initialIntakeParts = (student?.intake || '').split(' ');
@@ -237,7 +274,7 @@ export default function StudentProfile() {
       setTimeout(() => setSaveMessage(''), 3000);
     }} className="max-w-5xl mx-auto space-y-8 pb-12">
       {/* Progress & Gamification */}
-      <Card className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white border-none">
+      <Card className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white border-none shadow-md">
         <CardContent className="p-8">
           <div className="flex items-center justify-between mb-4">
             <div>
@@ -262,6 +299,64 @@ export default function StudentProfile() {
                  <AlertCircle className="w-4 h-4 text-amber-400" /> Missing Information
                </div>
             )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Quick Assigned Advisory Team Banner */}
+      <Card className="border-slate-200 shadow-xs bg-white overflow-hidden">
+        <CardContent className="p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+              <ShieldCheck className="w-4 h-4 text-indigo-600" /> Your Assigned Advisory & Mentorship Team
+            </h3>
+            <span className="text-[11px] font-semibold text-slate-400">1-on-1 Personalized Guidance</span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {/* Counselor Pill */}
+            <div className="p-3 bg-blue-50/70 border border-blue-200/80 rounded-2xl flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-base shrink-0 shadow-2xs">
+                🎓
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-[10px] uppercase font-bold text-blue-700 block tracking-wider">Lead Counselor</span>
+                <span className="text-xs font-bold text-slate-900 truncate block">
+                  {student?.counselor || <span className="text-slate-400 italic font-normal">Pending Assignment</span>}
+                </span>
+                <span className="text-[10px] text-slate-500 truncate block mt-0.5">Admissions & Strategy</span>
+              </div>
+            </div>
+
+            {/* Research Mentor Pill */}
+            <div className="p-3 bg-purple-50/70 border border-purple-200/80 rounded-2xl flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-purple-600 text-white flex items-center justify-center font-bold text-base shrink-0 shadow-2xs">
+                🔬
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-[10px] uppercase font-bold text-purple-700 block tracking-wider">Research Guide</span>
+                <span className="text-xs font-bold text-slate-900 truncate block">
+                  {researchMentorName || <span className="text-slate-400 italic font-normal">Pending Assignment</span>}
+                </span>
+                <span className="text-[10px] text-slate-500 truncate block mt-0.5">Academic Publications</span>
+              </div>
+            </div>
+
+            {/* SAT Faculty Pill */}
+            <div className="p-3 bg-indigo-50/70 border border-indigo-200/80 rounded-2xl flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold text-base shrink-0 shadow-2xs">
+                📐
+              </div>
+              <div className="min-w-0 flex-1">
+                <span className="text-[10px] uppercase font-bold text-indigo-700 block tracking-wider">SAT Test Prep</span>
+                <span className="text-xs font-bold text-slate-900 truncate block">
+                  {satVerbalName && satMathName 
+                    ? `${satVerbalName} (V) & ${satMathName} (M)`
+                    : (satVerbalName ? `${satVerbalName} (Verbal)` : satMathName ? `${satMathName} (Math)` : <span className="text-slate-400 italic font-normal">Pending Assignment</span>)}
+                </span>
+                <span className="text-[10px] text-slate-500 truncate block mt-0.5">Digital SAT Coaching</span>
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -374,22 +469,107 @@ export default function StudentProfile() {
         </div>
       </Section>
 
-      <Section title="5. Counselor & Mentor Team" description="Assigned advisors supporting your admissions journey.">
+      <Section 
+        title="5. Counselor & Mentor Team" 
+        description="Assigned advisors supporting your admissions journey, academic research, and standardized test preparation."
+      >
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <span className="text-[10px] uppercase font-bold text-blue-600 block mb-1">Lead Counselor</span>
-            <p className="font-bold text-slate-900">{student?.counselor || 'Assigned Counselor'}</p>
-            <p className="text-xs text-slate-500 mt-1">Admissions & Strategy Advisor</p>
+          {/* Card 1: Lead Counselor */}
+          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200/90 flex flex-col justify-between hover:border-blue-300 transition-all shadow-2xs">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] uppercase font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200">
+                  Lead Counselor
+                </span>
+                {student?.counselor ? (
+                  <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Active
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                    Pending
+                  </span>
+                )}
+              </div>
+              <p className="font-bold text-slate-900 text-base">
+                {student?.counselor || <span className="text-slate-400 font-normal italic">Unassigned</span>}
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">Admissions & Strategy Advisor</p>
+            </div>
+            <div className="mt-4 pt-3 border-t border-slate-200/60 text-[11px] text-slate-400">
+              Personalized college list & application strategy
+            </div>
           </div>
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <span className="text-[10px] uppercase font-bold text-indigo-600 block mb-1">SAT & Prep Mentor</span>
-            <p className="font-bold text-slate-900">Test Prep Faculty</p>
-            <p className="text-xs text-slate-500 mt-1">Standardized Prep Advisor</p>
+
+          {/* Card 2: Research Guide */}
+          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200/90 flex flex-col justify-between hover:border-purple-300 transition-all shadow-2xs">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] uppercase font-bold text-purple-600 bg-purple-50 px-2 py-0.5 rounded-md border border-purple-200">
+                  Research Guide
+                </span>
+                {researchMentorName ? (
+                  <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Active
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                    Pending
+                  </span>
+                )}
+              </div>
+              <p className="font-bold text-slate-900 text-base">
+                {researchMentorName || <span className="text-slate-400 font-normal italic">Unassigned</span>}
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">Projects & Academic Research Lead</p>
+            </div>
+            <div className="mt-4 pt-3 border-t border-slate-200/60 text-[11px] text-slate-400">
+              Research publications & capstone projects
+            </div>
           </div>
-          <div className="bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <span className="text-[10px] uppercase font-bold text-purple-600 block mb-1">Research Guide</span>
-            <p className="font-bold text-slate-900">Academic Mentor</p>
-            <p className="text-xs text-slate-500 mt-1">Projects & Research Lead</p>
+
+          {/* Card 3: SAT & Test Prep Faculty */}
+          <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200/90 flex flex-col justify-between hover:border-indigo-300 transition-all shadow-2xs">
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] uppercase font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md border border-indigo-200">
+                  SAT Test Prep Faculty
+                </span>
+                {(satVerbalName || satMathName) ? (
+                  <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Active
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                    Pending
+                  </span>
+                )}
+              </div>
+
+              <div className="space-y-2 mt-1">
+                {/* Verbal Educator */}
+                <div className="bg-white p-2.5 rounded-xl border border-slate-100">
+                  <span className="text-[10px] uppercase font-bold text-indigo-700 block">SAT Verbal Educator</span>
+                  <p className="font-bold text-slate-900 text-xs">
+                    {satVerbalName || <span className="text-slate-400 font-normal italic">Unassigned</span>}
+                  </p>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">Reading & Writing Module</span>
+                </div>
+
+                {/* Math Educator */}
+                <div className="bg-white p-2.5 rounded-xl border border-slate-100">
+                  <span className="text-[10px] uppercase font-bold text-amber-700 block">SAT Math Educator</span>
+                  <p className="font-bold text-slate-900 text-xs">
+                    {satMathName || <span className="text-slate-400 font-normal italic">Unassigned</span>}
+                  </p>
+                  <span className="text-[10px] text-slate-400 block mt-0.5">Digital Math & Problem Solving</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 pt-3 border-t border-slate-200/60 text-[11px] text-slate-400">
+              Standardized test diagnostic & score acceleration
+            </div>
           </div>
         </div>
 

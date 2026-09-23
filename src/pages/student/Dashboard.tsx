@@ -28,6 +28,7 @@ import {
 import { useDatabase } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
 import { canStudentAccessEvent } from '@/lib/staffPermissions';
+import NotificationDetailsModal, { NotificationDetailData } from '@/components/NotificationDetailsModal';
 
 interface ActivityItem {
   id: string;
@@ -42,23 +43,35 @@ interface ActivityItem {
   performedBy?: string;
 }
 
-interface NotificationItem {
+interface NotificationItem extends NotificationDetailData {
   id: string;
   title: string;
   message: string;
-  type: 'URGENT' | 'COUNSELOR' | 'SYSTEM' | 'SUCCESS';
+  type: 'URGENT' | 'COUNSELOR' | 'SYSTEM' | 'SUCCESS' | string;
   timestamp: string;
   read: boolean;
-  linkTab?: string;
+  link?: string;
+  actionText?: string;
+  performedBy?: string;
+  source?: string;
+  meeting?: any;
+  task?: any;
+  log?: any;
+  doc?: any;
+  essay?: any;
 }
 
 export default function StudentDashboard() {
-  const { currentUser, events, batches } = useDatabase();
+  const { currentUser, events, batches, students } = useDatabase();
   const [activityFilter, setActivityFilter] = useState<'ALL' | 'MEETING' | 'TASK' | 'ESSAY' | 'COUNSELOR_LOG'>('ALL');
   const [notificationFilter, setNotificationFilter] = useState<'ALL' | 'UNREAD' | 'URGENT'>('ALL');
   const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
+  const [selectedNotification, setSelectedNotification] = useState<NotificationDetailData | null>(null);
 
-  const student = currentUser as any;
+  const student = students.find(s => 
+    (currentUser?.id && s.id === currentUser.id) || 
+    (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
+  ) || (currentUser as any);
   const tasks = student?.tasks || [];
   const shortlist = student?.shortlist || [];
   const essays = student?.essays || [];
@@ -215,8 +228,36 @@ export default function StudentDashboard() {
       });
     });
 
+    // Enrolled Batches
+    studentBatches.forEach((b: any) => {
+      feed.push({
+        id: 'batch_feed_' + b.id,
+        category: 'COUNSELOR_LOG',
+        title: `Enrolled in Batch: ${b.name}`,
+        description: `Subject: ${b.subject || 'Cohort'} • Schedule: ${b.scheduleDayTime || 'Weekly live classes'} • Mentors: ${(b.mentors || []).join(', ') || 'Faculty'}`,
+        timestamp: 'Active Cohort',
+        performedBy: (b.mentors && b.mentors[0]) || 'Academic Coordinator',
+        statusBadge: b.status || 'Active Batch',
+        statusColor: 'bg-indigo-100 text-indigo-800'
+      });
+    });
+
+    // Shortlisted Universities
+    shortlist.forEach((u: any) => {
+      feed.push({
+        id: 'uni_feed_' + (u.id || u.name),
+        category: 'COUNSELOR_LOG',
+        title: `University Shortlisted: ${u.name}`,
+        description: `Admissions Tier: ${u.category || 'Target'} • Major: ${u.major || 'Program'} • Round: ${u.round || 'RD'}${u.deadline ? ` • Deadline: ${u.deadline}` : ''}`,
+        timestamp: u.deadline ? `Deadline ${u.deadline}` : 'Shortlisted',
+        performedBy: student?.counselor || 'Admissions Strategy',
+        statusBadge: u.category || 'Target',
+        statusColor: u.category === 'Reach' ? 'bg-purple-100 text-purple-800' : u.category === 'Target' ? 'bg-blue-100 text-blue-800' : 'bg-emerald-100 text-emerald-800'
+      });
+    });
+
     return feed;
-  }, [operationalLogs, profileActivities, studentEvents, tasks, essays, documents]);
+  }, [operationalLogs, profileActivities, studentEvents, tasks, essays, documents, studentBatches, shortlist, student]);
 
   const filteredActivities = consolidatedActivities.filter(a => {
     if (activityFilter === 'ALL') return true;
@@ -228,59 +269,237 @@ export default function StudentDashboard() {
   const generatedNotifications: NotificationItem[] = useMemo(() => {
     const list: NotificationItem[] = [];
 
-    // Task alerts
-    tasks.forEach((t: any) => {
-      if (t.stage === 'NEEDS_REVISION') {
-        list.push({
-          id: 'notif_task_rev_' + t.id,
-          title: 'Task Revision Required',
-          message: `Counselor requested revision on "${t.name}". Please review comments.`,
-          type: 'URGENT',
-          timestamp: 'Action Required',
-          read: readNotificationIds.includes('notif_task_rev_' + t.id)
-        });
-      } else if (t.dueDate) {
-        const d = new Date(t.dueDate);
-        const diffDays = Math.ceil((d.getTime() - now.getTime()) / (1000 * 3600 * 24));
-        if (diffDays >= 0 && diffDays <= 5 && t.stage !== 'COMPLETED') {
+    // Helper: Filter out ANY profile-related modification logs
+    const isProfileChangeLog = (item: any) => {
+      const text = `${item.activityType || ''} ${item.description || ''} ${item.title || ''}`.toLowerCase();
+      return text.includes('profile') || 
+             text.includes('contact') || 
+             text.includes('phone') || 
+             text.includes('email') || 
+             text.includes('personal') || 
+             text.includes('gpa') || 
+             text.includes('curriculum') || 
+             text.includes('intake') || 
+             text.includes('extracurricular');
+    };
+
+    // 1. APPLICATION DEADLINES & LESS DAYS IN APPLICATION
+    shortlist.forEach((uni: any, idx: number) => {
+      if (uni.deadline) {
+        const deadlineDate = new Date(uni.deadline);
+        const diffDays = Math.ceil((deadlineDate.getTime() - now.getTime()) / (1000 * 3600 * 24));
+        if (!isNaN(diffDays) && diffDays >= 0 && diffDays <= 60) {
           list.push({
-            id: 'notif_task_due_' + t.id,
-            title: `Task Due in ${diffDays} Day(s)`,
-            message: `Task "${t.name}" is due on ${t.dueDate}. Complete and submit to stay on track.`,
-            type: 'URGENT',
-            timestamp: `Due ${t.dueDate}`,
-            read: readNotificationIds.includes('notif_task_due_' + t.id)
+            id: 'notif_deadline_' + (uni.id || idx),
+            title: `Application Deadline Alert: ${uni.name} (${diffDays === 0 ? 'Due Today!' : `${diffDays} days left`})`,
+            message: `Only ${diffDays} day(s) left until the ${uni.round || 'Application'} deadline for ${uni.name} on ${uni.deadline}. Ensure all essays, transcripts, and required documents are finalized!`,
+            type: diffDays <= 7 ? 'URGENT' : 'WARNING',
+            category: 'DEADLINE',
+            timestamp: diffDays === 0 ? 'Due Today!' : `${diffDays}d left`,
+            read: readNotificationIds.includes('notif_deadline_' + (uni.id || idx)),
+            link: '/student/universities',
+            actionText: 'Review University Application',
+            university: uni,
+            deadlineInfo: {
+              uni,
+              daysLeft: diffDays,
+              deadline: uni.deadline,
+              round: uni.round
+            },
+            performedBy: student?.counselor || 'Admissions Strategy'
           });
         }
       }
     });
 
-    // Counselor recent logs
-    operationalLogs.slice(0, 5).forEach((log: any) => {
+    // 2. ASSIGNED TASKS / ASKS (Revision required, overdue, due soon, newly assigned)
+    tasks.forEach((t: any) => {
+      if (t.stage === 'NEEDS_REVISION') {
+        list.push({
+          id: 'notif_task_rev_' + t.id,
+          title: `Task Revision Required: ${t.name}`,
+          message: `Your counselor requested revision on "${t.name}". Please open the task manager to review feedback notes, revise your deliverable, and resubmit.\n\nDescription: ${t.description || 'No description provided'}\nDue Date: ${t.dueDate || 'Immediate action'}\nCategory: ${t.category || 'Roadmap'}`,
+          type: 'URGENT',
+          category: 'TASK',
+          timestamp: 'Revision Needed',
+          read: readNotificationIds.includes('notif_task_rev_' + t.id),
+          link: '/student/tasks',
+          actionText: 'Open in Task Manager',
+          task: t,
+          performedBy: t.assignedBy || student?.counselor || 'Admissions Counselor'
+        });
+      } else if (t.dueDate) {
+        const d = new Date(t.dueDate);
+        const diffDays = Math.ceil((d.getTime() - now.getTime()) / (1000 * 3600 * 24));
+        if (diffDays < 0 && t.stage !== 'COMPLETED') {
+          list.push({
+            id: 'notif_task_overdue_' + t.id,
+            title: `Overdue Task: ${t.name}`,
+            message: `Task "${t.name}" was scheduled for ${t.dueDate} (${Math.abs(diffDays)} day(s) overdue). Please complete and submit your deliverable as soon as possible.`,
+            type: 'URGENT',
+            category: 'TASK',
+            timestamp: `Overdue (${Math.abs(diffDays)}d)`,
+            read: readNotificationIds.includes('notif_task_overdue_' + t.id),
+            link: '/student/tasks',
+            actionText: 'Open in Task Manager',
+            task: t,
+            performedBy: t.assignedBy || student?.counselor || 'Admissions Counselor'
+          });
+        } else if (diffDays >= 0 && diffDays <= 7 && t.stage !== 'COMPLETED') {
+          list.push({
+            id: 'notif_task_due_' + t.id,
+            title: diffDays === 0 ? `Task Due Today: ${t.name}` : `Task Due Soon: ${t.name}`,
+            message: `Task "${t.name}" is scheduled for completion on ${t.dueDate} (${diffDays === 0 ? 'Due Today!' : `Due in ${diffDays} day(s)`}). Category: ${t.category || 'Roadmap'}. Complete and submit on time.`,
+            type: diffDays <= 2 ? 'URGENT' : 'WARNING',
+            category: 'TASK',
+            timestamp: diffDays === 0 ? 'Today' : `Due in ${diffDays}d`,
+            read: readNotificationIds.includes('notif_task_due_' + t.id),
+            link: '/student/tasks',
+            actionText: 'Open in Task Manager',
+            task: t,
+            performedBy: t.assignedBy || student?.counselor || 'Admissions Counselor'
+          });
+        } else if (t.stage === 'TO_DO' || t.stage === 'IN_PROGRESS') {
+          list.push({
+            id: 'notif_task_active_' + t.id,
+            title: `Assigned Task: ${t.name}`,
+            message: `Deliverable "${t.name}" is currently active under ${t.category || 'Roadmap'}. Description: ${t.description || 'Deliverable assigned by your counselor.'}${t.dueDate ? ` | Target Date: ${t.dueDate}` : ''}`,
+            type: 'INFO',
+            category: 'TASK',
+            timestamp: 'Active Task',
+            read: readNotificationIds.includes('notif_task_active_' + t.id),
+            link: '/student/tasks',
+            actionText: 'Open in Task Manager',
+            task: t,
+            performedBy: t.assignedBy || student?.counselor || 'Admissions Counselor'
+          });
+        }
+      } else if (t.stage === 'TO_DO' || t.stage === 'IN_PROGRESS') {
+        list.push({
+          id: 'notif_task_open_' + t.id,
+          title: `Assigned Task: ${t.name}`,
+          message: `Deliverable "${t.name}" is assigned to you under ${t.category || 'Roadmap'}. Description: ${t.description || 'Deliverable assigned by your counselor.'}`,
+          type: 'INFO',
+          category: 'TASK',
+          timestamp: 'To Do',
+          read: readNotificationIds.includes('notif_task_open_' + t.id),
+          link: '/student/tasks',
+          actionText: 'Open in Task Manager',
+          task: t,
+          performedBy: t.assignedBy || student?.counselor || 'Admissions Counselor'
+        });
+      }
+    });
+
+    // 3. BATCH ADDITIONS / NEW BATCH ENROLLED
+    studentBatches.forEach((b: any) => {
       list.push({
-        id: 'notif_log_' + log.id,
-        title: `Counselor Update (${log.activityType || 'Activity'})`,
-        message: log.description,
-        type: 'COUNSELOR',
-        timestamp: log.timestamp || 'Recently',
-        read: readNotificationIds.includes('notif_log_' + log.id)
+        id: 'notif_batch_' + b.id,
+        title: `New Batch Enrolled: ${b.name}`,
+        message: `You have been enrolled into cohort batch "${b.name}" (${b.subject || 'Cohort Program'}).\nSchedule: ${b.scheduleDayTime || 'Weekly live sessions'}\nAssigned Mentors: ${(b.mentors || []).join(', ') || 'Faculty'}`,
+        type: 'INFO',
+        category: 'BATCH',
+        timestamp: 'Enrolled',
+        read: readNotificationIds.includes('notif_batch_' + b.id),
+        link: '/student/schedules',
+        actionText: 'View Batch Schedule',
+        batch: b,
+        performedBy: (b.mentors && b.mentors[0]) || 'Academic Team'
       });
     });
 
-    // Upcoming meetings
+    // 4. LECTURE SCHEDULE & UPCOMING SESSIONS
     studentEvents.forEach((evt: any) => {
       list.push({
         id: 'notif_evt_' + evt.id,
-        title: 'Scheduled Meeting Alert',
-        message: `Meeting "${evt.title}" on ${evt.date || 'Upcoming'} at ${evt.time || 'TBD'}.`,
+        title: `Lecture Schedule: ${evt.title}`,
+        message: `Scheduled Lecture: "${evt.title}"\nDate: ${evt.date || evt.day || 'Upcoming'}\nTime: ${evt.time || 'TBD'}\nInstructor: ${evt.host || 'Advisor'}\nFormat: ${evt.stream || '1-on-1 Class'}${evt.location ? `\nMeeting Link: ${evt.location}` : ''}`,
         type: 'SYSTEM',
+        category: 'LECTURE',
         timestamp: evt.date || 'Scheduled',
-        read: readNotificationIds.includes('notif_evt_' + evt.id)
+        read: readNotificationIds.includes('notif_evt_' + evt.id),
+        link: '/student/schedules',
+        actionText: 'Open Schedule & Join Lecture',
+        meeting: evt,
+        performedBy: evt.host || 'Counselor / Faculty'
       });
     });
 
+    // 5. SHORTLISTED UNIVERSITIES
+    shortlist.slice(0, 3).forEach((uni: any, idx: number) => {
+      list.push({
+        id: 'notif_uni_' + (uni.id || idx),
+        title: `University Shortlist: ${uni.name}`,
+        message: `${uni.name} is on your ${uni.category || 'Target'} college shortlist for ${uni.major || 'Degree Program'}. Round: ${uni.round || 'Regular Decision'}. Deadline: ${uni.deadline || 'TBD'}. Click below to verify required application documents and submission portals.`,
+        type: 'INFO',
+        category: 'UNIVERSITY',
+        timestamp: `${uni.category || 'Target'} List`,
+        read: readNotificationIds.includes('notif_uni_' + (uni.id || idx)),
+        link: '/student/universities',
+        actionText: 'Open Universities List',
+        university: uni,
+        performedBy: student?.counselor || 'Lead Counselor'
+      });
+    });
+
+    // 6. COUNSELOR & MENTOR GUIDANCE NOTES (STRICTLY NO PROFILE MODIFICATION LOGS)
+    operationalLogs
+      .filter((log: any) => !isProfileChangeLog(log))
+      .slice(0, 4)
+      .forEach((log: any) => {
+        list.push({
+          id: 'notif_log_' + log.id,
+          title: `Counselor Guidance: ${log.activityType || 'Advisory Note'}`,
+          message: log.description || 'Your counselor recorded new guidance and action items on your admissions timeline.',
+          type: 'COUNSELOR',
+          category: 'NOTE',
+          timestamp: log.timestamp || 'Recently',
+          read: readNotificationIds.includes('notif_log_' + log.id),
+          log: log,
+          performedBy: log.performedBy || student?.counselor || 'Lead Counselor'
+        });
+      });
+
+    // 7. ESSAY REVIEW UPDATES
+    essays.forEach((es: any) => {
+      if (es.status === 'Needs Revision' || es.status === 'Approved') {
+        list.push({
+          id: 'notif_essay_' + es.id,
+          title: `Essay Review: ${es.university || es.title || 'College Essay'}`,
+          message: `Your draft "${es.title || es.university}" has been updated to "${es.status}". Open Essay Vault to examine detailed paragraph annotations and counselor feedback.`,
+          type: es.status === 'Needs Revision' ? 'URGENT' : 'SUCCESS',
+          category: 'ESSAY',
+          timestamp: es.status,
+          read: readNotificationIds.includes('notif_essay_' + es.id),
+          link: '/student/essays',
+          actionText: 'Open Essay Vault',
+          essay: es,
+          performedBy: student?.counselor || 'Essay Reviewer'
+        });
+      }
+    });
+
+    // 8. DOCUMENT VERIFICATION UPDATES
+    documents.forEach((dc: any) => {
+      if (dc.status === 'VERIFIED' || dc.status === 'REJECTED') {
+        list.push({
+          id: 'notif_doc_' + dc.id,
+          title: `Document ${dc.status === 'VERIFIED' ? 'Verified' : 'Action Needed'}: ${dc.name}`,
+          message: `Your uploaded document "${dc.name}" (${dc.category || 'General'}) is marked as ${dc.status}. ${dc.feedback ? `Counselor Notes: ${dc.feedback}` : ''}`,
+          type: dc.status === 'VERIFIED' ? 'SUCCESS' : 'URGENT',
+          category: 'DOCUMENT',
+          timestamp: dc.status,
+          read: readNotificationIds.includes('notif_doc_' + dc.id),
+          link: '/student/vault',
+          actionText: 'Open Document Vault',
+          doc: dc,
+          performedBy: student?.counselor || 'Verification Officer'
+        });
+      }
+    });
+
     return list;
-  }, [tasks, operationalLogs, studentEvents, readNotificationIds, now]);
+  }, [tasks, operationalLogs, studentEvents, essays, documents, shortlist, studentBatches, readNotificationIds, now, student]);
 
   const filteredNotifications = generatedNotifications.filter(n => {
     if (notificationFilter === 'UNREAD') return !n.read;
@@ -302,6 +521,13 @@ export default function StudentDashboard() {
     }
   };
 
+  const handleOpenNotificationDetails = (n: NotificationItem) => {
+    if (!readNotificationIds.includes(n.id)) {
+      setReadNotificationIds(prev => [...prev, n.id]);
+    }
+    setSelectedNotification(n);
+  };
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* HEADER BAR */}
@@ -315,12 +541,26 @@ export default function StudentDashboard() {
           </p>
         </div>
 
-        <div className="flex items-center gap-3">
-          <div className="text-right hidden sm:block">
-            <span className="text-xs text-slate-400 font-bold uppercase block">Counselor Assigned</span>
-            <span className="text-sm font-semibold text-slate-800">{student?.counselor || 'Assigned Staff'}</span>
+        <div className="flex items-center gap-4">
+          <div className="text-right hidden sm:block space-y-1">
+            <span className="text-[10px] text-slate-400 font-extrabold uppercase tracking-wider block">Assigned Mentorship Team</span>
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <span className="bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-md font-semibold text-[11px] flex items-center gap-1" title="Lead Counselor">
+                <span>🎓</span> <strong className="font-bold">{student?.counselor || 'Counselor Unassigned'}</strong>
+              </span>
+              {(student?.researchMentor || (student as any)?.researchGuide) && (
+                <span className="bg-purple-50 text-purple-700 border border-purple-200 px-2 py-0.5 rounded-md font-semibold text-[11px] flex items-center gap-1" title="Research Guide">
+                  <span>🔬</span> <strong className="font-bold">{student?.researchMentor || (student as any)?.researchGuide}</strong>
+                </span>
+              )}
+              {(student?.satVerbalMentor || student?.satMathMentor || student?.satMentor) && (
+                <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-md font-semibold text-[11px] flex items-center gap-1" title="SAT Faculty">
+                  <span>📐</span> <strong className="font-bold">{student?.satVerbalMentor && student?.satMathMentor ? `${student.satVerbalMentor} (V) & ${student.satMathMentor} (M)` : student?.satVerbalMentor || student?.satMathMentor || student?.satMentor}</strong>
+                </span>
+              )}
+            </div>
           </div>
-          <div className="w-10 h-10 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-600 font-bold border border-indigo-100">
+          <div className="w-11 h-11 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 font-bold border border-indigo-100 shadow-2xs">
             {student?.name ? student.name.charAt(0) : 'S'}
           </div>
         </div>
@@ -391,29 +631,45 @@ export default function StudentDashboard() {
               {filteredNotifications.map(n => (
                 <div 
                   key={n.id} 
-                  onClick={() => toggleRead(n.id)}
+                  onClick={() => handleOpenNotificationDetails(n)}
                   className={cn(
-                    "p-3.5 rounded-xl border transition-all cursor-pointer space-y-1.5 relative hover:shadow-xs",
+                    "p-3.5 rounded-2xl border transition-all cursor-pointer space-y-2 relative hover:shadow-md group text-left",
                     n.read 
-                      ? "bg-slate-50/70 border-slate-200/80 opacity-80" 
+                      ? "bg-slate-50/70 border-slate-200/80 opacity-85 hover:opacity-100" 
                       : "bg-white border-indigo-200 shadow-2xs hover:border-indigo-400 ring-1 ring-indigo-500/10"
                   )}
                 >
                   <div className="flex items-center justify-between text-xs">
                     <span className={cn(
-                      "font-bold text-[10px] uppercase px-2 py-0.5 rounded tracking-wider",
+                      "font-bold text-[10px] uppercase px-2 py-0.5 rounded-full tracking-wider",
+                      n.category === 'DEADLINE' ? "bg-rose-100 text-rose-800 border border-rose-200" :
+                      n.category === 'BATCH' ? "bg-indigo-100 text-indigo-800 border border-indigo-200" :
+                      n.category === 'LECTURE' ? "bg-blue-100 text-blue-800 border border-blue-200" :
+                      n.category === 'UNIVERSITY' ? "bg-emerald-100 text-emerald-800 border border-emerald-200" :
+                      n.category === 'TASK' ? (n.type === 'URGENT' ? "bg-rose-100 text-rose-800 border border-rose-200" : "bg-amber-100 text-amber-800 border border-amber-200") :
+                      n.category === 'NOTE' ? "bg-purple-100 text-purple-800 border border-purple-200" :
                       n.type === 'URGENT' ? "bg-rose-100 text-rose-800" :
+                      n.type === 'SUCCESS' ? "bg-emerald-100 text-emerald-800" :
                       n.type === 'COUNSELOR' ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
                     )}>
-                      {n.type}
+                      {n.category === 'DEADLINE' ? 'Deadline Alert' :
+                       n.category === 'BATCH' ? 'Batch Enrolled' :
+                       n.category === 'LECTURE' ? 'Lecture Schedule' :
+                       n.category === 'UNIVERSITY' ? 'Shortlist' :
+                       n.category === 'TASK' ? (n.type === 'URGENT' ? 'Task Action' : 'Assigned Task') :
+                       n.category === 'NOTE' ? 'Guidance Note' : n.type}
                     </span>
-                    <span className="text-[10px] text-slate-400">{n.timestamp}</span>
+                    <span className="text-[10px] text-slate-400 font-medium">{n.timestamp}</span>
                   </div>
-                  <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between gap-2">
+                  <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between gap-2 group-hover:text-indigo-600 transition-colors">
                     <span className="truncate">{n.title}</span>
                     {!n.read && <span className="w-2 h-2 rounded-full bg-indigo-600 shrink-0" />}
                   </h4>
                   <p className="text-xs text-slate-600 leading-snug line-clamp-2">{n.message}</p>
+                  <div className="pt-1.5 flex items-center justify-between text-[11px] text-indigo-600 font-bold border-t border-slate-100">
+                    <span className="flex items-center gap-1 group-hover:underline">Click to view all details</span>
+                    <span className="group-hover:translate-x-1 transition-transform">→</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -606,6 +862,14 @@ export default function StudentDashboard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Notification Details Modal */}
+      <NotificationDetailsModal
+        isOpen={!!selectedNotification}
+        notification={selectedNotification}
+        onClose={() => setSelectedNotification(null)}
+        onToggleRead={(id) => toggleRead(id)}
+      />
     </div>
   );
 }

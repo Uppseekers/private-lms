@@ -26,8 +26,11 @@ import { SessionRating } from '@/types';
 import { canStudentAccessEvent } from '@/lib/staffPermissions';
 
 export default function StudentSchedule() {
-  const { currentUser, events, setEvents, batches } = useDatabase();
-  const student = currentUser as any;
+  const { currentUser, events, setEvents, batches, students } = useDatabase();
+  const student = students.find(s => 
+    (currentUser?.id && s.id === currentUser.id) || 
+    (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
+  ) || (currentUser as any);
 
   const [view, setView] = useState<'list' | 'calendar'>('list');
   const [horizon, setHorizon] = useState<'upcoming' | 'past' | 'canceled'>('upcoming');
@@ -514,7 +517,7 @@ export default function StudentSchedule() {
       )}
 
       {/* MEETING DETAILS MODAL */}
-      {selectedMeetingModal && (
+      {selectedMeetingModal && canStudentAccessEvent(selectedMeetingModal, student, batches) && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in">
           <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh] border border-slate-200">
             <div className="p-6 bg-slate-900 text-white flex justify-between items-start">

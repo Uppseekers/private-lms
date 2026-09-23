@@ -199,10 +199,10 @@ export function getScopedStudentsForStaff(
 
 /**
  * Determines whether a student is allowed to view an event in their schedule or dashboard.
- * Requirements:
- * - Only sessions where the student has been explicitly added by the counselor (by studentId, studentIds, or matching student name).
- * - In batches case, ONLY students assigned/enrolled in that batch will get these sessions in their schedule.
- * - Different students MUST NEVER see scheduled sessions of other students.
+ * Strict Requirements:
+ * - Students must ONLY see sessions they have been explicitly added to by the counselor.
+ * - In batches case, ONLY assigned/enrolled students in that batch will get these sessions in their schedule.
+ * - Different students MUST NEVER see scheduled sessions of other students under any circumstances.
  */
 export function canStudentAccessEvent(
   event: any,
@@ -215,58 +215,92 @@ export function canStudentAccessEvent(
   const studentName = (student.name || '').trim().toLowerCase();
   const studentEmail = (student.email || '').trim().toLowerCase();
 
+  if (!studentId && !studentName && !studentEmail) {
+    return false;
+  }
+
   // 1. Batch Case:
-  // In batches case, ONLY students assigned/enrolled in that batch will get these sessions at their schedules
-  if (event.batch) {
-    const targetBatch = batches.find(b => 
-      b.id === event.batch || 
-      (b.name && b.name.toLowerCase() === String(event.batch).toLowerCase())
-    );
-    if (!targetBatch || !Array.isArray(targetBatch.students)) {
+  // Identify if this event is for a cohort batch (via event.batch OR if event.students matches a batch name)
+  const matchingBatch = batches.find(b => {
+    if (!b) return false;
+    const bId = (b.id || '').trim().toLowerCase();
+    const bName = (b.name || '').trim().toLowerCase();
+    if (event.batch) {
+      const eBatch = String(event.batch).trim().toLowerCase();
+      if (eBatch === bId || eBatch === bName) return true;
+    }
+    if (typeof event.students === 'string' && event.students.trim()) {
+      const eStudents = event.students.trim().toLowerCase();
+      if (eStudents === bName || eStudents === bId) return true;
+    }
+    return false;
+  });
+
+  if (matchingBatch) {
+    // In batches case, ONLY assigned students in that batch will get these sessions at their schedules
+    if (!Array.isArray(matchingBatch.students) || matchingBatch.students.length === 0) {
       return false;
     }
-    return targetBatch.students.some((sidOrName: string) => {
+    return matchingBatch.students.some((sidOrName: string) => {
       if (!sidOrName) return false;
       const clean = String(sidOrName).trim().toLowerCase();
-      return clean === studentId || clean === studentName;
+      return (
+        (studentId && clean === studentId) ||
+        (studentName && clean === studentName) ||
+        (studentEmail && clean === studentEmail)
+      );
     });
   }
 
   // 2. Individual Sessions:
-  // Must only be visible to the specific student added for the session
+  // Must ONLY be visible to the specific student added by the counselor for the session
 
-  // Direct studentId match
+  // Case 2A: Explicit foreign studentId check
   if (event.studentId) {
-    return String(event.studentId).trim().toLowerCase() === studentId;
+    const eStudentId = String(event.studentId).trim().toLowerCase();
+    if (studentId && eStudentId === studentId) return true;
+    // If the event has a specific studentId that does NOT match this student, it belongs to another student
+    return false;
   }
 
-  // studentIds array match
+  // Case 2B: studentIds array
   if (Array.isArray(event.studentIds) && event.studentIds.length > 0) {
-    return event.studentIds.some((sid: string) => String(sid).trim().toLowerCase() === studentId);
+    const inIds = event.studentIds.some((sid: string) => {
+      const clean = String(sid).trim().toLowerCase();
+      return (studentId && clean === studentId) || (studentName && clean === studentName);
+    });
+    if (inIds) return true;
+    return false; // Explicit studentIds list without this student
   }
 
-  // Attendees array match
+  // Case 2C: Attendees array match
   if (Array.isArray(event.attendees) && event.attendees.length > 0) {
-    return event.attendees.some((att: any) => {
+    const isAttending = event.attendees.some((att: any) => {
       if (typeof att === 'string') {
         const clean = att.trim().toLowerCase();
-        return clean === studentId || clean === studentName || clean === studentEmail;
+        return (
+          (studentId && clean === studentId) ||
+          (studentName && clean === studentName) ||
+          (studentEmail && clean === studentEmail)
+        );
       }
       if (att && typeof att === 'object') {
         const attId = (att.id || '').trim().toLowerCase();
         const attEmail = (att.email || '').trim().toLowerCase();
         const attName = (att.name || '').trim().toLowerCase();
         return (
-          (attId && attId === studentId) ||
-          (attEmail && attEmail === studentEmail) ||
-          (attName && attName === studentName)
+          (studentId && attId === studentId) ||
+          (studentEmail && attEmail === studentEmail) ||
+          (studentName && attName === studentName)
         );
       }
       return false;
     });
+    if (isAttending) return true;
+    return false;
   }
 
-  // Check 'students' string field (when counselor typed or selected the student name)
+  // Case 2D: Check 'students' string field (when counselor typed or selected the student name)
   if (typeof event.students === 'string' && event.students.trim()) {
     const studentsStr = event.students.trim().toLowerCase();
     
@@ -278,23 +312,30 @@ export function canStudentAccessEvent(
       '15 students', 
       'batch cohort',
       'batch',
-      'general'
+      'general',
+      'open session',
+      'tbd'
     ];
     if (genericPlaceholders.includes(studentsStr)) {
       return false;
     }
 
-    // Exact or comma-separated name match
-    if (studentName) {
-      if (studentsStr === studentName) return true;
-      const tokens = studentsStr.split(/[,;&+]/).map(s => s.trim());
-      if (tokens.includes(studentName)) return true;
-    }
+    // Tokenize names
+    const tokens = studentsStr
+      .split(/[,;&+]|\band\b/i)
+      .map(s => s.trim().toLowerCase())
+      .filter(Boolean);
 
-    // Direct ID in string
-    if (studentId && (studentsStr === studentId || studentsStr.split(/[,;&+]/).map(s => s.trim()).includes(studentId))) {
-      return true;
-    }
+    const matchesCurrent = tokens.some(token => {
+      return (
+        (studentName && (token === studentName || token.startsWith(studentName + ' ') || token.includes(`(${studentId})`))) ||
+        (studentId && (token === studentId || token.includes(studentId))) ||
+        (studentEmail && token === studentEmail)
+      );
+    });
+
+    if (matchesCurrent) return true;
+    return false;
   }
 
   return false;
@@ -304,7 +345,7 @@ export function canStudentAccessEvent(
  * Determines whether a staff member has access to view, manage, or join a scheduled session.
  * Requirements:
  * - Only team (admin / global management), assigned counselor, and respective student-mentor
- *   should have the access and meet details in their schedule.
+ *   should have access and meet details in their schedule.
  * - In batches case, assigned mentors of the batch have access to their batch's sessions and meet details.
  * - Other staff members do not have access to sessions of students they do not mentor or counsel.
  */
@@ -317,7 +358,7 @@ export function canStaffAccessEvent(
 ): boolean {
   if (!currentUser || !event) return false;
 
-  // 1. Team administrators and management have full access to all schedules and meet details
+  // 1. Team administrators and global management have full access to all schedules and meet details
   if (isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix)) {
     return true;
   }
@@ -333,6 +374,7 @@ export function canStaffAccessEvent(
       clean === staffName ||
       clean === staffEmail ||
       clean === staffId ||
+      (staffName.length > 2 && clean === staffName) ||
       (staffName.length > 2 && clean.includes(staffName)) ||
       (clean.length > 2 && staffName.includes(clean))
     );
@@ -356,23 +398,32 @@ export function canStaffAccessEvent(
   }
 
   // 4. Batch Session Access:
-  // If the event belongs to a batch, ONLY mentors assigned to that batch (or admin team) have access
-  if (event.batch) {
-    const batch = batches.find(b => 
-      b.id === event.batch || 
-      (b.name && b.name.toLowerCase() === String(event.batch).toLowerCase())
-    );
-    if (batch && Array.isArray(batch.mentors)) {
-      if (batch.mentors.some((m: string) => matchesStaff(m))) {
-        return true;
-      }
+  // If the event belongs to a batch, ONLY mentors assigned to that batch (or team admin) have access
+  const matchingBatch = batches.find(b => {
+    if (!b) return false;
+    const bId = (b.id || '').trim().toLowerCase();
+    const bName = (b.name || '').trim().toLowerCase();
+    if (event.batch) {
+      const eBatch = String(event.batch).trim().toLowerCase();
+      if (eBatch === bId || eBatch === bName) return true;
+    }
+    if (typeof event.students === 'string' && event.students.trim()) {
+      const eStudents = event.students.trim().toLowerCase();
+      if (eStudents === bName || eStudents === bId) return true;
+    }
+    return false;
+  });
+
+  if (matchingBatch) {
+    if (Array.isArray(matchingBatch.mentors) && matchingBatch.mentors.some((m: string) => matchesStaff(m))) {
+      return true;
     }
     // If it's a batch session and current staff is NOT an assigned mentor for this batch, do not grant access
     return false;
   }
 
   // 5. Individual Student Session Access:
-  // The student's assigned counselor and respective student-mentors have access
+  // ONLY the assigned counselor and respective student-mentor have access to the session & meet details
   let targetStudent: Student | undefined;
   if (event.studentId) {
     targetStudent = students.find(s => s.id === event.studentId);

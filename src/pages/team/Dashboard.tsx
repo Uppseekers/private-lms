@@ -267,7 +267,8 @@ export default function TeamDashboard() {
     }
     
     scopedStudents.forEach(student => {
-      const match = student.intake.match(/\d{4}/);
+      const intakeStr = student?.intake || '';
+      const match = intakeStr.match(/\d{4}/);
       if (match) {
         const year = match[0];
         if (counts[year] !== undefined) {

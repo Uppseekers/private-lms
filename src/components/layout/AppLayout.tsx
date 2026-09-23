@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { 
   LayoutDashboard, 
   User, 
+  Calendar,
   CalendarDays, 
   FolderLock, 
   PenTool, 
@@ -36,6 +37,7 @@ import { GoogleSheetsSyncModal } from '@/components/GoogleSheetsSyncModal';
 import ChangeUserPasswordModal from '@/components/ChangeUserPasswordModal';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
+import NotificationDetailsModal, { NotificationDetailData } from '@/components/NotificationDetailsModal';
 
 interface SidebarItem {
   name: string;
@@ -81,11 +83,12 @@ export default function AppLayout() {
       return [];
     }
   });
-  const [notifFilter, setNotifFilter] = useState<'ALL' | 'TASKS' | 'DOCS' | 'ESSAYS'>('ALL');
+  const [notifFilter, setNotifFilter] = useState<'ALL' | 'TASKS' | 'DEADLINES' | 'BATCHES' | 'ESSAYS' | 'DOCS'>('ALL');
+  const [activeNotificationModal, setActiveNotificationModal] = useState<NotificationDetailData | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const notifDropdownRef = useRef<HTMLDivElement>(null);
 
-  const { currentUser, permissionsMatrix, staff, students, setCurrentUser, setIsAuthenticated, setStaff, setStudents } = useDatabase();
+  const { currentUser, permissionsMatrix, staff, students, batches, events, setCurrentUser, setIsAuthenticated, setStaff, setStudents } = useDatabase();
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
 
   const handleSaveCurrentUserPassword = async (userId: string, userType: 'student' | 'staff', newPassword: string) => {
@@ -252,70 +255,132 @@ export default function AppLayout() {
       title: string;
       message: string;
       time: string;
-      category: 'TASKS' | 'DOCS' | 'ESSAYS';
+      category: 'TASKS' | 'DEADLINES' | 'BATCHES' | 'ESSAYS' | 'DOCS';
       link: string;
       type: 'urgent' | 'info' | 'success' | 'warning';
       isRead: boolean;
+      task?: any;
+      university?: any;
+      deadlineInfo?: any;
+      batch?: any;
+      meeting?: any;
+      doc?: any;
+      essay?: any;
+      actionText?: string;
     }[] = [];
 
     if (!isTeam && currentStudent) {
-      // Student Notifications: Tasks assigned, Task updates/changes, Essays, Docs
+      // 1. APPLICATION DEADLINES & LESS DAYS IN APPLICATION
+      (currentStudent.shortlist || []).forEach((uni: any, idx: number) => {
+        if (uni.deadline) {
+          const d = new Date(uni.deadline);
+          const diffDays = Math.ceil((d.getTime() - Date.now()) / (1000 * 3600 * 24));
+          if (!isNaN(diffDays) && diffDays >= 0 && diffDays <= 45) {
+            list.push({
+              id: `deadline-${uni.id || idx}`,
+              title: `Deadline Alert: ${uni.name} (${diffDays === 0 ? 'Today!' : `${diffDays}d left`})`,
+              message: `Only ${diffDays} day(s) left until the ${uni.round || 'Application'} deadline for ${uni.name} on ${uni.deadline}. Ensure all essays, transcripts, and required documents are finalized!`,
+              time: diffDays === 0 ? 'Due Today' : `${diffDays}d left`,
+              category: 'DEADLINES',
+              link: '/student/universities',
+              type: diffDays <= 7 ? 'urgent' : 'warning',
+              isRead: readNotifIds.includes(`deadline-${uni.id || idx}`),
+              university: uni,
+              deadlineInfo: {
+                uni,
+                daysLeft: diffDays,
+                deadline: uni.deadline,
+                round: uni.round
+              },
+              actionText: 'Review Application'
+            });
+          }
+        }
+      });
+
+      // 2. BATCH ENROLLMENTS
+      (batches || []).filter(b => b.students?.includes(currentStudent.id) || b.students?.includes(currentStudent.name)).forEach((b: any) => {
+        list.push({
+          id: `batch-${b.id}`,
+          title: `Batch Enrolled: ${b.name}`,
+          message: `Enrolled in cohort batch "${b.name}" (${b.subject || 'Cohort'}). Schedule: ${b.scheduleDayTime || 'Weekly live classes'}. Mentors: ${(b.mentors || []).join(', ') || 'Faculty'}`,
+          time: 'Enrolled',
+          category: 'BATCHES',
+          link: '/student/schedules',
+          type: 'info',
+          isRead: readNotifIds.includes(`batch-${b.id}`),
+          batch: b,
+          actionText: 'View Batch Schedule'
+        });
+      });
+
+      // 3. STUDENT TASKS (Excluding any profile modification notices)
       (currentStudent.tasks || []).forEach((t: any) => {
-        const isCompleted = t.status === 'Completed';
-        const isNeedsRev = t.status === 'Needs Revision';
+        const isCompleted = t.stage === 'COMPLETED' || t.status === 'Completed';
+        const isNeedsRev = t.stage === 'NEEDS_REVISION' || t.status === 'Needs Revision';
         list.push({
           id: `task-${t.id}`,
           title: isNeedsRev ? `Task Revision: ${t.name}` : isCompleted ? `Task Approved: ${t.name}` : `Task Assigned: ${t.name}`,
           message: isNeedsRev 
-            ? `Counselor feedback: ${t.feedback || 'Please update your submission and re-upload'}`
+            ? `Counselor feedback: ${t.feedback || 'Please update your deliverable and re-upload'}`
             : isCompleted 
             ? `Your task submission has been approved & marked complete.`
-            : `Assigned: ${t.description || t.category || 'New task assigned'} (Due: ${t.deadline || 'Upcoming'})`,
-          time: t.deadline ? `Due: ${t.deadline}` : 'Active',
+            : `Assigned: ${t.description || t.category || 'New task assigned'} (Due: ${t.dueDate || t.deadline || 'Upcoming'})`,
+          time: t.dueDate || t.deadline ? `Due: ${t.dueDate || t.deadline}` : 'Active',
           category: 'TASKS',
           link: '/student/tasks',
           type: isNeedsRev ? 'urgent' : isCompleted ? 'success' : 'info',
-          isRead: readNotifIds.includes(`task-${t.id}`)
+          isRead: readNotifIds.includes(`task-${t.id}`),
+          task: t,
+          actionText: 'Open in Task Manager'
         });
       });
 
+      // 4. ESSAYS
       (currentStudent.essays || []).forEach((e: any) => {
-        if (e.feedback || e.status === 'Completed' || e.status === 'Needs Revision') {
+        if (e.feedback || e.status === 'Completed' || e.status === 'Needs Revision' || e.status === 'Approved') {
           list.push({
             id: `essay-${e.id}`,
-            title: `Essay Evaluation: ${e.university || 'Essay Draft'}`,
+            title: `Essay Evaluation: ${e.university || e.title || 'Essay Draft'}`,
             message: e.feedback ? `Mentor note: "${e.feedback}"` : `Status updated to ${e.status}`,
             time: 'Evaluated',
             category: 'ESSAYS',
             link: '/student/essays',
-            type: e.status === 'Completed' ? 'success' : 'warning',
-            isRead: readNotifIds.includes(`essay-${e.id}`)
+            type: e.status === 'Needs Revision' ? 'urgent' : 'success',
+            isRead: readNotifIds.includes(`essay-${e.id}`),
+            essay: e,
+            actionText: 'Open Essay Vault'
           });
         }
       });
 
+      // 5. DOCUMENTS
       (currentStudent.documents || []).forEach((d: any) => {
-        if (d.status === 'rejected') {
+        if (d.status === 'rejected' || d.status === 'REJECTED') {
           list.push({
             id: `doc-${d.id}`,
             title: `Document Action Required: ${d.name}`,
-            message: d.notes ? `Feedback: ${d.notes}` : 'Document was not approved. Please re-upload.',
-            time: d.date || 'Recent',
+            message: d.notes || d.feedback ? `Feedback: ${d.notes || d.feedback}` : 'Document was not approved. Please re-upload.',
+            time: d.date || d.uploadedAt || 'Recent',
             category: 'DOCS',
             link: '/student/vault',
             type: 'urgent',
-            isRead: readNotifIds.includes(`doc-${d.id}`)
+            isRead: readNotifIds.includes(`doc-${d.id}`),
+            doc: d,
+            actionText: 'Open Document Vault'
           });
-        } else if (d.status === 'verified') {
+        } else if (d.status === 'verified' || d.status === 'VERIFIED') {
           list.push({
             id: `doc-${d.id}`,
             title: `Document Verified: ${d.name}`,
             message: `Your document has been verified by the counselor.`,
-            time: d.date || 'Recent',
+            time: d.date || d.uploadedAt || 'Recent',
             category: 'DOCS',
             link: '/student/vault',
             type: 'success',
-            isRead: readNotifIds.includes(`doc-${d.id}`)
+            isRead: readNotifIds.includes(`doc-${d.id}`),
+            doc: d,
+            actionText: 'Open Document Vault'
           });
         }
       });
@@ -638,12 +703,14 @@ export default function AppLayout() {
                   </div>
 
                   {/* Filter Pills */}
-                  <div className="flex gap-1 p-2 bg-slate-50/50 border-b border-slate-100 text-[11px]">
+                  <div className="flex gap-1 p-2 bg-slate-50/50 border-b border-slate-100 text-[11px] overflow-x-auto scrollbar-none">
                     {[
                       { id: 'ALL', label: 'All' },
-                      { id: 'TASKS', label: 'Tasks & Updates' },
+                      { id: 'TASKS', label: 'Tasks' },
+                      { id: 'DEADLINES', label: 'Deadlines' },
+                      { id: 'BATCHES', label: 'Batches' },
                       { id: 'ESSAYS', label: 'Essays' },
-                      { id: 'DOCS', label: 'Documents' }
+                      { id: 'DOCS', label: 'Docs' }
                     ].map(tab => (
                       <button
                         key={tab.id}
@@ -675,7 +742,25 @@ export default function AppLayout() {
                           onClick={() => {
                             markOneAsRead(n.id);
                             setIsNotificationOpen(false);
-                            navigate(n.link);
+                            setActiveNotificationModal({
+                              id: n.id,
+                              title: n.title,
+                              message: n.message,
+                              time: n.time,
+                              timestamp: n.time,
+                              type: n.type,
+                              category: n.category,
+                              link: n.link,
+                              read: true,
+                              task: n.task,
+                              university: n.university,
+                              deadlineInfo: n.deadlineInfo,
+                              batch: n.batch,
+                              meeting: n.meeting,
+                              doc: n.doc,
+                              essay: n.essay,
+                              actionText: n.actionText || (n.category === 'TASKS' ? 'Go to Tasks' : n.category === 'DEADLINES' ? 'Review Application' : n.category === 'BATCHES' ? 'View Batch' : n.category === 'ESSAYS' ? 'Go to Essays' : 'Go to Documents')
+                            });
                           }}
                           className={cn(
                             "p-3.5 hover:bg-indigo-50/50 cursor-pointer transition-colors flex gap-3 text-left relative group",
@@ -692,7 +777,9 @@ export default function AppLayout() {
                             n.type === 'warning' ? "bg-amber-100 text-amber-600" :
                             "bg-indigo-100 text-indigo-600"
                           )}>
-                            {n.category === 'TASKS' ? <CheckSquare className="w-4 h-4" /> :
+                            {n.category === 'DEADLINES' ? <Calendar className="w-4 h-4" /> :
+                             n.category === 'BATCHES' ? <BookOpen className="w-4 h-4" /> :
+                             n.category === 'TASKS' ? <CheckSquare className="w-4 h-4" /> :
                              n.category === 'ESSAYS' ? <PenTool className="w-4 h-4" /> :
                              <FolderLock className="w-4 h-4" />}
                           </div>
@@ -1005,6 +1092,28 @@ export default function AppLayout() {
             onSavePassword={handleSaveCurrentUserPassword}
           />
         )}
+
+        {/* Global Notification Details Modal */}
+        <NotificationDetailsModal
+          isOpen={!!activeNotificationModal}
+          notification={activeNotificationModal}
+          onClose={() => setActiveNotificationModal(null)}
+          onToggleRead={(id) => {
+            if (readNotifIds.includes(id)) {
+              const updated = readNotifIds.filter(i => i !== id);
+              setReadNotifIds(updated);
+              localStorage.setItem('uppseekers_read_notifications', JSON.stringify(updated));
+            } else {
+              const updated = [...readNotifIds, id];
+              setReadNotifIds(updated);
+              localStorage.setItem('uppseekers_read_notifications', JSON.stringify(updated));
+            }
+          }}
+          onNavigate={(link) => {
+            navigate(link);
+            setActiveNotificationModal(null);
+          }}
+        />
       </main>
     </div>
   );

@@ -164,7 +164,12 @@ const defaultPermissionsMatrix: Record<string, PermissionCategory[]> = roles.red
 const initialStudents: Student[] = [];
 
 const initialStaff: StaffMember[] = [
-  { id: '1', name: 'Admin', email: 'uppseekers@gmail.com', role: 'SYSTEM_ADMIN', students: 'All', status: 'Active', password: 'Uppseekers@1' }
+  { id: '1', name: 'Admin', email: 'uppseekers@gmail.com', role: 'SYSTEM_ADMIN', students: 'All', status: 'Active', password: 'Uppseekers@1' },
+  { id: '2', name: 'Sarah Jenkins', email: 'sarah@uppseekers.com', role: 'COUNSELOR', students: '2 Students', status: 'Active', password: 'Staff@123' },
+  { id: '3', name: 'Dr. Vikram Roy', email: 'vikram.roy@uppseekers.com', role: 'RESEARCH_GUIDE', students: '2 Students', status: 'Active', password: 'Staff@123' },
+  { id: '4', name: 'Marcus Vance', email: 'marcus@uppseekers.com', role: 'CATEGORY_MANAGER', students: 'All', status: 'Active', password: 'Staff@123' },
+  { id: '5', name: 'Elena Rostova', email: 'elena@uppseekers.com', role: 'SAT_VERBAL_FACULTY', students: '1 Student', status: 'Active', password: 'Staff@123' },
+  { id: '6', name: 'Rajesh Menon', email: 'rajesh.menon@uppseekers.com', role: 'SAT_MATH_FACULTY', students: '1 Student', status: 'Active', password: 'Staff@123' }
 ];
 
 const initialBatches: Batch[] = [
@@ -538,7 +543,17 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
+        if (Array.isArray(parsed)) {
+          return parsed.map(s => ({
+            ...s,
+            intake: s.intake || 'Fall 2026',
+            tasks: s.tasks || [],
+            activities: s.activities || [],
+            documents: s.documents || [],
+            shortlist: s.shortlist || [],
+            countries: s.countries || []
+          }));
+        }
       } catch (e) {}
     }
     return initialStudents;
@@ -638,6 +653,13 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         const loaded: Student[] = [];
         snapshot.forEach(docSnap => {
           const s = docSnap.data() as Student;
+          if (!s.id) s.id = docSnap.id;
+          if (!s.intake) s.intake = 'Fall 2026';
+          if (!s.tasks) s.tasks = [];
+          if (!s.activities) s.activities = [];
+          if (!s.documents) s.documents = [];
+          if (!s.shortlist) s.shortlist = [];
+          if (!s.countries) s.countries = [];
           if (s.phone && typeof s.phone === 'string' && s.phone.includes('|')) {
             s.phone = s.phone.split('|')[0].trim();
           }
@@ -854,6 +876,24 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             email: 'marcus@uppseekers.com',
             role: 'CATEGORY_MANAGER',
             students: 'All',
+            status: 'Active',
+            password: 'Staff@123'
+          },
+          {
+            id: '5',
+            name: 'Elena Rostova',
+            email: 'elena@uppseekers.com',
+            role: 'SAT_VERBAL_FACULTY',
+            students: '1 Student',
+            status: 'Active',
+            password: 'Staff@123'
+          },
+          {
+            id: '6',
+            name: 'Rajesh Menon',
+            email: 'rajesh.menon@uppseekers.com',
+            role: 'SAT_MATH_FACULTY',
+            students: '1 Student',
             status: 'Active',
             password: 'Staff@123'
           }

@@ -621,6 +621,7 @@ function EssayEditor({ essay, onClose, onSave, onSubmit, onRename, onDelete }: {
   };
 
   const extractPolishedTextFromMarkdown = (markdown: string) => {
+    if (!markdown || typeof markdown !== 'string') return '';
     const match = markdown.match(/###?\s*1\.\s*\*\*Polished Text:\*\*\s*([\s\S]*?)(?=###?\s*2\.\s*\*\*Correction Log:\*\*|$)/i);
     if (match && match[1]) {
       return match[1].trim();
@@ -1345,6 +1346,7 @@ ${opt.grammarAndToneAdvice}
   };
 
   const extractPolishedText = (markdown: string) => {
+    if (!markdown || typeof markdown !== 'string') return '';
     const match = markdown.match(/###?\s*1\.\s*\*\*Polished Text:\*\*\s*([\s\S]*?)(?=###?\s*2\.\s*\*\*Correction Log:\*\*|$)/i);
     if (match && match[1]) {
       return match[1].trim();
