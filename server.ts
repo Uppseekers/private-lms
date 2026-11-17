@@ -36,6 +36,16 @@ import {
   buildDefaultLaunchpadChapters,
   buildDefaultCertQuestions,
 } from "./src/data/launchpadData.ts";
+import {
+  ensureProductionReady,
+  hasSqlEnv,
+  hasTable,
+  hasColumn,
+  sysKvGet,
+  sysKvSet,
+  mergeRecordsById,
+  isSysKvUid,
+} from "./src/db/productionVault.ts";
 
 interface PasswordResetItem {
   token: string;
@@ -76,7 +86,7 @@ async function getMailTransporter() {
 }
 
 async function safeDbQuery<T>(queryFn: () => Promise<T>, fallback: T): Promise<T> {
-  if (!process.env.SQL_HOST && !process.env.DATABASE_URL && !process.env.POSTGRES_URL) {
+  if (!hasSqlEnv()) {
     return fallback;
   }
   try {
@@ -182,6 +192,252 @@ function buildStudentFromRow(u: any, sd: any): Record<string, any> {
   };
 }
 
+async function saveUserPasswordMirror(uid?: string | null, email?: string | null, password?: string | null) {
+  if (!password || !password.trim()) return;
+  const cleanPwd = password.trim();
+  const map = await sysKvGet<Record<string, string>>("user_passwords", {});
+  const next = { ...(map || {}) };
+  if (uid && uid.trim()) next[`uid:${uid.trim()}`] = cleanPwd;
+  const cleanEm = normEmail(email);
+  if (cleanEm) next[`email:${cleanEm}`] = cleanPwd;
+  await sysKvSet("user_passwords", next);
+}
+
+async function saveStudentProfileMirror(userIdOrUid: string | number, profileJson: Record<string, any>) {
+  if (!profileJson || typeof profileJson !== "object") return;
+  const map = await sysKvGet<Record<string, any>>("student_profiles", {});
+  const key = String(userIdOrUid);
+  const next = {
+    ...(map || {}),
+    [key]: { ...((map && map[key]) || {}), ...profileJson },
+  };
+  await sysKvSet("student_profiles", next);
+}
+
+async function readAllUsersSafe(): Promise<any[]> {
+  if (!hasSqlEnv() || !hasTable("users")) return [];
+  const pwdMirror = await sysKvGet<Record<string, string>>("user_passwords", {});
+  let rawRows: any[] = [];
+  if (hasColumn("users", "password")) {
+    rawRows = await safeDbQuery(() => db.select().from(users), []);
+  } else {
+    rawRows = await safeDbQuery(async () => {
+      const res = await createPool().query(
+        `SELECT "id", "uid", "email", "name", "role", "created_at" AS "createdAt" FROM "users"`
+      );
+      return res.rows || [];
+    }, []);
+  }
+  return rawRows
+    .filter((u) => u && !isSysKvUid(u.uid))
+    .map((u) => {
+      const cleanUid = String(u.uid || "").trim();
+      const cleanEm = normEmail(u.email);
+      const mirroredPwd =
+        (cleanUid && pwdMirror?.[`uid:${cleanUid}`]) ||
+        (cleanEm && pwdMirror?.[`email:${cleanEm}`]) ||
+        undefined;
+      return {
+        ...u,
+        password: u.password || mirroredPwd || null,
+      };
+    });
+}
+
+async function readAllStudentsDataSafe(): Promise<any[]> {
+  if (!hasSqlEnv() || !hasTable("students_data")) return [];
+  const profileMirror = await sysKvGet<Record<string, any>>("student_profiles", {});
+  if (hasColumn("students_data", "profile_json")) {
+    const rows = await safeDbQuery(() => db.select().from(studentsData), []);
+    return rows.map((sd) => ({
+      ...sd,
+      profileJson: {
+        ...(profileMirror?.[String(sd.userId)] || {}),
+        ...(sd.profileJson && typeof sd.profileJson === "object" ? sd.profileJson : {}),
+      },
+    }));
+  }
+  const raw = await safeDbQuery(async () => {
+    const res = await createPool().query(
+      `SELECT "id", "user_id" AS "userId", "phone", "intake", "countries", "readiness", "counselor", "school",
+              "activities", "extracurriculars", "academic_scores" AS "academicScores", "shortlist", "documents", "essays", "tasks"
+       FROM "students_data"`
+    );
+    return res.rows || [];
+  }, []);
+  return raw.map((sd: any) => ({
+    ...sd,
+    profileJson: profileMirror?.[String(sd.userId)] || {},
+  }));
+}
+
+async function upsertUserRowSafe(params: {
+  existingUser?: any;
+  uid: string;
+  email: string;
+  name: string;
+  password?: string;
+  defaultPassword: string;
+  role: string;
+}): Promise<any> {
+  const { existingUser, uid, email, name, password, defaultPassword, role } = params;
+  const effectivePassword = password && password.trim() ? password.trim() : undefined;
+  if (effectivePassword) {
+    await saveUserPasswordMirror(uid, email, effectivePassword);
+  } else if (!existingUser) {
+    await saveUserPasswordMirror(uid, email, defaultPassword);
+  }
+
+  if (!hasSqlEnv() || !hasTable("users")) {
+    return existingUser || { id: Date.now(), uid, email, name, password: effectivePassword || defaultPassword, role };
+  }
+
+  const pool = createPool();
+  if (!existingUser) {
+    if (hasColumn("users", "password")) {
+      const inserted = await db
+        .insert(users)
+        .values({
+          uid,
+          email,
+          name,
+          password: effectivePassword || defaultPassword,
+          role,
+        })
+        .onConflictDoUpdate({
+          target: users.uid,
+          set: {
+            email,
+            name,
+            ...(effectivePassword ? { password: effectivePassword } : {}),
+          },
+        })
+        .returning();
+      return inserted[0];
+    } else {
+      const res = await pool.query(
+        `INSERT INTO "users" ("uid", "email", "name", "role")
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT ("uid") DO UPDATE SET "email" = EXCLUDED."email", "name" = EXCLUDED."name"
+         RETURNING "id", "uid", "email", "name", "role"`,
+        [uid, email, name, role]
+      );
+      return { ...res.rows[0], password: effectivePassword || defaultPassword };
+    }
+  } else {
+    const nextName = name || existingUser.name;
+    const nextRole = role || existingUser.role;
+    const nextEmail =
+      email && email.includes("@") && !email.endsWith("@uppseekers.local")
+        ? email
+        : existingUser.email;
+    if (hasColumn("users", "password")) {
+      const updates: any = { name: nextName, role: nextRole, email: nextEmail };
+      if (effectivePassword) updates.password = effectivePassword;
+      await db.update(users).set(updates).where(eq(users.id, existingUser.id));
+    } else {
+      await pool.query(
+        `UPDATE "users" SET "name" = $1, "role" = $2, "email" = $3 WHERE "id" = $4`,
+        [nextName, nextRole, nextEmail, existingUser.id]
+      );
+    }
+    return {
+      ...existingUser,
+      name: nextName,
+      role: nextRole,
+      email: nextEmail,
+      password: effectivePassword || existingUser.password,
+    };
+  }
+}
+
+async function upsertStudentDataRowSafe(userId: number, s: Record<string, any>) {
+  if (!hasSqlEnv() || !hasTable("students_data")) return;
+  const allSd = await readAllStudentsDataSafe();
+  const existingSd = allSd.find((row) => row.userId === userId);
+  const mergedProfile = extractStudentProfileJson(s, existingSd?.profileJson || null);
+  await saveStudentProfileMirror(userId, mergedProfile);
+
+  const payload = {
+    phone: s.phone !== undefined ? s.phone : (existingSd?.phone ?? ""),
+    intake: s.intake !== undefined ? s.intake : (existingSd?.intake ?? "Fall 2026"),
+    countries: s.countries !== undefined ? s.countries : (existingSd?.countries ?? ["USA"]),
+    readiness: s.readiness !== undefined ? s.readiness : (existingSd?.readiness ?? 0),
+    counselor: s.counselor !== undefined ? s.counselor : (existingSd?.counselor ?? "Unassigned"),
+    school: s.school !== undefined ? s.school : (existingSd?.school ?? ""),
+    activities: s.activities !== undefined ? s.activities : (existingSd?.activities ?? []),
+    extracurriculars: s.extracurriculars !== undefined ? s.extracurriculars : (existingSd?.extracurriculars ?? []),
+    academicScores: s.academicScores !== undefined ? s.academicScores : (existingSd?.academicScores ?? []),
+    shortlist: s.shortlist !== undefined ? s.shortlist : (existingSd?.shortlist ?? []),
+    documents: s.documents !== undefined ? s.documents : (existingSd?.documents ?? []),
+    essays: s.essays !== undefined ? s.essays : (existingSd?.essays ?? []),
+    tasks: s.tasks !== undefined ? s.tasks : (existingSd?.tasks ?? []),
+  };
+
+  if (hasColumn("students_data", "profile_json")) {
+    if (!existingSd) {
+      await db.insert(studentsData).values({
+        userId,
+        ...payload,
+        profileJson: mergedProfile,
+      });
+    } else {
+      await db
+        .update(studentsData)
+        .set({ ...payload, profileJson: mergedProfile })
+        .where(eq(studentsData.userId, userId));
+    }
+  } else {
+    const pool = createPool();
+    if (!existingSd) {
+      await pool.query(
+        `INSERT INTO "students_data" ("user_id", "phone", "intake", "countries", "readiness", "counselor", "school", "activities", "extracurriculars", "academic_scores", "shortlist", "documents", "essays", "tasks")
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb)`,
+        [
+          userId,
+          payload.phone,
+          payload.intake,
+          JSON.stringify(payload.countries || []),
+          payload.readiness,
+          payload.counselor,
+          payload.school,
+          JSON.stringify(payload.activities || []),
+          JSON.stringify(payload.extracurriculars || []),
+          JSON.stringify(payload.academicScores || []),
+          JSON.stringify(payload.shortlist || []),
+          JSON.stringify(payload.documents || []),
+          JSON.stringify(payload.essays || []),
+          JSON.stringify(payload.tasks || []),
+        ]
+      );
+    } else {
+      await pool.query(
+        `UPDATE "students_data"
+         SET "phone" = $1, "intake" = $2, "countries" = $3::jsonb, "readiness" = $4, "counselor" = $5, "school" = $6,
+             "activities" = $7::jsonb, "extracurriculars" = $8::jsonb, "academic_scores" = $9::jsonb,
+             "shortlist" = $10::jsonb, "documents" = $11::jsonb, "essays" = $12::jsonb, "tasks" = $13::jsonb
+         WHERE "user_id" = $14`,
+        [
+          payload.phone,
+          payload.intake,
+          JSON.stringify(payload.countries || []),
+          payload.readiness,
+          payload.counselor,
+          payload.school,
+          JSON.stringify(payload.activities || []),
+          JSON.stringify(payload.extracurriculars || []),
+          JSON.stringify(payload.academicScores || []),
+          JSON.stringify(payload.shortlist || []),
+          JSON.stringify(payload.documents || []),
+          JSON.stringify(payload.essays || []),
+          JSON.stringify(payload.tasks || []),
+          userId,
+        ]
+      );
+    }
+  }
+}
+
 async function findAllMatchingUsers(uid?: string, email?: string) {
   const cleanUid = (uid || "").trim();
   const cleanEmail = normEmail(email);
@@ -190,7 +446,7 @@ async function findAllMatchingUsers(uid?: string, email?: string) {
   const effectiveEmail =
     cleanEmail || (cleanUid === "1" || cleanUid === "admin-1" ? "uppseekers@gmail.com" : "");
 
-  const all = await db.select().from(users);
+  const all = await readAllUsersSafe();
   return all.filter((u) => {
     const uUid = (u.uid || "").trim();
     const uEmail = normEmail(u.email);
@@ -243,8 +499,7 @@ async function startServer() {
   let pgIdleReleaseTimer: ReturnType<typeof setTimeout> | null = null;
   let pgReconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  const hasSqlConfigured = () =>
-    Boolean(process.env.SQL_HOST || process.env.DATABASE_URL || process.env.POSTGRES_URL);
+  const hasSqlConfigured = () => hasSqlEnv();
 
   const releasePgListener = () => {
     if (pgReconnectTimer) {
@@ -415,176 +670,15 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
-  // Seed default System Admin, default Staff, and default Students if not already in Cloud SQL
-  safeDbQuery(async () => {
-    const existingUsers = await db.select().from(users);
-    const hasUser = (uid: string, email: string) =>
-      existingUsers.some(
-        (u) => (u.uid || "").trim() === uid || normEmail(u.email) === normEmail(email)
-      );
-
-    const defaultStaffSeed = [
-      { uid: 'admin-1', email: 'uppseekers@gmail.com', name: 'Admin', password: 'Uppseekers@1', role: 'SYSTEM_ADMIN', students: 'All' },
-      { uid: '2', email: 'sarah@uppseekers.com', name: 'Sarah Jenkins', password: 'Staff@123', role: 'COUNSELOR', students: '2 Students' },
-      { uid: '3', email: 'vikram.roy@uppseekers.com', name: 'Dr. Vikram Roy', password: 'Staff@123', role: 'RESEARCH_GUIDE', students: '2 Students' },
-      { uid: '4', email: 'marcus@uppseekers.com', name: 'Marcus Vance', password: 'Staff@123', role: 'CATEGORY_MANAGER', students: 'All' },
-      { uid: '5', email: 'elena@uppseekers.com', name: 'Elena Rostova', password: 'Staff@123', role: 'SAT_VERBAL_FACULTY', students: '1 Student' },
-      { uid: '6', email: 'rajesh.menon@uppseekers.com', name: 'Rajesh Menon', password: 'Staff@123', role: 'SAT_MATH_FACULTY', students: '1 Student' },
-    ];
-
-    for (const st of defaultStaffSeed) {
-      if (!hasUser(st.uid, st.email)) {
-        const inserted = await db.insert(users).values({
-          uid: st.uid,
-          email: st.email,
-          name: st.name,
-          password: st.password,
-          role: st.role,
-        }).onConflictDoNothing({ target: users.uid }).returning();
-        if (inserted[0]) {
-          await db.insert(staffData).values({
-            userId: inserted[0].id,
-            status: 'Active',
-            students: st.students,
-          });
-        }
-      }
+  // Lazy single-flight schema introspection, idempotent DDL auto-migration, and default seeding
+  app.use("/api", async (_req, _res, next) => {
+    try {
+      await ensureProductionReady();
+    } catch {
+      // Handled internally by productionVault
     }
-
-    const defaultStudentsSeed = [
-      {
-        uid: 'STU-101',
-        name: 'Aarav Sharma',
-        email: 'aarav.sharma@example.com',
-        phone: '+91 9876543210',
-        intake: 'Fall 2026',
-        school: 'Delhi Public School',
-        counselor: 'Sarah Jenkins',
-        readiness: 75,
-        countries: ['USA', 'UK'],
-        password: 'Student@123',
-        profileJson: { researchMentor: 'Dr. Vikram Roy' },
-      },
-      {
-        uid: 'STU-102',
-        name: 'Ananya Iyer',
-        email: 'ananya.iyer@example.com',
-        phone: '+91 9812345678',
-        intake: 'Fall 2026',
-        school: 'The Doon School',
-        counselor: 'Sarah Jenkins',
-        readiness: 65,
-        countries: ['USA', 'Canada'],
-        password: 'Student@123',
-        profileJson: { satVerbalMentor: 'Elena Rostova' },
-      },
-      {
-        uid: 'STU-103',
-        name: 'Qasim Khan',
-        email: 'qasim.khan@example.com',
-        phone: '+91 9988776655',
-        intake: 'Fall 2026',
-        school: 'St. Xavier High School',
-        counselor: 'Admin',
-        readiness: 85,
-        countries: ['USA', 'UK'],
-        password: 'Student@123',
-        profileJson: { researchMentor: 'Dr. Vikram Roy' },
-      },
-    ];
-
-    for (const stu of defaultStudentsSeed) {
-      if (!hasUser(stu.uid, stu.email)) {
-        const inserted = await db.insert(users).values({
-          uid: stu.uid,
-          email: stu.email,
-          name: stu.name,
-          password: stu.password,
-          role: 'STUDENT',
-        }).onConflictDoNothing({ target: users.uid }).returning();
-        if (inserted[0]) {
-          await db.insert(studentsData).values({
-            userId: inserted[0].id,
-            phone: stu.phone,
-            intake: stu.intake,
-            countries: stu.countries,
-            readiness: stu.readiness,
-            counselor: stu.counselor,
-            school: stu.school,
-            activities: [],
-            extracurriculars: [],
-            academicScores: [],
-            shortlist: [],
-            documents: [],
-            essays: [],
-            tasks: [],
-            profileJson: stu.profileJson,
-          });
-        }
-      }
-    }
-  }, null);
-
-  // Restore / seed all 8 default Launchpad subjects & Subject 1 built-in curriculum if unseeded
-  safeDbQuery(async () => {
-    const existingSubjects = await db.select().from(launchpadSubjects);
-    const hasCoreSubject = existingSubjects.some((s) => s.id === 'comm-public-speaking');
-    if (existingSubjects.length === 0 || (existingSubjects.length <= 1 && !hasCoreSubject)) {
-      const existingChapters = await db.select().from(launchpadChapters);
-      const chapterSubjectIds = new Set(existingChapters.map((c) => c.subjectId));
-      const defaultSubjects = buildDefaultLaunchpadSubjects();
-      for (const s of defaultSubjects) {
-        await db.insert(launchpadSubjects).values({
-          id: s.id,
-          sortOrder: s.order,
-          title: s.title,
-          description: s.description || '',
-          accentHex: s.accentHex || '#4F46E5',
-          surfaceTint: s.surfaceTint || '#EEF2FF',
-          iconKey: s.iconKey || s.id,
-          customIconUrl: s.customIconUrl || null,
-          hasCurriculum: Boolean(s.hasCurriculum) || chapterSubjectIds.has(s.id),
-          courseGoal: s.courseGoal || null,
-          passingThreshold: Number(s.passingThreshold ?? 75),
-          certificateTitle: s.certificateTitle || null,
-          isArchived: Boolean(s.isArchived),
-          updatedAt: new Date(),
-        }).onConflictDoNothing({ target: launchpadSubjects.id });
-      }
-
-      if (!existingChapters.some((c) => c.subjectId === 'comm-public-speaking')) {
-        const defaultChapters = buildDefaultLaunchpadChapters();
-        for (const c of defaultChapters) {
-          await db.insert(launchpadChapters).values({
-            id: c.id || `comm-public-speaking__w${c.weekNumber}`,
-            subjectId: 'comm-public-speaking',
-            weekNumber: c.weekNumber,
-            title: c.title,
-            learningObjectives: c.learningObjectives || [],
-            lectureJson: c.lecture || {},
-            readingGuideJson: c.readingGuide || {},
-            practicalExerciseJson: c.practicalExercise || {},
-            updatedAt: new Date(),
-          }).onConflictDoNothing({ target: launchpadChapters.id });
-        }
-      }
-
-      const existingCerts = await db.select().from(launchpadCertificationQuestions);
-      if (!existingCerts.some((q) => q.subjectId === 'comm-public-speaking')) {
-        const defaultCerts = buildDefaultCertQuestions();
-        for (const q of defaultCerts) {
-          await db.insert(launchpadCertificationQuestions).values({
-            id: q.id,
-            subjectId: q.subjectId,
-            questionType: q.questionType,
-            sortOrder: q.sortOrder,
-            payloadJson: q.payload || {},
-            updatedAt: new Date(),
-          }).onConflictDoNothing({ target: launchpadCertificationQuestions.id });
-        }
-      }
-    }
-  }, null);
+    next();
+  });
 
   // API endpoints
 
@@ -602,9 +696,12 @@ async function startServer() {
       const rawPassword = String(password);
       const trimmedPassword = rawPassword.trim();
 
-      const allUsers = await safeDbQuery(() => db.select().from(users), []);
-      const allStaffData = await safeDbQuery(() => db.select().from(staffData), []);
-      const allStudentsData = await safeDbQuery(() => db.select().from(studentsData), []);
+      const allUsers = await readAllUsersSafe();
+      const validUserIds = new Set(allUsers.map((u) => u.id));
+      const allStaffData = (await safeDbQuery(() => db.select().from(staffData), [])).filter((sd) =>
+        validUserIds.has(sd.userId)
+      );
+      const allStudentsData = await readAllStudentsDataSafe();
 
       const matchingUsers = allUsers.filter(u => normEmail(u.email) === lookupEmail);
       // Prefer records with associated student/staff data if multiple rows share an email
@@ -661,12 +758,44 @@ async function startServer() {
         }
       }
 
+      // Check KV mirrors if SQL was empty/unavailable
+      const kvStudents = await sysKvGet<any[]>("portal_students_mirror", []);
+      const kvMatchedStu = kvStudents.find(
+        (s) => normEmail(s?.email) === lookupEmail &&
+          ((s.password && (s.password === rawPassword || String(s.password).trim() === trimmedPassword)) ||
+           (!s.password && (trimmedPassword === 'Student@123' || trimmedPassword === 'Uppseekers@1')))
+      );
+      if (kvMatchedStu) {
+        const enriched = { ...kvMatchedStu, role: 'STUDENT', status: kvMatchedStu.status || 'Active' };
+        res.json({ user: enriched, token: `custom_${enriched.id}_${enriched.email}` });
+        return;
+      }
+
+      const kvStaff = await sysKvGet<any[]>("portal_staff_mirror", []);
+      const kvMatchedStaff = kvStaff.find(
+        (st) => normEmail(st?.email) === lookupEmail &&
+          ((st.password && (st.password === rawPassword || String(st.password).trim() === trimmedPassword)) ||
+           (!st.password && (trimmedPassword === 'Staff@123' || trimmedPassword === 'Uppseekers@1')))
+      );
+      if (kvMatchedStaff) {
+        if (String(kvMatchedStaff.status || '').toLowerCase() === 'suspended') {
+          res.status(403).json({ error: "Your account is suspended. Please contact your administrator." });
+          return;
+        }
+        res.json({ user: kvMatchedStaff, token: `custom_${kvMatchedStaff.id}_${kvMatchedStaff.email}` });
+        return;
+      }
+
       // Check default admin fallback only if admin does not have a custom password set in DB
-      const hasCustomAdminPwd = sortedMatches.some(u => typeof u.password === 'string' && u.password.trim().length > 0);
+      const pwdMirror = await sysKvGet<Record<string, string>>("user_passwords", {});
+      const mirroredAdminPwd = pwdMirror?.["email:uppseekers@gmail.com"] || pwdMirror?.["uid:admin-1"];
+      const hasCustomAdminPwd =
+        Boolean(mirroredAdminPwd) ||
+        sortedMatches.some(u => typeof u.password === 'string' && u.password.trim().length > 0);
       if (
-        !hasCustomAdminPwd &&
         (normalizedEmail === 'uppseekers@gmail.com' || normalizedEmail === 'uppseekers@gmail.cm') &&
-        (trimmedPassword === 'Uppseekers@1' || trimmedPassword === 'Admin@123')
+        ((hasCustomAdminPwd && mirroredAdminPwd && mirroredAdminPwd.trim() === trimmedPassword) ||
+          (!hasCustomAdminPwd && (trimmedPassword === 'Uppseekers@1' || trimmedPassword === 'Admin@123')))
       ) {
         const dbAdmin = sortedMatches[0];
         const foundAdmin = {
@@ -753,82 +882,31 @@ async function startServer() {
       const uid = s.id || `STU-${Date.now()}`;
       const cleanEmail = normEmail(s.email);
       const cleanPassword = typeof s.password === 'string' && s.password.trim() ? s.password.trim() : undefined;
-      let user = await findUserByUidOrEmail(uid, cleanEmail);
 
-      if (!user) {
-        const insertedUsers = await db.insert(users).values({
+      const existingMirror = await sysKvGet<any[]>("portal_students_mirror", []);
+      const studentObj = { ...s, id: uid, uid, email: cleanEmail, password: cleanPassword || s.password || 'Student@123', role: 'STUDENT' };
+      const filteredMirror = existingMirror.filter((m) => m?.id !== uid && normEmail(m?.email) !== cleanEmail);
+      await sysKvSet("portal_students_mirror", [...filteredMirror, studentObj]);
+
+      let user: any = null;
+      await safeDbQuery(async () => {
+        const existing = await findUserByUidOrEmail(uid, cleanEmail);
+        user = await upsertUserRowSafe({
+          existingUser: existing,
           uid,
           email: cleanEmail,
           name: s.name,
-          password: cleanPassword || 'Student@123',
+          password: cleanPassword,
+          defaultPassword: 'Student@123',
           role: 'STUDENT',
-        }).returning();
-        user = insertedUsers[0];
-
-        await db.insert(studentsData).values({
-          userId: user.id,
-          phone: s.phone || '',
-          intake: s.intake || 'Fall 2026',
-          countries: s.countries || ['USA'],
-          readiness: s.readiness || 0,
-          counselor: s.counselor || 'Unassigned',
-          school: s.school || '',
-          activities: s.activities || [],
-          extracurriculars: s.extracurriculars || [],
-          academicScores: s.academicScores || [],
-          shortlist: s.shortlist || [],
-          documents: s.documents || [],
-          essays: s.essays || [],
-          tasks: s.tasks || [],
-          profileJson: extractStudentProfileJson(s, null),
         });
-      } else {
-        const userUpdates: any = { name: s.name || user.name };
-        if (cleanEmail && cleanEmail.includes('@')) userUpdates.email = cleanEmail;
-        if (cleanPassword) userUpdates.password = cleanPassword;
-        await db.update(users).set(userUpdates).where(eq(users.id, user.id));
-
-        const existingSd = await db.select().from(studentsData).where(eq(studentsData.userId, user.id)).then(r => r[0]);
-        if (!existingSd) {
-          await db.insert(studentsData).values({
-            userId: user.id,
-            phone: s.phone ?? '',
-            intake: s.intake ?? 'Fall 2026',
-            countries: s.countries ?? ['USA'],
-            readiness: s.readiness ?? 0,
-            counselor: s.counselor ?? 'Unassigned',
-            school: s.school ?? '',
-            activities: s.activities ?? [],
-            extracurriculars: s.extracurriculars ?? [],
-            academicScores: s.academicScores ?? [],
-            shortlist: s.shortlist ?? [],
-            documents: s.documents ?? [],
-            essays: s.essays ?? [],
-            tasks: s.tasks ?? [],
-            profileJson: extractStudentProfileJson(s, null),
-          });
-        } else {
-          await db.update(studentsData).set({
-            phone: s.phone !== undefined ? s.phone : existingSd.phone,
-            intake: s.intake !== undefined ? s.intake : existingSd.intake,
-            countries: s.countries !== undefined ? s.countries : existingSd.countries,
-            readiness: s.readiness !== undefined ? s.readiness : existingSd.readiness,
-            counselor: s.counselor !== undefined ? s.counselor : existingSd.counselor,
-            school: s.school !== undefined ? s.school : existingSd.school,
-            activities: s.activities !== undefined ? s.activities : existingSd.activities,
-            extracurriculars: s.extracurriculars !== undefined ? s.extracurriculars : existingSd.extracurriculars,
-            academicScores: s.academicScores !== undefined ? s.academicScores : existingSd.academicScores,
-            shortlist: s.shortlist !== undefined ? s.shortlist : existingSd.shortlist,
-            documents: s.documents !== undefined ? s.documents : existingSd.documents,
-            essays: s.essays !== undefined ? s.essays : existingSd.essays,
-            tasks: s.tasks !== undefined ? s.tasks : existingSd.tasks,
-            profileJson: extractStudentProfileJson(s, existingSd.profileJson),
-          }).where(eq(studentsData.userId, user.id));
+        if (user?.id) {
+          await upsertStudentDataRowSafe(user.id, s);
         }
-      }
+      }, null);
 
       broadcastRealtime({ type: "student:created", scope: "data", entity: "students", targetId: uid });
-      res.json({ success: true, user });
+      res.json({ success: true, user: user || studentObj });
     } catch (e) {
       console.error('Error creating student:', e);
       res.status(500).json({ error: "Failed to create student" });
@@ -847,49 +925,53 @@ async function startServer() {
       const uid = s.id || `STAFF-${Date.now()}`;
       const cleanEmail = normEmail(s.email);
       const cleanPassword = typeof s.password === 'string' && s.password.trim() ? s.password.trim() : undefined;
-      let user = await findUserByUidOrEmail(uid, cleanEmail);
 
-      if (!user) {
-        const insertedUsers = await db.insert(users).values({
+      const existingMirror = await sysKvGet<any[]>("portal_staff_mirror", []);
+      const staffObj = {
+        ...s,
+        id: uid,
+        uid,
+        email: cleanEmail,
+        password: cleanPassword || s.password || 'Staff@123',
+        role: s.role || 'COUNSELOR',
+        status: s.status || 'Active',
+        students: s.students || 'All',
+      };
+      const filteredMirror = existingMirror.filter((m) => m?.id !== uid && normEmail(m?.email) !== cleanEmail);
+      await sysKvSet("portal_staff_mirror", [...filteredMirror, staffObj]);
+
+      let user: any = null;
+      await safeDbQuery(async () => {
+        const existing = await findUserByUidOrEmail(uid, cleanEmail);
+        user = await upsertUserRowSafe({
+          existingUser: existing,
           uid,
           email: cleanEmail,
           name: s.name,
-          password: cleanPassword || 'Staff@123',
+          password: cleanPassword,
+          defaultPassword: 'Staff@123',
           role: s.role || 'COUNSELOR',
-        }).returning();
-        user = insertedUsers[0];
-
-        await db.insert(staffData).values({
-          userId: user.id,
-          status: s.status || 'Active',
-          students: s.students || 'All'
         });
-      } else {
-        const userUpdates: any = {
-          name: s.name || user.name,
-          role: s.role || user.role,
-        };
-        if (cleanEmail && cleanEmail.includes('@')) userUpdates.email = cleanEmail;
-        if (cleanPassword) userUpdates.password = cleanPassword;
-        await db.update(users).set(userUpdates).where(eq(users.id, user.id));
 
-        const existingStaff = await db.select().from(staffData).where(eq(staffData.userId, user.id)).then(r => r[0]);
-        if (existingStaff) {
-          await db.update(staffData).set({
-            status: s.status !== undefined ? s.status : existingStaff.status,
-            students: s.students !== undefined ? s.students : existingStaff.students,
-          }).where(eq(staffData.userId, user.id));
-        } else {
-          await db.insert(staffData).values({
-            userId: user.id,
-            status: s.status || 'Active',
-            students: s.students || 'All'
-          });
+        if (user?.id && hasTable("staff_data")) {
+          const existingStaff = await db.select().from(staffData).where(eq(staffData.userId, user.id)).then(r => r[0]);
+          if (existingStaff) {
+            await db.update(staffData).set({
+              status: s.status !== undefined ? s.status : existingStaff.status,
+              students: s.students !== undefined ? s.students : existingStaff.students,
+            }).where(eq(staffData.userId, user.id));
+          } else {
+            await db.insert(staffData).values({
+              userId: user.id,
+              status: s.status || 'Active',
+              students: s.students || 'All'
+            });
+          }
         }
-      }
+      }, null);
 
       broadcastRealtime({ type: "staff:created", scope: "data", entity: "staff", targetId: uid });
-      res.json({ success: true, user });
+      res.json({ success: true, user: user || staffObj });
     } catch (e) {
       console.error('Error creating staff:', e);
       res.status(500).json({ error: "Failed to create staff" });
@@ -899,31 +981,27 @@ async function startServer() {
   app.post("/api/staff", requireAuth, async (req: AuthRequest, res) => {
     try {
       const staffArr = Array.isArray(req.body) ? req.body : [];
+      if (staffArr.length > 0) {
+        const existingMirror = await sysKvGet<any[]>("portal_staff_mirror", []);
+        const merged = mergeRecordsById(staffArr.filter((s) => s && !isSysKvUid(s.id)), existingMirror, "id");
+        await sysKvSet("portal_staff_mirror", merged);
+      }
       await safeDbQuery(async () => {
         for (const s of staffArr) {
-          if (!s?.id || !s?.email) continue;
+          if (!s?.id || !s?.email || isSysKvUid(s.id)) continue;
           const cleanEmail = normEmail(s.email);
           const cleanPassword = typeof s.password === 'string' && s.password.trim() ? s.password.trim() : undefined;
-          let userRecord = await findUserByUidOrEmail(s.id, cleanEmail);
-          if (!userRecord) {
-            const inserted = await db.insert(users).values({
-              uid: s.id,
-              email: cleanEmail,
-              name: s.name || cleanEmail,
-              password: cleanPassword || 'Staff@123',
-              role: s.role || 'COUNSELOR',
-            }).returning();
-            userRecord = inserted[0];
-            await db.insert(staffData).values({
-              userId: userRecord.id,
-              status: s.status || 'Active',
-              students: s.students || 'All',
-            });
-          } else {
-            const updates: any = { name: s.name || userRecord.name, role: s.role || userRecord.role };
-            if (cleanEmail && cleanEmail.includes('@')) updates.email = cleanEmail;
-            if (cleanPassword) updates.password = cleanPassword;
-            await db.update(users).set(updates).where(eq(users.id, userRecord.id));
+          const existing = await findUserByUidOrEmail(s.id, cleanEmail);
+          const userRecord = await upsertUserRowSafe({
+            existingUser: existing,
+            uid: s.id,
+            email: cleanEmail,
+            name: s.name || cleanEmail,
+            password: cleanPassword,
+            defaultPassword: 'Staff@123',
+            role: s.role || 'COUNSELOR',
+          });
+          if (userRecord?.id && hasTable("staff_data")) {
             const existingStaff = await db.select().from(staffData).where(eq(staffData.userId, userRecord.id)).then(r => r[0]);
             if (existingStaff) {
               await db.update(staffData).set({
@@ -950,11 +1028,17 @@ async function startServer() {
   app.delete("/api/staff/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      if (!id) return res.status(400).json({ error: "Missing staff ID" });
+      if (!id || isSysKvUid(id)) return res.status(400).json({ error: "Missing staff ID" });
+      const existingMirror = await sysKvGet<any[]>("portal_staff_mirror", []);
+      await sysKvSet("portal_staff_mirror", existingMirror.filter((m) => m?.id !== id));
+
       await safeDbQuery(async () => {
-        const userRecord = await db.select().from(users).where(eq(users.uid, id)).then(r => r[0]);
+        const allU = await readAllUsersSafe();
+        const userRecord = allU.find((u) => u.uid === id);
         if (userRecord && normEmail(userRecord.email) !== 'uppseekers@gmail.com') {
-          await db.delete(staffData).where(eq(staffData.userId, userRecord.id));
+          if (hasTable("staff_data")) {
+            await db.delete(staffData).where(eq(staffData.userId, userRecord.id));
+          }
           await db.delete(users).where(eq(users.id, userRecord.id));
         }
       }, null);
@@ -968,83 +1052,28 @@ async function startServer() {
   app.post("/api/students", requireAuth, async (req: AuthRequest, res) => {
     try {
       const studentsArr = Array.isArray(req.body) ? req.body : [];
+      if (studentsArr.length > 0) {
+        const existingMirror = await sysKvGet<any[]>("portal_students_mirror", []);
+        const merged = mergeRecordsById(studentsArr.filter((s) => s && !isSysKvUid(s.id)), existingMirror, "id");
+        await sysKvSet("portal_students_mirror", merged);
+      }
       await safeDbQuery(async () => {
         for (const student of studentsArr) {
-          if (!student?.id) continue;
+          if (!student?.id || isSysKvUid(student.id)) continue;
           const cleanEmail = normEmail(student.email);
           const cleanPassword = typeof student.password === 'string' && student.password.trim() ? student.password.trim() : undefined;
-          let userRecord = await findUserByUidOrEmail(student.id, cleanEmail);
-          if (!userRecord) {
-            const inserted = await db.insert(users).values({
-              uid: student.id,
-              email: cleanEmail || `${student.id.toLowerCase()}@uppseekers.local`,
-              name: student.name || 'Student',
-              password: cleanPassword || 'Student@123',
-              role: 'STUDENT',
-            }).returning();
-            userRecord = inserted[0];
-            await db.insert(studentsData).values({
-              userId: userRecord.id,
-              phone: student.phone || '',
-              intake: student.intake || 'Fall 2026',
-              countries: student.countries || [],
-              readiness: student.readiness || 0,
-              counselor: student.counselor || 'Unassigned',
-              school: student.school || '',
-              activities: student.activities || [],
-              extracurriculars: student.extracurriculars || [],
-              academicScores: student.academicScores || [],
-              shortlist: student.shortlist || [],
-              documents: student.documents || [],
-              essays: student.essays || [],
-              tasks: student.tasks || [],
-              profileJson: extractStudentProfileJson(student, null),
-            });
-            continue;
-          }
-
-          const userUpdates: any = { name: student.name || userRecord.name };
-          if (cleanEmail && cleanEmail.includes('@') && !cleanEmail.endsWith('@uppseekers.local')) {
-            userUpdates.email = cleanEmail;
-          }
-          if (cleanPassword) userUpdates.password = cleanPassword;
-          await db.update(users).set(userUpdates).where(eq(users.id, userRecord.id));
-          const existingSd = await db.select().from(studentsData).where(eq(studentsData.userId, userRecord.id)).then(r => r[0]);
-          if (!existingSd) {
-            await db.insert(studentsData).values({
-              userId: userRecord.id,
-              phone: student.phone ?? '',
-              intake: student.intake ?? 'Fall 2026',
-              countries: student.countries ?? [],
-              readiness: student.readiness ?? 0,
-              counselor: student.counselor ?? 'Unassigned',
-              school: student.school ?? '',
-              activities: student.activities ?? [],
-              extracurriculars: student.extracurriculars ?? [],
-              academicScores: student.academicScores ?? [],
-              shortlist: student.shortlist ?? [],
-              documents: student.documents ?? [],
-              essays: student.essays ?? [],
-              tasks: student.tasks ?? [],
-              profileJson: extractStudentProfileJson(student, null),
-            });
-          } else {
-            await db.update(studentsData).set({
-              phone: student.phone !== undefined ? student.phone : existingSd.phone,
-              intake: student.intake !== undefined ? student.intake : existingSd.intake,
-              countries: student.countries !== undefined ? student.countries : existingSd.countries,
-              readiness: student.readiness !== undefined ? student.readiness : existingSd.readiness,
-              counselor: student.counselor !== undefined ? student.counselor : existingSd.counselor,
-              school: student.school !== undefined ? student.school : existingSd.school,
-              activities: student.activities !== undefined ? student.activities : existingSd.activities,
-              extracurriculars: student.extracurriculars !== undefined ? student.extracurriculars : existingSd.extracurriculars,
-              academicScores: student.academicScores !== undefined ? student.academicScores : existingSd.academicScores,
-              shortlist: student.shortlist !== undefined ? student.shortlist : existingSd.shortlist,
-              documents: student.documents !== undefined ? student.documents : existingSd.documents,
-              essays: student.essays !== undefined ? student.essays : existingSd.essays,
-              tasks: student.tasks !== undefined ? student.tasks : existingSd.tasks,
-              profileJson: extractStudentProfileJson(student, existingSd.profileJson),
-            }).where(eq(studentsData.userId, userRecord.id));
+          const existing = await findUserByUidOrEmail(student.id, cleanEmail);
+          const userRecord = await upsertUserRowSafe({
+            existingUser: existing,
+            uid: student.id,
+            email: cleanEmail || `${student.id.toLowerCase()}@uppseekers.local`,
+            name: student.name || 'Student',
+            password: cleanPassword,
+            defaultPassword: 'Student@123',
+            role: 'STUDENT',
+          });
+          if (userRecord?.id) {
+            await upsertStudentDataRowSafe(userRecord.id, student);
           }
         }
       }, null);
@@ -1058,11 +1087,17 @@ async function startServer() {
   app.delete("/api/students/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      if (!id) return res.status(400).json({ error: "Missing student ID" });
+      if (!id || isSysKvUid(id)) return res.status(400).json({ error: "Missing student ID" });
+      const existingMirror = await sysKvGet<any[]>("portal_students_mirror", []);
+      await sysKvSet("portal_students_mirror", existingMirror.filter((m) => m?.id !== id));
+
       await safeDbQuery(async () => {
-        const userRecord = await db.select().from(users).where(eq(users.uid, id)).then(r => r[0]);
+        const allU = await readAllUsersSafe();
+        const userRecord = allU.find((u) => u.uid === id);
         if (userRecord) {
-          await db.delete(studentsData).where(eq(studentsData.userId, userRecord.id));
+          if (hasTable("students_data")) {
+            await db.delete(studentsData).where(eq(studentsData.userId, userRecord.id));
+          }
           await db.delete(users).where(eq(users.id, userRecord.id));
         }
       }, null);
@@ -1076,84 +1111,29 @@ async function startServer() {
   app.put("/api/student", requireAuth, async (req: AuthRequest, res) => {
     try {
       const student = req.body;
-      if (!student?.id) return res.status(400).json({ error: "Missing student ID" });
-      await safeDbQuery(async () => {
-        const cleanEmail = normEmail(student.email);
-        const cleanPassword = typeof student.password === 'string' && student.password.trim() ? student.password.trim() : undefined;
-        let userRecord = await findUserByUidOrEmail(student.id, cleanEmail);
-        if (!userRecord) {
-          const inserted = await db.insert(users).values({
-            uid: student.id,
-            email: cleanEmail || `${student.id.toLowerCase()}@uppseekers.local`,
-            name: student.name || 'Student',
-            password: cleanPassword || 'Student@123',
-            role: 'STUDENT',
-          }).returning();
-          userRecord = inserted[0];
-          await db.insert(studentsData).values({
-            userId: userRecord.id,
-            phone: student.phone || '',
-            intake: student.intake || 'Fall 2026',
-            countries: student.countries || [],
-            readiness: student.readiness || 0,
-            counselor: student.counselor || 'Unassigned',
-            school: student.school || '',
-            activities: student.activities || [],
-            extracurriculars: student.extracurriculars || [],
-            academicScores: student.academicScores || [],
-            shortlist: student.shortlist || [],
-            documents: student.documents || [],
-            essays: student.essays || [],
-            tasks: student.tasks || [],
-            profileJson: extractStudentProfileJson(student, null),
-          });
-          return;
-        }
+      if (!student?.id || isSysKvUid(student.id)) return res.status(400).json({ error: "Missing student ID" });
 
-        const userUpdates: any = { name: student.name || userRecord.name };
-        if (cleanEmail && cleanEmail.includes('@') && !cleanEmail.endsWith('@uppseekers.local')) {
-          userUpdates.email = cleanEmail;
-        }
-        if (cleanPassword) {
-          userUpdates.password = cleanPassword;
-        }
-        await db.update(users).set(userUpdates).where(eq(users.id, userRecord.id));
-        const existingSd = await db.select().from(studentsData).where(eq(studentsData.userId, userRecord.id)).then(r => r[0]);
-        if (!existingSd) {
-          await db.insert(studentsData).values({
-            userId: userRecord.id,
-            phone: student.phone ?? '',
-            intake: student.intake ?? 'Fall 2026',
-            countries: student.countries ?? [],
-            readiness: student.readiness ?? 0,
-            counselor: student.counselor ?? 'Unassigned',
-            school: student.school ?? '',
-            activities: student.activities ?? [],
-            extracurriculars: student.extracurriculars ?? [],
-            academicScores: student.academicScores ?? [],
-            shortlist: student.shortlist ?? [],
-            documents: student.documents ?? [],
-            essays: student.essays ?? [],
-            tasks: student.tasks ?? [],
-            profileJson: extractStudentProfileJson(student, null),
-          });
-        } else {
-          await db.update(studentsData).set({
-            phone: student.phone !== undefined ? student.phone : existingSd.phone,
-            intake: student.intake !== undefined ? student.intake : existingSd.intake,
-            countries: student.countries !== undefined ? student.countries : existingSd.countries,
-            readiness: student.readiness !== undefined ? student.readiness : existingSd.readiness,
-            counselor: student.counselor !== undefined ? student.counselor : existingSd.counselor,
-            school: student.school !== undefined ? student.school : existingSd.school,
-            activities: student.activities !== undefined ? student.activities : existingSd.activities,
-            extracurriculars: student.extracurriculars !== undefined ? student.extracurriculars : existingSd.extracurriculars,
-            academicScores: student.academicScores !== undefined ? student.academicScores : existingSd.academicScores,
-            shortlist: student.shortlist !== undefined ? student.shortlist : existingSd.shortlist,
-            documents: student.documents !== undefined ? student.documents : existingSd.documents,
-            essays: student.essays !== undefined ? student.essays : existingSd.essays,
-            tasks: student.tasks !== undefined ? student.tasks : existingSd.tasks,
-            profileJson: extractStudentProfileJson(student, existingSd.profileJson),
-          }).where(eq(studentsData.userId, userRecord.id));
+      const cleanEmail = normEmail(student.email);
+      const existingMirror = await sysKvGet<any[]>("portal_students_mirror", []);
+      const filteredMirror = existingMirror.filter(
+        (m) => m?.id !== student.id && (!cleanEmail || normEmail(m?.email) !== cleanEmail)
+      );
+      await sysKvSet("portal_students_mirror", [...filteredMirror, student]);
+
+      await safeDbQuery(async () => {
+        const cleanPassword = typeof student.password === 'string' && student.password.trim() ? student.password.trim() : undefined;
+        const existing = await findUserByUidOrEmail(student.id, cleanEmail);
+        const userRecord = await upsertUserRowSafe({
+          existingUser: existing,
+          uid: student.id,
+          email: cleanEmail || `${student.id.toLowerCase()}@uppseekers.local`,
+          name: student.name || 'Student',
+          password: cleanPassword,
+          defaultPassword: 'Student@123',
+          role: 'STUDENT',
+        });
+        if (userRecord?.id) {
+          await upsertStudentDataRowSafe(userRecord.id, student);
         }
       }, null);
 
@@ -1170,48 +1150,45 @@ async function startServer() {
       const cleanNewPassword = typeof newPassword === 'string' ? newPassword.trim() : '';
       if (!cleanNewPassword) return res.status(400).json({ error: "New password is required" });
 
+      await saveUserPasswordMirror(userId, email, cleanNewPassword);
+
       await safeDbQuery(async () => {
         const matches = await findAllMatchingUsers(userId, email);
 
         if (matches.length > 0) {
           const matchedEmails = new Set(matches.map(m => normEmail(m.email)).filter(Boolean));
-          const allUsers = await db.select().from(users);
-          const idsToUpdate = allUsers
-            .filter(u => matches.some(m => m.id === u.id) || (normEmail(u.email) && matchedEmails.has(normEmail(u.email))))
-            .map(u => u.id);
-          for (const targetId of idsToUpdate) {
-            await db.update(users).set({ password: cleanNewPassword }).where(eq(users.id, targetId));
+          const allUsers = await readAllUsersSafe();
+          const targets = allUsers.filter(
+            u => matches.some(m => m.id === u.id) || (normEmail(u.email) && matchedEmails.has(normEmail(u.email)))
+          );
+          for (const target of targets) {
+            await saveUserPasswordMirror(target.uid, target.email, cleanNewPassword);
+            if (hasColumn("users", "password")) {
+              await db.update(users).set({ password: cleanNewPassword }).where(eq(users.id, target.id));
+            }
           }
         } else if (userId || email) {
           const cleanEmail = normEmail(email);
           const isStudent = userType === 'student';
-          const inserted = await db.insert(users).values({
+          const created = await upsertUserRowSafe({
             uid: userId || `${isStudent ? 'STU' : 'STAFF'}-${Date.now()}`,
             name: req.body.name || (cleanEmail ? cleanEmail.split('@')[0] : 'User'),
             email: cleanEmail || `${String(userId).toLowerCase()}@uppseekers.local`,
             password: cleanNewPassword,
+            defaultPassword: cleanNewPassword,
             role: isStudent ? 'STUDENT' : (req.body.role || 'COUNSELOR'),
-          }).returning();
-          if (inserted[0]) {
+          });
+          if (created?.id) {
             if (isStudent) {
-              await db.insert(studentsData).values({
-                userId: inserted[0].id,
+              await upsertStudentDataRowSafe(created.id, {
                 intake: 'Fall 2026',
                 countries: ['USA'],
                 counselor: 'Unassigned',
                 readiness: 0,
-                activities: [],
-                extracurriculars: [],
-                academicScores: [],
-                shortlist: [],
-                documents: [],
-                essays: [],
-                tasks: [],
-                profileJson: {},
               });
-            } else {
+            } else if (hasTable("staff_data")) {
               await db.insert(staffData).values({
-                userId: inserted[0].id,
+                userId: created.id,
                 status: 'Active',
                 students: 'All',
               });
@@ -1414,20 +1391,25 @@ async function startServer() {
         return;
       }
 
-      // Update in PostgreSQL users table (case-insensitive trimmed email match across all matching rows)
+      // Update in PostgreSQL users table + KV password vault
       const cleanResetPassword = newPassword.trim();
+      await saveUserPasswordMirror(undefined, targetEmail, cleanResetPassword);
       await safeDbQuery(async () => {
         const matches = await findAllMatchingUsers(undefined, targetEmail);
         if (matches.length > 0) {
           for (const m of matches) {
-            await db.update(users).set({ password: cleanResetPassword }).where(eq(users.id, m.id));
+            await saveUserPasswordMirror(m.uid, m.email, cleanResetPassword);
+            if (hasColumn("users", "password")) {
+              await db.update(users).set({ password: cleanResetPassword }).where(eq(users.id, m.id));
+            }
           }
         } else {
-          await db.insert(users).values({
+          await upsertUserRowSafe({
             uid: `USER-${Date.now()}`,
             name: targetEmail.split('@')[0],
             email: targetEmail,
             password: cleanResetPassword,
+            defaultPassword: cleanResetPassword,
             role: 'STUDENT',
           });
         }
@@ -1945,21 +1927,24 @@ Provide your response in two clearly labeled sections using Markdown:
         res.status(400).json({ error: "Invalid permissions matrix" });
         return;
       }
+      await sysKvSet("permissions_matrix", matrix);
       await safeDbQuery(async () => {
-        await db
-          .insert(portalSettings)
-          .values({
-            key: "permissions_matrix",
-            valueJson: matrix,
-            updatedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: portalSettings.key,
-            set: {
+        if (hasTable("portal_settings")) {
+          await db
+            .insert(portalSettings)
+            .values({
+              key: "permissions_matrix",
               valueJson: matrix,
               updatedAt: new Date(),
-            },
-          });
+            })
+            .onConflictDoUpdate({
+              target: portalSettings.key,
+              set: {
+                valueJson: matrix,
+                updatedAt: new Date(),
+              },
+            });
+        }
       }, null);
       broadcastRealtime({ type: "permissions:updated", scope: "data", entity: "permissions" });
       res.json({ success: true });
@@ -1971,15 +1956,22 @@ Provide your response in two clearly labeled sections using Markdown:
   app.get("/api/data", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
-      const allUsers = await safeDbQuery(() => db.select().from(users), []);
-      const allStudentsData = await safeDbQuery(() => db.select().from(studentsData), []);
-      const allStaffData = await safeDbQuery(() => db.select().from(staffData), []);
-      const allSettings = await safeDbQuery(() => db.select().from(portalSettings), []);
+      const allUsers = await readAllUsersSafe();
+      const validUserIds = new Set(allUsers.map((u) => u.id));
+      const allStudentsData = await readAllStudentsDataSafe();
+      const allStaffData = (await safeDbQuery(() => db.select().from(staffData), [])).filter((sd) =>
+        validUserIds.has(sd.userId)
+      );
+      const allSettings = hasTable("portal_settings")
+        ? await safeDbQuery(() => db.select().from(portalSettings), [])
+        : [];
       const permsRow = allSettings.find(r => r.key === "permissions_matrix");
+      const kvPermissionsMatrix = await sysKvGet<any>("permissions_matrix", null);
 
       const studentsByKey = new Map<string, any>();
       allStudentsData.forEach(sd => {
         const u = allUsers.find(u => u.id === sd.userId);
+        if (!u) return;
         const item = buildStudentFromRow(u, sd);
         const key = normEmail(item.email) || item.id;
         studentsByKey.set(key, item);
@@ -1994,11 +1986,21 @@ Provide your response in two clearly labeled sections using Markdown:
             studentsByKey.set(key, buildStudentFromRow(u, null));
           }
         });
+
+      const kvStudents = await sysKvGet<any[]>("portal_students_mirror", []);
+      for (const ks of kvStudents || []) {
+        if (!ks?.id || isSysKvUid(ks.id)) continue;
+        const key = normEmail(ks.email) || ks.id;
+        if (!studentsByKey.has(key)) {
+          studentsByKey.set(key, ks);
+        }
+      }
       const students = Array.from(studentsByKey.values());
 
       const staffByKey = new Map<string, any>();
       allStaffData.forEach(sd => {
         const u = allUsers.find(u => u.id === sd.userId);
+        if (!u || isSysKvUid(u.uid)) return;
         const resolvedRole = u?.role === 'STAFF' ? 'COUNSELOR' : (u?.role || 'COUNSELOR');
         const item = {
           id: u?.uid || `STAFF-${sd.id}`,
@@ -2015,7 +2017,7 @@ Provide your response in two clearly labeled sections using Markdown:
 
       // Also include any non-student users in users table missing from staff_data
       allUsers
-        .filter(u => (u.role || '').toUpperCase() !== 'STUDENT')
+        .filter(u => !isSysKvUid(u.uid) && (u.role || '').toUpperCase() !== 'STUDENT')
         .forEach(u => {
           const key = normEmail(u.email) || u.uid;
           if (!staffByKey.has(key) && !Array.from(staffByKey.values()).some(s => s.id === u.uid)) {
@@ -2031,10 +2033,23 @@ Provide your response in two clearly labeled sections using Markdown:
             });
           }
         });
+
+      const kvStaff = await sysKvGet<any[]>("portal_staff_mirror", []);
+      for (const kst of kvStaff || []) {
+        if (!kst?.id || isSysKvUid(kst.id)) continue;
+        const key = normEmail(kst.email) || kst.id;
+        if (!staffByKey.has(key)) {
+          staffByKey.set(key, kst);
+        }
+      }
       const staff = Array.from(staffByKey.values());
 
-      const batches = await safeDbQuery(() => db.select().from(batchesData), []);
-      const rawEvents = await safeDbQuery(() => db.select().from(eventsData), []);
+      const batches = hasTable("batches_data")
+        ? await safeDbQuery(() => db.select().from(batchesData), [])
+        : [];
+      const rawEvents = hasTable("events_data")
+        ? await safeDbQuery(() => db.select().from(eventsData), [])
+        : [];
       const events = rawEvents.map(e => ({
         ...e,
         stream: e.type,
@@ -2052,27 +2067,179 @@ Provide your response in two clearly labeled sections using Markdown:
         staff,
         batches,
         events,
-        permissionsMatrix: permsRow?.valueJson || null,
+        permissionsMatrix: permsRow?.valueJson || kvPermissionsMatrix || null,
       });
     } catch (error) {
       res.json({ students: [], staff: [], batches: [], events: [], permissionsMatrix: null });
     }
   });
 
-  // Launchpad Module API Endpoints
+  // Launchpad Module API Endpoints (Dual-Write: Relational Tables + Day-1 SQL KV Vault)
   app.get("/api/launchpad/state", async (req, res) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
-      const subjects = await safeDbQuery(() => db.select().from(launchpadSubjects).orderBy(asc(launchpadSubjects.sortOrder)), []);
-      const chapters = await safeDbQuery(() => db.select().from(launchpadChapters).orderBy(asc(launchpadChapters.weekNumber)), []);
-      const certQuestions = await safeDbQuery(() => db.select().from(launchpadCertificationQuestions).orderBy(asc(launchpadCertificationQuestions.sortOrder)), []);
-      const permissions = await safeDbQuery(() => db.select().from(launchpadTeamPermissions), []);
-      const enrollments = await safeDbQuery(() => db.select().from(launchpadStudentEnrollments), []);
-      const releases = await safeDbQuery(() => db.select().from(launchpadSubjectReleases), []);
-      const progress = await safeDbQuery(() => db.select().from(launchpadProgressAndSubmissions), []);
-      const certifications = await safeDbQuery(() => db.select().from(launchpadCertifications), []);
-      const evaluations = await safeDbQuery(() => db.select().from(assignmentEvaluations).orderBy(desc(assignmentEvaluations.submittedAt)), []);
-      const notifications = await safeDbQuery(() => db.select().from(notificationsTable).orderBy(desc(notificationsTable.createdAt)), []);
+      const dbSubjects = hasTable("launchpad_subjects")
+        ? await safeDbQuery(() => db.select().from(launchpadSubjects).orderBy(asc(launchpadSubjects.sortOrder)), [])
+        : [];
+      const dbChapters = hasTable("launchpad_chapters")
+        ? await safeDbQuery(() => db.select().from(launchpadChapters).orderBy(asc(launchpadChapters.weekNumber)), [])
+        : [];
+      const dbCertQuestions = hasTable("launchpad_certification_questions")
+        ? await safeDbQuery(() => db.select().from(launchpadCertificationQuestions).orderBy(asc(launchpadCertificationQuestions.sortOrder)), [])
+        : [];
+      const dbPermissions = hasTable("launchpad_team_permissions")
+        ? await safeDbQuery(() => db.select().from(launchpadTeamPermissions), [])
+        : [];
+      const dbEnrollments = hasTable("launchpad_student_enrollments")
+        ? (hasColumn("launchpad_student_enrollments", "student_email")
+            ? await safeDbQuery(() => db.select().from(launchpadStudentEnrollments), [])
+            : await safeDbQuery(async () => {
+                const r = await createPool().query(
+                  `SELECT "student_id" AS "studentId", "assigned_by" AS "assignedBy", "assigned_at" AS "assignedAt" FROM "launchpad_student_enrollments"`
+                );
+                return r.rows || [];
+              }, []))
+        : [];
+      const dbReleases = hasTable("launchpad_subject_releases")
+        ? (hasColumn("launchpad_subject_releases", "student_email")
+            ? await safeDbQuery(() => db.select().from(launchpadSubjectReleases), [])
+            : await safeDbQuery(async () => {
+                const r = await createPool().query(
+                  `SELECT "id", "student_id" AS "studentId", "subject_id" AS "subjectId", "is_unlocked" AS "isUnlocked", "unlocked_by" AS "unlockedBy", "unlocked_at" AS "unlockedAt" FROM "launchpad_subject_releases"`
+                );
+                return r.rows || [];
+              }, []))
+        : [];
+      const dbProgress = hasTable("launchpad_progress_and_submissions")
+        ? await safeDbQuery(() => db.select().from(launchpadProgressAndSubmissions), [])
+        : [];
+      const dbCertifications = hasTable("launchpad_certifications")
+        ? await safeDbQuery(() => db.select().from(launchpadCertifications), [])
+        : [];
+      const dbEvaluations = hasTable("assignment_evaluations")
+        ? await safeDbQuery(() => db.select().from(assignmentEvaluations).orderBy(desc(assignmentEvaluations.submittedAt)), [])
+        : [];
+      const dbNotifications = hasTable("notifications")
+        ? await safeDbQuery(() => db.select().from(notificationsTable).orderBy(desc(notificationsTable.createdAt)), [])
+        : [];
+
+      const [
+        kvSubjects,
+        kvDeletedSubjects,
+        kvChapters,
+        kvCertQuestions,
+        kvPermissions,
+        kvEnrollments,
+        kvReleases,
+        kvProgress,
+        kvCertifications,
+        kvEvaluations,
+        kvNotifications,
+        allUsers,
+        kvStudentsMirror,
+      ] = await Promise.all([
+        sysKvGet<any[]>("lp_subjects", []),
+        sysKvGet<string[]>("lp_deleted_subjects", []),
+        sysKvGet<any[]>("lp_chapters", []),
+        sysKvGet<any[]>("lp_cert_questions", []),
+        sysKvGet<any[]>("lp_permissions", []),
+        sysKvGet<any[]>("lp_enrollments", []),
+        sysKvGet<any[]>("lp_releases", []),
+        sysKvGet<any[]>("lp_progress", []),
+        sysKvGet<any[]>("lp_certifications", []),
+        sysKvGet<any[]>("lp_evaluations", []),
+        sysKvGet<any[]>("lp_notifications", []),
+        readAllUsersSafe(),
+        sysKvGet<any[]>("portal_students_mirror", []),
+      ]);
+
+      const deletedSubjSet = new Set(Array.isArray(kvDeletedSubjects) ? kvDeletedSubjects : []);
+      let subjects = mergeRecordsById(dbSubjects, kvSubjects, "id", "updatedAt").filter(
+        (s) => s && !deletedSubjSet.has(s.id)
+      );
+      if (subjects.length === 0) {
+        subjects = buildDefaultLaunchpadSubjects()
+          .filter((s) => !deletedSubjSet.has(s.id))
+          .map((s) => ({
+            id: s.id,
+            sortOrder: s.order,
+            title: s.title,
+            description: s.description || "",
+            accentHex: s.accentHex || "#4F46E5",
+            surfaceTint: s.surfaceTint || "#EEF2FF",
+            iconKey: s.iconKey || s.id,
+            customIconUrl: s.customIconUrl || null,
+            hasCurriculum: Boolean(s.hasCurriculum),
+            courseGoal: s.courseGoal || null,
+            passingThreshold: Number(s.passingThreshold ?? 75),
+            certificateTitle: s.certificateTitle || null,
+            isArchived: Boolean(s.isArchived),
+          }));
+      }
+      subjects.sort((a, b) => Number(a.sortOrder ?? a.order ?? 99) - Number(b.sortOrder ?? b.order ?? 99));
+
+      let chapters = mergeRecordsById(dbChapters, kvChapters, "id", "updatedAt").filter(
+        (c) => c && !deletedSubjSet.has(c.subjectId || "comm-public-speaking")
+      );
+      if (!chapters.some((c) => (c.subjectId || "comm-public-speaking") === "comm-public-speaking") && !deletedSubjSet.has("comm-public-speaking")) {
+        const defaults = buildDefaultLaunchpadChapters().map((c) => ({
+          id: c.id || `comm-public-speaking__w${c.weekNumber}`,
+          subjectId: "comm-public-speaking",
+          weekNumber: c.weekNumber,
+          title: c.title,
+          learningObjectives: c.learningObjectives || [],
+          lectureJson: c.lecture || {},
+          readingGuideJson: c.readingGuide || {},
+          practicalExerciseJson: c.practicalExercise || {},
+        }));
+        chapters = [...defaults, ...chapters];
+      }
+      chapters.sort((a, b) => Number(a.weekNumber ?? 1) - Number(b.weekNumber ?? 1));
+
+      let certQuestions = mergeRecordsById(dbCertQuestions, kvCertQuestions, "id", "updatedAt").filter(
+        (q) => q && !deletedSubjSet.has(q.subjectId)
+      );
+      if (!certQuestions.some((q) => q.subjectId === "comm-public-speaking") && !deletedSubjSet.has("comm-public-speaking")) {
+        const defaultQs = buildDefaultCertQuestions().map((q) => ({
+          id: q.id,
+          subjectId: q.subjectId,
+          questionType: q.questionType,
+          sortOrder: q.sortOrder,
+          payloadJson: q.payload || {},
+        }));
+        certQuestions = [...defaultQs, ...certQuestions];
+      }
+      certQuestions.sort((a, b) => Number(a.sortOrder ?? 1) - Number(b.sortOrder ?? 1));
+
+      const uidToEmail = new Map<string, string>();
+      for (const u of allUsers || []) {
+        const em = normEmail(u?.email);
+        if (u?.uid && em && !em.endsWith("@uppseekers.local")) {
+          uidToEmail.set(String(u.uid).trim(), em);
+        }
+      }
+      for (const st of kvStudentsMirror || []) {
+        const em = normEmail(st?.email);
+        if (st?.id && em && !em.endsWith("@uppseekers.local") && !uidToEmail.has(String(st.id).trim())) {
+          uidToEmail.set(String(st.id).trim(), em);
+        }
+      }
+
+      const permissions = mergeRecordsById(dbPermissions, kvPermissions, "userId", "updatedAt");
+      const enrollments = mergeRecordsById(dbEnrollments, kvEnrollments, "studentId", "assignedAt").map((e) => ({
+        ...e,
+        studentEmail: normEmail(e.studentEmail) || uidToEmail.get(String(e.studentId || "").trim()) || undefined,
+      }));
+      const releases = mergeRecordsById(dbReleases, kvReleases, "id", "unlockedAt").map((r) => ({
+        ...r,
+        isUnlocked: Boolean(r.isUnlocked),
+        studentEmail: normEmail(r.studentEmail) || uidToEmail.get(String(r.studentId || "").trim()) || undefined,
+      }));
+      const progress = mergeRecordsById(dbProgress, kvProgress, "id", "updatedAt");
+      const certifications = mergeRecordsById(dbCertifications, kvCertifications, "id", "issuedAt");
+      const evaluations = mergeRecordsById(dbEvaluations, kvEvaluations, "id", "submittedAt");
+      const notifications = mergeRecordsById(dbNotifications, kvNotifications, "id", "createdAt");
+
       res.json({
         subjects,
         chapters,
@@ -2087,7 +2254,21 @@ Provide your response in two clearly labeled sections using Markdown:
       });
     } catch (error) {
       res.json({
-        subjects: [],
+        subjects: buildDefaultLaunchpadSubjects().map((s) => ({
+          id: s.id,
+          sortOrder: s.order,
+          title: s.title,
+          description: s.description || "",
+          accentHex: s.accentHex || "#4F46E5",
+          surfaceTint: s.surfaceTint || "#EEF2FF",
+          iconKey: s.iconKey || s.id,
+          customIconUrl: s.customIconUrl || null,
+          hasCurriculum: Boolean(s.hasCurriculum),
+          courseGoal: s.courseGoal || null,
+          passingThreshold: Number(s.passingThreshold ?? 75),
+          certificateTitle: s.certificateTitle || null,
+          isArchived: Boolean(s.isArchived),
+        })),
         chapters: [],
         certQuestions: [],
         permissions: [],
@@ -2107,43 +2288,54 @@ Provide your response in two clearly labeled sections using Markdown:
       if (!s?.id || !s?.title) {
         return res.status(400).json({ error: "id and title are required" });
       }
-      await safeDbQuery(async () => {
-        await db.insert(launchpadSubjects)
-          .values({
-            id: s.id,
-            sortOrder: Number(s.order ?? s.sortOrder ?? 1),
-            title: s.title,
-            description: s.description || '',
-            accentHex: s.accentHex || '#4F46E5',
-            surfaceTint: s.surfaceTint || '#EEF2FF',
-            iconKey: s.iconKey || 'comm-public-speaking',
-            customIconUrl: s.customIconUrl || null,
-            hasCurriculum: Boolean(s.hasCurriculum),
-            courseGoal: s.courseGoal || null,
-            passingThreshold: Number(s.passingThreshold ?? 75),
-            certificateTitle: s.certificateTitle || null,
-            isArchived: Boolean(s.isArchived),
-            updatedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: launchpadSubjects.id,
-            set: {
-              sortOrder: Number(s.order ?? s.sortOrder ?? 1),
-              title: s.title,
-              description: s.description || '',
-              accentHex: s.accentHex || '#4F46E5',
-              surfaceTint: s.surfaceTint || '#EEF2FF',
-              iconKey: s.iconKey || 'comm-public-speaking',
-              customIconUrl: s.customIconUrl || null,
-              hasCurriculum: Boolean(s.hasCurriculum),
-              courseGoal: s.courseGoal || null,
-              passingThreshold: Number(s.passingThreshold ?? 75),
-              certificateTitle: s.certificateTitle || null,
-              isArchived: Boolean(s.isArchived),
-              updatedAt: new Date(),
-            },
-          });
-      }, null);
+      const nowDate = new Date();
+      const subjRow = {
+        id: s.id,
+        sortOrder: Number(s.order ?? s.sortOrder ?? 1),
+        title: s.title,
+        description: s.description || '',
+        accentHex: s.accentHex || '#4F46E5',
+        surfaceTint: s.surfaceTint || '#EEF2FF',
+        iconKey: s.iconKey || 'comm-public-speaking',
+        customIconUrl: s.customIconUrl || null,
+        hasCurriculum: Boolean(s.hasCurriculum),
+        courseGoal: s.courseGoal || null,
+        passingThreshold: Number(s.passingThreshold ?? 75),
+        certificateTitle: s.certificateTitle || null,
+        isArchived: Boolean(s.isArchived),
+        updatedAt: nowDate.toISOString(),
+      };
+      const existingKv = await sysKvGet<any[]>("lp_subjects", []);
+      await sysKvSet("lp_subjects", mergeRecordsById([subjRow], existingKv, "id", "updatedAt"));
+      const deletedKv = await sysKvGet<string[]>("lp_deleted_subjects", []);
+      if (deletedKv.includes(s.id)) {
+        await sysKvSet("lp_deleted_subjects", deletedKv.filter((id) => id !== s.id));
+      }
+
+      if (hasTable("launchpad_subjects")) {
+        await safeDbQuery(async () => {
+          await db.insert(launchpadSubjects)
+            .values({ ...subjRow, updatedAt: nowDate })
+            .onConflictDoUpdate({
+              target: launchpadSubjects.id,
+              set: {
+                sortOrder: subjRow.sortOrder,
+                title: subjRow.title,
+                description: subjRow.description,
+                accentHex: subjRow.accentHex,
+                surfaceTint: subjRow.surfaceTint,
+                iconKey: subjRow.iconKey,
+                customIconUrl: subjRow.customIconUrl,
+                hasCurriculum: subjRow.hasCurriculum,
+                courseGoal: subjRow.courseGoal,
+                passingThreshold: subjRow.passingThreshold,
+                certificateTitle: subjRow.certificateTitle,
+                isArchived: subjRow.isArchived,
+                updatedAt: nowDate,
+              },
+            });
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:subject_saved", scope: "launchpad", entity: "subjects", targetId: s.id });
       res.json({ success: true });
     } catch (error) {
@@ -2154,10 +2346,27 @@ Provide your response in two clearly labeled sections using Markdown:
   app.delete("/api/launchpad/subjects/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
+      const existingKv = await sysKvGet<any[]>("lp_subjects", []);
+      await sysKvSet("lp_subjects", existingKv.filter((s) => s?.id !== id));
+      const deletedKv = await sysKvGet<string[]>("lp_deleted_subjects", []);
+      if (!deletedKv.includes(id)) {
+        await sysKvSet("lp_deleted_subjects", [...deletedKv, id]);
+      }
+      const existingCh = await sysKvGet<any[]>("lp_chapters", []);
+      await sysKvSet("lp_chapters", existingCh.filter((c) => c?.subjectId !== id));
+      const existingQs = await sysKvGet<any[]>("lp_cert_questions", []);
+      await sysKvSet("lp_cert_questions", existingQs.filter((q) => q?.subjectId !== id));
+
       await safeDbQuery(async () => {
-        await db.delete(launchpadChapters).where(eq(launchpadChapters.subjectId, id));
-        await db.delete(launchpadCertificationQuestions).where(eq(launchpadCertificationQuestions.subjectId, id));
-        await db.delete(launchpadSubjects).where(eq(launchpadSubjects.id, id));
+        if (hasTable("launchpad_chapters")) {
+          await db.delete(launchpadChapters).where(eq(launchpadChapters.subjectId, id));
+        }
+        if (hasTable("launchpad_certification_questions")) {
+          await db.delete(launchpadCertificationQuestions).where(eq(launchpadCertificationQuestions.subjectId, id));
+        }
+        if (hasTable("launchpad_subjects")) {
+          await db.delete(launchpadSubjects).where(eq(launchpadSubjects.id, id));
+        }
       }, null);
       broadcastRealtime({ type: "launchpad:subject_deleted", scope: "launchpad", entity: "subjects", targetId: id });
       res.json({ success: true });
@@ -2172,32 +2381,39 @@ Provide your response in two clearly labeled sections using Markdown:
       if (!c?.id || !c?.subjectId || !c?.title) {
         return res.status(400).json({ error: "id, subjectId, and title are required" });
       }
-      await safeDbQuery(async () => {
-        await db.insert(launchpadChapters)
-          .values({
-            id: c.id,
-            subjectId: c.subjectId,
-            weekNumber: Number(c.weekNumber ?? 1),
-            title: c.title,
-            learningObjectives: c.learningObjectives || [],
-            lectureJson: c.lecture || c.lectureJson || {},
-            readingGuideJson: c.readingGuide || c.readingGuideJson || {},
-            practicalExerciseJson: c.practicalExercise || c.practicalExerciseJson || {},
-            updatedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: launchpadChapters.id,
-            set: {
-              weekNumber: Number(c.weekNumber ?? 1),
-              title: c.title,
-              learningObjectives: c.learningObjectives || [],
-              lectureJson: c.lecture || c.lectureJson || {},
-              readingGuideJson: c.readingGuide || c.readingGuideJson || {},
-              practicalExerciseJson: c.practicalExercise || c.practicalExerciseJson || {},
-              updatedAt: new Date(),
-            },
-          });
-      }, null);
+      const nowDate = new Date();
+      const chRow = {
+        id: c.id,
+        subjectId: c.subjectId,
+        weekNumber: Number(c.weekNumber ?? 1),
+        title: c.title,
+        learningObjectives: c.learningObjectives || [],
+        lectureJson: c.lecture || c.lectureJson || {},
+        readingGuideJson: c.readingGuide || c.readingGuideJson || {},
+        practicalExerciseJson: c.practicalExercise || c.practicalExerciseJson || {},
+        updatedAt: nowDate.toISOString(),
+      };
+      const existingKv = await sysKvGet<any[]>("lp_chapters", []);
+      await sysKvSet("lp_chapters", mergeRecordsById([chRow], existingKv, "id", "updatedAt"));
+
+      if (hasTable("launchpad_chapters")) {
+        await safeDbQuery(async () => {
+          await db.insert(launchpadChapters)
+            .values({ ...chRow, updatedAt: nowDate })
+            .onConflictDoUpdate({
+              target: launchpadChapters.id,
+              set: {
+                weekNumber: chRow.weekNumber,
+                title: chRow.title,
+                learningObjectives: chRow.learningObjectives,
+                lectureJson: chRow.lectureJson,
+                readingGuideJson: chRow.readingGuideJson,
+                practicalExerciseJson: chRow.practicalExerciseJson,
+                updatedAt: nowDate,
+              },
+            });
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:chapter_saved", scope: "launchpad", entity: "chapters", targetId: c.id });
       res.json({ success: true });
     } catch (error) {
@@ -2211,14 +2427,26 @@ Provide your response in two clearly labeled sections using Markdown:
       if (!Array.isArray(chapters)) {
         return res.status(400).json({ error: "chapters array is required" });
       }
-      await safeDbQuery(async () => {
-        for (const ch of chapters) {
-          if (!ch?.id) continue;
-          await db.update(launchpadChapters)
-            .set({ weekNumber: Number(ch.weekNumber), updatedAt: new Date() })
-            .where(eq(launchpadChapters.id, ch.id));
-        }
-      }, null);
+      const nowIso = new Date().toISOString();
+      const existingKv = await sysKvGet<any[]>("lp_chapters", []);
+      const orderMap = new Map(chapters.filter((ch: any) => ch?.id).map((ch: any) => [String(ch.id), Number(ch.weekNumber)]));
+      const updatedKv = existingKv.map((item) =>
+        orderMap.has(String(item?.id))
+          ? { ...item, weekNumber: orderMap.get(String(item.id)), updatedAt: nowIso }
+          : item
+      );
+      await sysKvSet("lp_chapters", updatedKv);
+
+      if (hasTable("launchpad_chapters")) {
+        await safeDbQuery(async () => {
+          for (const ch of chapters) {
+            if (!ch?.id) continue;
+            await db.update(launchpadChapters)
+              .set({ weekNumber: Number(ch.weekNumber), updatedAt: new Date() })
+              .where(eq(launchpadChapters.id, ch.id));
+          }
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:chapters_reordered", scope: "launchpad", entity: "chapters" });
       res.json({ success: true });
     } catch (error) {
@@ -2229,9 +2457,14 @@ Provide your response in two clearly labeled sections using Markdown:
   app.delete("/api/launchpad/chapters/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      await safeDbQuery(async () => {
-        await db.delete(launchpadChapters).where(eq(launchpadChapters.id, id));
-      }, null);
+      const existingKv = await sysKvGet<any[]>("lp_chapters", []);
+      await sysKvSet("lp_chapters", existingKv.filter((c) => c?.id !== id));
+
+      if (hasTable("launchpad_chapters")) {
+        await safeDbQuery(async () => {
+          await db.delete(launchpadChapters).where(eq(launchpadChapters.id, id));
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:chapter_deleted", scope: "launchpad", entity: "chapters", targetId: id });
       res.json({ success: true });
     } catch (error) {
@@ -2245,26 +2478,33 @@ Provide your response in two clearly labeled sections using Markdown:
       if (!q?.id || !q?.subjectId || !q?.questionType) {
         return res.status(400).json({ error: "id, subjectId, and questionType are required" });
       }
-      await safeDbQuery(async () => {
-        await db.insert(launchpadCertificationQuestions)
-          .values({
-            id: q.id,
-            subjectId: q.subjectId,
-            questionType: q.questionType,
-            sortOrder: Number(q.sortOrder ?? 1),
-            payloadJson: q.payload || q.payloadJson || {},
-            updatedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: launchpadCertificationQuestions.id,
-            set: {
-              questionType: q.questionType,
-              sortOrder: Number(q.sortOrder ?? 1),
-              payloadJson: q.payload || q.payloadJson || {},
-              updatedAt: new Date(),
-            },
-          });
-      }, null);
+      const nowDate = new Date();
+      const qRow = {
+        id: q.id,
+        subjectId: q.subjectId,
+        questionType: q.questionType,
+        sortOrder: Number(q.sortOrder ?? 1),
+        payloadJson: q.payload || q.payloadJson || {},
+        updatedAt: nowDate.toISOString(),
+      };
+      const existingKv = await sysKvGet<any[]>("lp_cert_questions", []);
+      await sysKvSet("lp_cert_questions", mergeRecordsById([qRow], existingKv, "id", "updatedAt"));
+
+      if (hasTable("launchpad_certification_questions")) {
+        await safeDbQuery(async () => {
+          await db.insert(launchpadCertificationQuestions)
+            .values({ ...qRow, updatedAt: nowDate })
+            .onConflictDoUpdate({
+              target: launchpadCertificationQuestions.id,
+              set: {
+                questionType: qRow.questionType,
+                sortOrder: qRow.sortOrder,
+                payloadJson: qRow.payloadJson,
+                updatedAt: nowDate,
+              },
+            });
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:cert_question_saved", scope: "launchpad", entity: "certQuestions", targetId: q.id });
       res.json({ success: true });
     } catch (error) {
@@ -2275,9 +2515,14 @@ Provide your response in two clearly labeled sections using Markdown:
   app.delete("/api/launchpad/cert-questions/:id", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      await safeDbQuery(async () => {
-        await db.delete(launchpadCertificationQuestions).where(eq(launchpadCertificationQuestions.id, id));
-      }, null);
+      const existingKv = await sysKvGet<any[]>("lp_cert_questions", []);
+      await sysKvSet("lp_cert_questions", existingKv.filter((q) => q?.id !== id));
+
+      if (hasTable("launchpad_certification_questions")) {
+        await safeDbQuery(async () => {
+          await db.delete(launchpadCertificationQuestions).where(eq(launchpadCertificationQuestions.id, id));
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:cert_question_deleted", scope: "launchpad", entity: "certQuestions", targetId: id });
       res.json({ success: true });
     } catch (error) {
@@ -2304,29 +2549,36 @@ Provide your response in two clearly labeled sections using Markdown:
       const studentAccess = launchpadStudentTabAccess || studentTabAccess || accessScope;
       const reviewAccess = launchpadReviewExerciseAccess || reviewExerciseAccess || accessScope;
       const editAccess = launchpadEditCurriculumAccess || editCurriculumAccess || 'none';
-      await safeDbQuery(async () => {
-        await db.insert(launchpadTeamPermissions)
-          .values({
-            userId,
-            accessScope,
-            launchpadStudentTabAccess: studentAccess,
-            launchpadReviewExerciseAccess: reviewAccess,
-            launchpadEditCurriculumAccess: editAccess,
-            updatedBy: updatedBy || 'Admin',
-            updatedAt: new Date()
-          })
-          .onConflictDoUpdate({
-            target: launchpadTeamPermissions.userId,
-            set: {
-              accessScope,
-              launchpadStudentTabAccess: studentAccess,
-              launchpadReviewExerciseAccess: reviewAccess,
-              launchpadEditCurriculumAccess: editAccess,
-              updatedBy: updatedBy || 'Admin',
-              updatedAt: new Date()
-            },
-          });
-      }, null);
+      const nowDate = new Date();
+      const permRow = {
+        userId,
+        accessScope,
+        launchpadStudentTabAccess: studentAccess,
+        launchpadReviewExerciseAccess: reviewAccess,
+        launchpadEditCurriculumAccess: editAccess,
+        updatedBy: updatedBy || 'Admin',
+        updatedAt: nowDate.toISOString(),
+      };
+      const existingKv = await sysKvGet<any[]>("lp_permissions", []);
+      await sysKvSet("lp_permissions", mergeRecordsById([permRow], existingKv, "userId", "updatedAt"));
+
+      if (hasTable("launchpad_team_permissions")) {
+        await safeDbQuery(async () => {
+          await db.insert(launchpadTeamPermissions)
+            .values({ ...permRow, updatedAt: nowDate })
+            .onConflictDoUpdate({
+              target: launchpadTeamPermissions.userId,
+              set: {
+                accessScope,
+                launchpadStudentTabAccess: studentAccess,
+                launchpadReviewExerciseAccess: reviewAccess,
+                launchpadEditCurriculumAccess: editAccess,
+                updatedBy: updatedBy || 'Admin',
+                updatedAt: nowDate
+              },
+            });
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:permissions_updated", scope: "launchpad", entity: "permissions", targetId: userId });
       res.json({ success: true });
     } catch (error) {
@@ -2336,17 +2588,61 @@ Provide your response in two clearly labeled sections using Markdown:
 
   app.post("/api/launchpad/enrollments", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const { studentIds, assignedBy } = req.body;
+      const { studentIds, studentEmails, assignedBy } = req.body;
       if (!Array.isArray(studentIds)) {
         return res.status(400).json({ error: "studentIds array is required" });
       }
-      await safeDbQuery(async () => {
-        for (const studentId of studentIds) {
-          await db.insert(launchpadStudentEnrollments)
-            .values({ studentId, assignedBy: assignedBy || 'Counselor', assignedAt: new Date() })
-            .onConflictDoNothing({ target: launchpadStudentEnrollments.studentId });
-        }
-      }, null);
+      const allUsers = await readAllUsersSafe();
+      const kvStudents = await sysKvGet<any[]>("portal_students_mirror", []);
+      const resolveEmailForId = (sid: string): string | null => {
+        const passed = studentEmails && typeof studentEmails === "object" ? normEmail(studentEmails[sid]) : "";
+        if (passed) return passed;
+        const u = allUsers.find((usr) => String(usr.uid || "").trim() === sid);
+        if (u?.email && !normEmail(u.email).endsWith("@uppseekers.local")) return normEmail(u.email);
+        const ks = kvStudents.find((st) => String(st?.id || "").trim() === sid);
+        if (ks?.email) return normEmail(ks.email);
+        return null;
+      };
+
+      const nowDate = new Date();
+      const nowIso = nowDate.toISOString();
+      const newEnrollmentRows = studentIds.filter(Boolean).map((studentId: string) => ({
+        studentId,
+        studentEmail: resolveEmailForId(studentId),
+        assignedBy: assignedBy || 'Counselor',
+        assignedAt: nowIso,
+      }));
+
+      const existingKv = await sysKvGet<any[]>("lp_enrollments", []);
+      await sysKvSet("lp_enrollments", mergeRecordsById(newEnrollmentRows, existingKv, "studentId", "assignedAt"));
+
+      if (hasTable("launchpad_student_enrollments")) {
+        await safeDbQuery(async () => {
+          for (const row of newEnrollmentRows) {
+            if (hasColumn("launchpad_student_enrollments", "student_email")) {
+              await db.insert(launchpadStudentEnrollments)
+                .values({
+                  studentId: row.studentId,
+                  studentEmail: row.studentEmail,
+                  assignedBy: row.assignedBy,
+                  assignedAt: nowDate,
+                })
+                .onConflictDoUpdate({
+                  target: launchpadStudentEnrollments.studentId,
+                  set: {
+                    ...(row.studentEmail ? { studentEmail: row.studentEmail } : {}),
+                  },
+                });
+            } else {
+              await createPool().query(
+                `INSERT INTO "launchpad_student_enrollments" ("student_id", "assigned_by", "assigned_at")
+                 VALUES ($1, $2, $3) ON CONFLICT ("student_id") DO NOTHING`,
+                [row.studentId, row.assignedBy, nowDate]
+              );
+            }
+          }
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:enrollments_updated", scope: "launchpad", entity: "enrollments" });
       res.json({ success: true });
     } catch (error) {
@@ -2357,9 +2653,14 @@ Provide your response in two clearly labeled sections using Markdown:
   app.delete("/api/launchpad/enrollments/:studentId", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { studentId } = req.params;
-      await safeDbQuery(async () => {
-        await db.delete(launchpadStudentEnrollments).where(eq(launchpadStudentEnrollments.studentId, studentId));
-      }, null);
+      const existingKv = await sysKvGet<any[]>("lp_enrollments", []);
+      await sysKvSet("lp_enrollments", existingKv.filter((e) => e?.studentId !== studentId));
+
+      if (hasTable("launchpad_student_enrollments")) {
+        await safeDbQuery(async () => {
+          await db.delete(launchpadStudentEnrollments).where(eq(launchpadStudentEnrollments.studentId, studentId));
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:enrollment_deleted", scope: "launchpad", entity: "enrollments", targetId: studentId });
       res.json({ success: true });
     } catch (error) {
@@ -2369,42 +2670,149 @@ Provide your response in two clearly labeled sections using Markdown:
 
   app.post("/api/launchpad/releases", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const { studentId, subjectId, isUnlocked, unlockedBy } = req.body;
+      const { studentId, studentEmail, subjectId, isUnlocked, unlockedBy } = req.body;
       if (!studentId || !subjectId) {
         return res.status(400).json({ error: "studentId and subjectId are required" });
       }
-      const id = `${studentId}__${subjectId}`;
-      await safeDbQuery(async () => {
-        // Automatically ensure the student is enrolled in Launchpad whenever a subject is unlocked
-        if (Boolean(isUnlocked)) {
-          await db.insert(launchpadStudentEnrollments)
-            .values({
-              studentId,
-              assignedBy: unlockedBy || 'Counselor',
-              assignedAt: new Date(),
-            })
-            .onConflictDoNothing({ target: launchpadStudentEnrollments.studentId });
+      const cleanStudentId = String(studentId).trim();
+      const cleanSubjectId = String(subjectId).trim();
+      let cleanStudentEmail = normEmail(studentEmail);
+      if (!cleanStudentEmail) {
+        const allUsers = await readAllUsersSafe();
+        const foundU = allUsers.find((u) => String(u.uid || "").trim() === cleanStudentId);
+        if (foundU?.email && !normEmail(foundU.email).endsWith("@uppseekers.local")) {
+          cleanStudentEmail = normEmail(foundU.email);
+        } else {
+          const kvStudents = await sysKvGet<any[]>("portal_students_mirror", []);
+          const foundKs = kvStudents.find((s) => String(s?.id || "").trim() === cleanStudentId);
+          if (foundKs?.email) cleanStudentEmail = normEmail(foundKs.email);
         }
-        await db.insert(launchpadSubjectReleases)
-          .values({
-            id,
-            studentId,
-            subjectId,
-            isUnlocked: Boolean(isUnlocked),
-            unlockedBy: unlockedBy || 'Counselor',
-            unlockedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: launchpadSubjectReleases.id,
-            set: {
-              isUnlocked: Boolean(isUnlocked),
-              unlockedBy: unlockedBy || 'Counselor',
-              unlockedAt: new Date(),
-            },
-          });
+      }
+
+      const nowDate = new Date();
+      const nowIso = nowDate.toISOString();
+      const id = `${cleanStudentId}__${cleanSubjectId}`;
+      const unlockedBool = Boolean(isUnlocked);
+      const actor = unlockedBy || 'Counselor';
+
+      const releaseRecord = {
+        id,
+        studentId: cleanStudentId,
+        studentEmail: cleanStudentEmail || null,
+        subjectId: cleanSubjectId,
+        isUnlocked: unlockedBool,
+        unlockedBy: actor,
+        unlockedAt: nowIso,
+      };
+
+      // 1. Persist to Day-1 SQL KV Vault + portal_settings + memory
+      if (unlockedBool) {
+        const existingEnrollKv = await sysKvGet<any[]>("lp_enrollments", []);
+        const enrollRow = {
+          studentId: cleanStudentId,
+          studentEmail: cleanStudentEmail || null,
+          assignedBy: actor,
+          assignedAt: nowIso,
+        };
+        await sysKvSet("lp_enrollments", mergeRecordsById([enrollRow], existingEnrollKv, "studentId", "assignedAt"));
+      }
+
+      const existingReleasesKv = await sysKvGet<any[]>("lp_releases", []);
+      const syncedAliasKv = existingReleasesKv.map((r) => {
+        if (
+          cleanStudentEmail &&
+          r?.subjectId === cleanSubjectId &&
+          normEmail(r?.studentEmail) === cleanStudentEmail
+        ) {
+          return {
+            ...r,
+            isUnlocked: unlockedBool,
+            unlockedBy: actor,
+            unlockedAt: nowIso,
+          };
+        }
+        return r;
+      });
+      const kvSaved = await sysKvSet(
+        "lp_releases",
+        mergeRecordsById([releaseRecord], syncedAliasKv, "id", "unlockedAt")
+      );
+
+      // 2. Persist to Relational Tables (launchpad_subject_releases + launchpad_student_enrollments)
+      let sqlTableSaved = false;
+      await safeDbQuery(async () => {
+        if (unlockedBool && hasTable("launchpad_student_enrollments")) {
+          if (hasColumn("launchpad_student_enrollments", "student_email")) {
+            await db.insert(launchpadStudentEnrollments)
+              .values({
+                studentId: cleanStudentId,
+                studentEmail: cleanStudentEmail || null,
+                assignedBy: actor,
+                assignedAt: nowDate,
+              })
+              .onConflictDoUpdate({
+                target: launchpadStudentEnrollments.studentId,
+                set: {
+                  ...(cleanStudentEmail ? { studentEmail: cleanStudentEmail } : {}),
+                },
+              });
+          } else {
+            await createPool().query(
+              `INSERT INTO "launchpad_student_enrollments" ("student_id", "assigned_by", "assigned_at")
+               VALUES ($1, $2, $3) ON CONFLICT ("student_id") DO NOTHING`,
+              [cleanStudentId, actor, nowDate]
+            );
+          }
+        }
+
+        if (hasTable("launchpad_subject_releases")) {
+          if (hasColumn("launchpad_subject_releases", "student_email")) {
+            await db.insert(launchpadSubjectReleases)
+              .values({
+                id,
+                studentId: cleanStudentId,
+                studentEmail: cleanStudentEmail || null,
+                subjectId: cleanSubjectId,
+                isUnlocked: unlockedBool,
+                unlockedBy: actor,
+                unlockedAt: nowDate,
+              })
+              .onConflictDoUpdate({
+                target: launchpadSubjectReleases.id,
+                set: {
+                  ...(cleanStudentEmail ? { studentEmail: cleanStudentEmail } : {}),
+                  isUnlocked: unlockedBool,
+                  unlockedBy: actor,
+                  unlockedAt: nowDate,
+                },
+              });
+
+            if (cleanStudentEmail) {
+              await createPool().query(
+                `UPDATE "launchpad_subject_releases"
+                 SET "is_unlocked" = $1, "unlocked_by" = $2, "unlocked_at" = $3
+                 WHERE LOWER(TRIM(COALESCE("student_email", ''))) = $4 AND "subject_id" = $5`,
+                [unlockedBool, actor, nowDate, cleanStudentEmail, cleanSubjectId]
+              );
+            }
+          } else {
+            await createPool().query(
+              `INSERT INTO "launchpad_subject_releases" ("id", "student_id", "subject_id", "is_unlocked", "unlocked_by", "unlocked_at")
+               VALUES ($1, $2, $3, $4, $5, $6)
+               ON CONFLICT ("id") DO UPDATE SET "is_unlocked" = EXCLUDED."is_unlocked", "unlocked_by" = EXCLUDED."unlocked_by", "unlocked_at" = EXCLUDED."unlocked_at"`,
+              [id, cleanStudentId, cleanSubjectId, unlockedBool, actor, nowDate]
+            );
+          }
+          sqlTableSaved = true;
+        }
       }, null);
-      broadcastRealtime({ type: "launchpad:release_updated", scope: "launchpad", entity: "releases", targetId: studentId });
-      res.json({ success: true });
+
+      if (hasSqlEnv() && !sqlTableSaved && !kvSaved) {
+        return res.status(500).json({ error: "Failed to persist subject unlock in database" });
+      }
+
+      broadcastRealtime({ type: "launchpad:release_updated", scope: "launchpad", entity: "releases", targetId: cleanStudentId });
+      res.json({ success: true, release: releaseRecord });
     } catch (error) {
       res.status(500).json({ error: "Failed to update subject release" });
     }
@@ -2429,40 +2837,51 @@ Provide your response in two clearly labeled sections using Markdown:
         return res.status(400).json({ error: "studentId, subjectId, and weekNumber are required" });
       }
       const id = `${studentId}__${subjectId}__w${weekNumber}`;
+      const nowDate = new Date();
       const parsedEvaluatedAt =
         evaluatedAt && !isNaN(new Date(evaluatedAt).getTime()) ? new Date(evaluatedAt) : null;
-      await safeDbQuery(async () => {
-        await db.insert(launchpadProgressAndSubmissions)
-          .values({
-            id,
-            studentId,
-            subjectId,
-            weekNumber: Number(weekNumber),
-            lectureCompleted: Boolean(lectureCompleted),
-            readingCompleted: Boolean(readingCompleted),
-            exerciseSubmissionJson: exerciseSubmissionJson || null,
-            exerciseCompleted: Boolean(exerciseCompleted),
-            evaluationStatus: evaluationStatus || null,
-            evaluatorFeedback: evaluatorFeedback || null,
-            evaluatedBy: evaluatedBy || null,
-            evaluatedAt: parsedEvaluatedAt,
-            updatedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: launchpadProgressAndSubmissions.id,
-            set: {
-              lectureCompleted: Boolean(lectureCompleted),
-              readingCompleted: Boolean(readingCompleted),
-              exerciseSubmissionJson: exerciseSubmissionJson || null,
-              exerciseCompleted: Boolean(exerciseCompleted),
-              evaluationStatus: evaluationStatus || null,
-              evaluatorFeedback: evaluatorFeedback || null,
-              evaluatedBy: evaluatedBy || null,
+      const progRow = {
+        id,
+        studentId,
+        subjectId,
+        weekNumber: Number(weekNumber),
+        lectureCompleted: Boolean(lectureCompleted),
+        readingCompleted: Boolean(readingCompleted),
+        exerciseSubmissionJson: exerciseSubmissionJson || null,
+        exerciseCompleted: Boolean(exerciseCompleted),
+        evaluationStatus: evaluationStatus || null,
+        evaluatorFeedback: evaluatorFeedback || null,
+        evaluatedBy: evaluatedBy || null,
+        evaluatedAt: parsedEvaluatedAt ? parsedEvaluatedAt.toISOString() : null,
+        updatedAt: nowDate.toISOString(),
+      };
+      const existingKv = await sysKvGet<any[]>("lp_progress", []);
+      await sysKvSet("lp_progress", mergeRecordsById([progRow], existingKv, "id", "updatedAt"));
+
+      if (hasTable("launchpad_progress_and_submissions")) {
+        await safeDbQuery(async () => {
+          await db.insert(launchpadProgressAndSubmissions)
+            .values({
+              ...progRow,
               evaluatedAt: parsedEvaluatedAt,
-              updatedAt: new Date(),
-            },
-          });
-      }, null);
+              updatedAt: nowDate,
+            })
+            .onConflictDoUpdate({
+              target: launchpadProgressAndSubmissions.id,
+              set: {
+                lectureCompleted: progRow.lectureCompleted,
+                readingCompleted: progRow.readingCompleted,
+                exerciseSubmissionJson: progRow.exerciseSubmissionJson,
+                exerciseCompleted: progRow.exerciseCompleted,
+                evaluationStatus: progRow.evaluationStatus,
+                evaluatorFeedback: progRow.evaluatorFeedback,
+                evaluatedBy: progRow.evaluatedBy,
+                evaluatedAt: parsedEvaluatedAt,
+                updatedAt: nowDate,
+              },
+            });
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:progress_updated", scope: "launchpad", entity: "progress", targetId: studentId });
       res.json({ success: true });
     } catch (error) {
@@ -2477,27 +2896,34 @@ Provide your response in two clearly labeled sections using Markdown:
         return res.status(400).json({ error: "Missing certification fields" });
       }
       const id = `${studentId}__${subjectId}`;
-      await safeDbQuery(async () => {
-        await db.insert(launchpadCertifications)
-          .values({
-            id,
-            studentId,
-            subjectId,
-            testScore,
-            passed: Boolean(passed),
-            certificateCode,
-            issuedAt: new Date(),
-          })
-          .onConflictDoUpdate({
-            target: launchpadCertifications.id,
-            set: {
-              testScore,
-              passed: Boolean(passed),
-              certificateCode,
-              issuedAt: new Date(),
-            },
-          });
-      }, null);
+      const nowDate = new Date();
+      const certRow = {
+        id,
+        studentId,
+        subjectId,
+        testScore,
+        passed: Boolean(passed),
+        certificateCode,
+        issuedAt: nowDate.toISOString(),
+      };
+      const existingKv = await sysKvGet<any[]>("lp_certifications", []);
+      await sysKvSet("lp_certifications", mergeRecordsById([certRow], existingKv, "id", "issuedAt"));
+
+      if (hasTable("launchpad_certifications")) {
+        await safeDbQuery(async () => {
+          await db.insert(launchpadCertifications)
+            .values({ ...certRow, issuedAt: nowDate })
+            .onConflictDoUpdate({
+              target: launchpadCertifications.id,
+              set: {
+                testScore,
+                passed: Boolean(passed),
+                certificateCode,
+                issuedAt: nowDate,
+              },
+            });
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:certification_saved", scope: "launchpad", entity: "certifications", targetId: studentId });
       res.json({ success: true });
     } catch (error) {
@@ -2511,36 +2937,48 @@ Provide your response in two clearly labeled sections using Markdown:
       if (!ev?.id || !ev?.studentId || !ev?.subjectId) {
         return res.status(400).json({ error: "id, studentId, and subjectId are required" });
       }
-      await safeDbQuery(async () => {
-        await db.insert(assignmentEvaluations)
-          .values({
-            id: ev.id,
-            sourceType: ev.sourceType || 'LAUNCHPAD',
-            studentId: ev.studentId,
-            studentName: ev.studentName || 'Student',
-            subjectId: ev.subjectId,
-            subjectTitle: ev.subjectTitle || '',
-            weekNumber: Number(ev.weekNumber ?? 1),
-            chapterTitle: ev.chapterTitle || '',
-            taskId: ev.taskId || null,
-            submissionJson: ev.submissionJson || {},
-            status: ev.status || 'Submitted',
-            feedback: ev.feedback || null,
-            evaluatedBy: ev.evaluatedBy || null,
-            submittedAt: ev.submittedAt ? new Date(ev.submittedAt) : new Date(),
-            evaluatedAt: ev.evaluatedAt ? new Date(ev.evaluatedAt) : null,
-          })
-          .onConflictDoUpdate({
-            target: assignmentEvaluations.id,
-            set: {
-              submissionJson: ev.submissionJson || {},
-              status: ev.status || 'Submitted',
-              feedback: ev.feedback || null,
-              evaluatedBy: ev.evaluatedBy || null,
-              evaluatedAt: ev.evaluatedAt ? new Date(ev.evaluatedAt) : null,
-            },
-          });
-      }, null);
+      const subDate = ev.submittedAt ? new Date(ev.submittedAt) : new Date();
+      const evalDate = ev.evaluatedAt ? new Date(ev.evaluatedAt) : null;
+      const evRow = {
+        id: ev.id,
+        sourceType: ev.sourceType || 'LAUNCHPAD',
+        studentId: ev.studentId,
+        studentName: ev.studentName || 'Student',
+        subjectId: ev.subjectId,
+        subjectTitle: ev.subjectTitle || '',
+        weekNumber: Number(ev.weekNumber ?? 1),
+        chapterTitle: ev.chapterTitle || '',
+        taskId: ev.taskId || null,
+        submissionJson: ev.submissionJson || {},
+        status: ev.status || 'Submitted',
+        feedback: ev.feedback || null,
+        evaluatedBy: ev.evaluatedBy || null,
+        submittedAt: subDate.toISOString(),
+        evaluatedAt: evalDate ? evalDate.toISOString() : null,
+      };
+      const existingKv = await sysKvGet<any[]>("lp_evaluations", []);
+      await sysKvSet("lp_evaluations", mergeRecordsById([evRow], existingKv, "id", "submittedAt"));
+
+      if (hasTable("assignment_evaluations")) {
+        await safeDbQuery(async () => {
+          await db.insert(assignmentEvaluations)
+            .values({
+              ...evRow,
+              submittedAt: subDate,
+              evaluatedAt: evalDate,
+            })
+            .onConflictDoUpdate({
+              target: assignmentEvaluations.id,
+              set: {
+                submissionJson: evRow.submissionJson,
+                status: evRow.status,
+                feedback: evRow.feedback,
+                evaluatedBy: evRow.evaluatedBy,
+                evaluatedAt: evalDate,
+              },
+            });
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:evaluation_saved", scope: "launchpad", entity: "evaluations", targetId: ev.studentId });
       res.json({ success: true });
     } catch (error) {
@@ -2554,28 +2992,38 @@ Provide your response in two clearly labeled sections using Markdown:
       if (!n?.id || !n?.recipientId || !n?.title) {
         return res.status(400).json({ error: "id, recipientId, and title are required" });
       }
-      await safeDbQuery(async () => {
-        await db.insert(notificationsTable)
-          .values({
-            id: n.id,
-            recipientType: n.recipientType || 'student',
-            recipientId: n.recipientId,
-            title: n.title,
-            message: n.message || '',
-            category: n.category || 'LAUNCHPAD',
-            link: n.link || '/student/launchpad',
-            metadataJson: n.metadata || n.metadataJson || {},
-            isRead: Boolean(n.isRead),
-            createdAt: n.createdAt ? new Date(n.createdAt) : new Date(),
-          })
-          .onConflictDoUpdate({
-            target: notificationsTable.id,
-            set: {
-              isRead: Boolean(n.isRead),
-              metadataJson: n.metadata || n.metadataJson || {},
-            },
-          });
-      }, null);
+      const createdDate = n.createdAt ? new Date(n.createdAt) : new Date();
+      const notifRow = {
+        id: n.id,
+        recipientType: n.recipientType || 'student',
+        recipientId: n.recipientId,
+        title: n.title,
+        message: n.message || '',
+        category: n.category || 'LAUNCHPAD',
+        link: n.link || '/student/launchpad',
+        metadataJson: n.metadata || n.metadataJson || {},
+        isRead: Boolean(n.isRead),
+        createdAt: createdDate.toISOString(),
+      };
+      const existingKv = await sysKvGet<any[]>("lp_notifications", []);
+      await sysKvSet("lp_notifications", mergeRecordsById([notifRow], existingKv, "id", "createdAt"));
+
+      if (hasTable("notifications")) {
+        await safeDbQuery(async () => {
+          await db.insert(notificationsTable)
+            .values({
+              ...notifRow,
+              createdAt: createdDate,
+            })
+            .onConflictDoUpdate({
+              target: notificationsTable.id,
+              set: {
+                isRead: notifRow.isRead,
+                metadataJson: notifRow.metadataJson,
+              },
+            });
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:notification_created", scope: "launchpad", entity: "notifications", targetId: n.recipientId });
       res.json({ success: true });
     } catch (error) {
@@ -2586,11 +3034,19 @@ Provide your response in two clearly labeled sections using Markdown:
   app.post("/api/launchpad/notifications/:id/read", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { id } = req.params;
-      await safeDbQuery(async () => {
-        await db.update(notificationsTable)
-          .set({ isRead: true })
-          .where(eq(notificationsTable.id, id));
-      }, null);
+      const existingKv = await sysKvGet<any[]>("lp_notifications", []);
+      await sysKvSet(
+        "lp_notifications",
+        existingKv.map((item) => (item?.id === id ? { ...item, isRead: true } : item))
+      );
+
+      if (hasTable("notifications")) {
+        await safeDbQuery(async () => {
+          await db.update(notificationsTable)
+            .set({ isRead: true })
+            .where(eq(notificationsTable.id, id));
+        }, null);
+      }
       broadcastRealtime({ type: "launchpad:notification_read", scope: "launchpad", entity: "notifications", targetId: id });
       res.json({ success: true });
     } catch (error) {

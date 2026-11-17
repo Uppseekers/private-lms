@@ -385,6 +385,7 @@ export interface LaunchpadTeamPermission {
 
 export interface LaunchpadEnrollment {
   studentId: string;
+  studentEmail?: string;
   assignedBy?: string;
   assignedAt?: string;
 }
@@ -392,6 +393,7 @@ export interface LaunchpadEnrollment {
 export interface LaunchpadSubjectRelease {
   id: string;
   studentId: string;
+  studentEmail?: string;
   subjectId: string;
   isUnlocked: boolean;
   unlockedBy?: string;

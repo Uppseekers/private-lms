@@ -82,7 +82,16 @@ export default function StudentLaunchpad() {
   const launchpadEvaluations = Array.isArray(rawLaunchpadEvaluations) ? rawLaunchpadEvaluations : [];
 
   const currentStudent = useMemo(() => {
-    const cleanUserEmail = (currentUser?.email || '').trim().toLowerCase();
+    const savedAuthEmail = (localStorage.getItem('auth_user_email') || '').trim().toLowerCase();
+    const cleanUserEmail = (
+      ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? currentUser?.email : '') ||
+      savedAuthEmail ||
+      currentUser?.email ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
     return (
       students.find(
         (s) =>
@@ -91,34 +100,65 @@ export default function StudentLaunchpad() {
       ) ||
       ((currentUser?.role || '').toUpperCase() === 'STUDENT'
         ? (currentUser as any)
+        : savedAuthEmail && savedAuthEmail !== 'uppseekers@gmail.com'
+        ? ({
+            id: currentUser?.id || savedAuthEmail,
+            name: savedAuthEmail.split('@')[0] || 'Student',
+            email: savedAuthEmail,
+          } as any)
         : students[0])
     );
   }, [students, currentUser]);
 
   const studentId = currentStudent?.id || currentUser?.id || 'STU-101';
   const studentName = currentStudent?.name || currentUser?.name || 'Student';
+  const cleanStudentEmail = useMemo(() => {
+    const savedAuthEmail = (localStorage.getItem('auth_user_email') || '').trim().toLowerCase();
+    return (
+      currentStudent?.email ||
+      ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? currentUser?.email : '') ||
+      (savedAuthEmail !== 'uppseekers@gmail.com' ? savedAuthEmail : '') ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+  }, [currentStudent?.email, currentUser?.email, currentUser?.role]);
 
   const studentCandidateIds = useMemo(() => {
     const ids = new Set<string>();
     if (studentId) ids.add(studentId);
-    if (currentUser?.id) ids.add(currentUser.id);
-    const cleanEmail = (currentStudent?.email || currentUser?.email || '').trim().toLowerCase();
-    if (cleanEmail) {
+    if (currentUser?.id && (currentUser?.role || '').toUpperCase() === 'STUDENT') {
+      ids.add(currentUser.id);
+    }
+    if (cleanStudentEmail) {
       students.forEach((s) => {
-        if ((s.email || '').trim().toLowerCase() === cleanEmail && s.id) {
+        if ((s.email || '').trim().toLowerCase() === cleanStudentEmail && s.id) {
           ids.add(s.id);
         }
       });
     }
     return ids;
-  }, [studentId, currentUser?.id, currentUser?.email, currentStudent?.email, students]);
+  }, [studentId, currentUser?.id, currentUser?.role, cleanStudentEmail, students]);
+
+  const matchesCurrentStudent = (record: { studentId?: string; studentEmail?: string } | null | undefined) => {
+    if (!record) return false;
+    if (record.studentId && studentCandidateIds.has(record.studentId)) return true;
+    if (
+      cleanStudentEmail &&
+      record.studentEmail &&
+      record.studentEmail.trim().toLowerCase() === cleanStudentEmail
+    ) {
+      return true;
+    }
+    return false;
+  };
 
   const isEnrolled = useMemo(() => {
     return (
-      launchpadEnrollments.some((e) => studentCandidateIds.has(e.studentId)) ||
-      launchpadSubjectReleases.some((r) => studentCandidateIds.has(r.studentId) && r.isUnlocked)
+      launchpadEnrollments.some((e) => matchesCurrentStudent(e)) ||
+      launchpadSubjectReleases.some((r) => matchesCurrentStudent(r) && r.isUnlocked)
     );
-  }, [launchpadEnrollments, launchpadSubjectReleases, studentCandidateIds]);
+  }, [launchpadEnrollments, launchpadSubjectReleases, studentCandidateIds, cleanStudentEmail]);
 
   const visibleSubjects = useMemo(
     () =>
@@ -159,11 +199,18 @@ export default function StudentLaunchpad() {
     situationalFeedback: { id: string; earned: number; max: number; note: string }[];
   } | null>(null);
 
-  // Helper: check if subject is unlocked for current student
+  // Helper: check if subject is unlocked for current student (matches by ID or email, newest action wins)
   const isSubjectUnlocked = (subjectId: string) => {
-    return launchpadSubjectReleases.some(
-      (r) => studentCandidateIds.has(r.studentId) && r.subjectId === subjectId && r.isUnlocked
+    const matching = launchpadSubjectReleases.filter(
+      (r) => r.subjectId === subjectId && matchesCurrentStudent(r)
     );
+    if (matching.length === 0) return false;
+    const sorted = [...matching].sort((a, b) => {
+      const tB = a && b && b.unlockedAt ? new Date(b.unlockedAt).getTime() : 0;
+      const tA = a && a.unlockedAt ? new Date(a.unlockedAt).getTime() : 0;
+      return (Number.isFinite(tB) ? tB : 0) - (Number.isFinite(tA) ? tA : 0);
+    });
+    return Boolean(sorted[0]?.isUnlocked);
   };
 
   // Helper: get certification for a subject

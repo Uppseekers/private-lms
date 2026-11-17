@@ -123,6 +123,7 @@ export const launchpadCertificationQuestions = pgTable('launchpad_certification_
 
 export const launchpadStudentEnrollments = pgTable('launchpad_student_enrollments', {
   studentId: text('student_id').primaryKey(),
+  studentEmail: text('student_email'),
   assignedBy: text('assigned_by').notNull(),
   assignedAt: timestamp('assigned_at').defaultNow(),
 });
@@ -130,6 +131,7 @@ export const launchpadStudentEnrollments = pgTable('launchpad_student_enrollment
 export const launchpadSubjectReleases = pgTable('launchpad_subject_releases', {
   id: text('id').primaryKey(), // `${studentId}__${subjectId}`
   studentId: text('student_id').notNull(),
+  studentEmail: text('student_email'),
   subjectId: text('subject_id').notNull(),
   isUnlocked: boolean('is_unlocked').notNull().default(false),
   unlockedBy: text('unlocked_by'),

@@ -1304,7 +1304,13 @@ interface DatabaseContextType {
   assignStudentsToLaunchpad: (studentIds: string[], assignedBy: string) => void;
   removeStudentFromLaunchpad: (studentId: string) => void;
   launchpadSubjectReleases: LaunchpadSubjectRelease[];
-  toggleLaunchpadSubjectRelease: (studentId: string, subjectId: string, isUnlocked: boolean, unlockedBy?: string) => void;
+  toggleLaunchpadSubjectRelease: (
+    studentId: string,
+    subjectId: string,
+    isUnlocked: boolean,
+    unlockedBy?: string,
+    studentEmail?: string
+  ) => Promise<boolean>;
   launchpadProgress: LaunchpadWeekProgress[];
   saveLaunchpadWeekProgress: (progressItem: LaunchpadWeekProgress) => void;
   markLaunchpadWeekInProgress: (studentId: string, subjectId: string, weekNumber: number) => void;
@@ -1691,13 +1697,63 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   });
 
   const [currentUser, setCurrentUserState] = useState<StaffMember>(() => {
+    const savedEmail = (localStorage.getItem('auth_user_email') || '').trim().toLowerCase();
+    const savedToken = localStorage.getItem('auth_token') || '';
+    let tokenUid = '';
+    if (savedToken.startsWith('custom_')) {
+      const parts = savedToken.slice('custom_'.length).split('_');
+      if (parts.length >= 2) {
+        tokenUid = parts[0].trim();
+      }
+    }
+
     const savedUser = localStorage.getItem('uppseekers_current_user');
     if (savedUser) {
       try {
         const parsed = JSON.parse(savedUser);
-        if (parsed && (parsed.email || parsed.id)) return parsed;
+        if (parsed && (parsed.email || parsed.id)) {
+          const parsedEmail = (parsed.email || '').trim().toLowerCase();
+          if (!savedEmail || parsedEmail === savedEmail) {
+            return parsed;
+          }
+        }
       } catch (e) {}
     }
+
+    if (savedEmail) {
+      const matchedStu = students.find(
+        s =>
+          (tokenUid && s.id === tokenUid) ||
+          (s.email || '').trim().toLowerCase() === savedEmail
+      );
+      if (matchedStu) {
+        return {
+          ...(matchedStu as any),
+          role: 'STUDENT',
+          students: 'Assigned Scope',
+          status: 'Active',
+        };
+      }
+      const matchedStaff = staff.find(
+        st =>
+          (tokenUid && st.id === tokenUid) ||
+          (st.email || '').trim().toLowerCase() === savedEmail
+      );
+      if (matchedStaff) {
+        return matchedStaff;
+      }
+      if (savedEmail !== 'uppseekers@gmail.com') {
+        return {
+          id: tokenUid || savedEmail,
+          name: savedEmail.split('@')[0] || 'Student',
+          email: savedEmail,
+          role: 'STUDENT',
+          students: 'Assigned Scope',
+          status: 'Active',
+        };
+      }
+    }
+
     return initialStaff.find(s => s.role === 'SYSTEM_ADMIN') || initialStaff[0];
   });
 
@@ -2755,11 +2811,23 @@ function calculateReadiness(student: Student): number {
 
   const assignStudentsToLaunchpad = (studentIds: string[], assignedBy: string) => {
     const now = new Date().toISOString();
+    const studentEmails: Record<string, string> = {};
+    studentIds.forEach((sid) => {
+      const stu = students.find((s) => s.id === sid);
+      const em = (stu?.email || '').trim().toLowerCase();
+      if (em) studentEmails[sid] = em;
+    });
+
     setLaunchpadEnrollmentsState(prev => {
       const existingIds = new Set(prev.map(e => e.studentId));
       const additions: LaunchpadEnrollment[] = studentIds
         .filter(id => !existingIds.has(id))
-        .map(studentId => ({ studentId, assignedBy, assignedAt: now }));
+        .map(studentId => ({
+          studentId,
+          studentEmail: studentEmails[studentId] || undefined,
+          assignedBy,
+          assignedAt: now,
+        }));
       const next = [...prev, ...additions];
       safeLocalStorageSet('uppseekers_launchpad_enrollments_v1', next);
       void syncDocToFirestore('launchpad', 'enrollments', { items: next, updatedAt: now });
@@ -2769,7 +2837,7 @@ function calculateReadiness(student: Student): number {
     fetch('/api/launchpad/enrollments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ studentIds, assignedBy })
+      body: JSON.stringify({ studentIds, studentEmails, assignedBy })
     }).catch(console.error);
   };
 
@@ -2791,40 +2859,119 @@ function calculateReadiness(student: Student): number {
   const buildLaunchpadTaskId = (studentId: string, subjectId: string, weekNumber: number) =>
     `LP-TASK-${studentId}-${subjectId}-W${weekNumber}`;
 
-  const toggleLaunchpadSubjectRelease = (studentId: string, subjectId: string, isUnlocked: boolean, unlockedBy?: string) => {
+  const toggleLaunchpadSubjectRelease = async (
+    studentId: string,
+    subjectId: string,
+    isUnlocked: boolean,
+    unlockedBy?: string,
+    studentEmail?: string
+  ): Promise<boolean> => {
     const now = new Date().toISOString();
     const id = `${studentId}__${subjectId}`;
+    const matchedStudent = students.find(s => s.id === studentId);
+    const cleanEmail = (studentEmail || matchedStudent?.email || '').trim().toLowerCase();
+    const actor = unlockedBy || 'Counselor';
+
+    const previousReleasesSnapshot = Array.isArray(launchpadSubjectReleases)
+      ? [...launchpadSubjectReleases]
+      : [];
+
     // Optimistically ensure the student is also enrolled in Launchpad whenever a subject is unlocked
     if (isUnlocked) {
       setLaunchpadEnrollmentsState(prev => {
         if (prev.some(e => e.studentId === studentId)) return prev;
-        const next = [...prev, { studentId, assignedBy: unlockedBy || 'Counselor', assignedAt: now }];
+        const next: LaunchpadEnrollment[] = [
+          ...prev,
+          {
+            studentId,
+            studentEmail: cleanEmail || undefined,
+            assignedBy: actor,
+            assignedAt: now,
+          },
+        ];
         safeLocalStorageSet('uppseekers_launchpad_enrollments_v1', next);
         void syncDocToFirestore('launchpad', 'enrollments', { items: next, updatedAt: now });
         return next;
       });
     }
+
+    const optimisticRelease: LaunchpadSubjectRelease = {
+      id,
+      studentId,
+      studentEmail: cleanEmail || undefined,
+      subjectId,
+      isUnlocked,
+      unlockedBy: actor,
+      unlockedAt: now,
+    };
+
     setLaunchpadSubjectReleasesState(prev => {
-      const exists = prev.some(r => r.id === id);
-      const item: LaunchpadSubjectRelease = {
-        id,
-        studentId,
-        subjectId,
-        isUnlocked,
-        unlockedBy: unlockedBy || 'Counselor',
-        unlockedAt: now
-      };
-      const next = exists ? prev.map(r => r.id === id ? item : r) : [...prev, item];
+      const syncedPrev = prev.map(r => {
+        if (
+          cleanEmail &&
+          r.subjectId === subjectId &&
+          (r.studentEmail || '').trim().toLowerCase() === cleanEmail
+        ) {
+          return { ...r, isUnlocked, unlockedBy: actor, unlockedAt: now };
+        }
+        return r;
+      });
+      const exists = syncedPrev.some(r => r.id === id);
+      const next = exists
+        ? syncedPrev.map(r => (r.id === id ? optimisticRelease : r))
+        : [...syncedPrev, optimisticRelease];
       safeLocalStorageSet('uppseekers_launchpad_releases_v1', next);
       void syncDocToFirestore('launchpad', 'releases', { items: next, updatedAt: now });
       return next;
     });
+
     const token = localStorage.getItem('auth_token') || 'custom_user';
-    fetch('/api/launchpad/releases', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify({ studentId, subjectId, isUnlocked, unlockedBy: unlockedBy || 'Counselor' })
-    }).catch(console.error);
+    const postReleaseOnce = async (): Promise<Response> =>
+      fetch('/api/launchpad/releases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          studentId,
+          studentEmail: cleanEmail || undefined,
+          subjectId,
+          isUnlocked,
+          unlockedBy: actor,
+        }),
+      });
+
+    let persistedOk = false;
+    try {
+      let res = await postReleaseOnce();
+      if (!res.ok && res.status >= 500) {
+        await new Promise((r) => setTimeout(r, 1200));
+        res = await postReleaseOnce();
+      }
+      if (res.ok) {
+        persistedOk = true;
+        const body = await res.json().catch(() => null);
+        if (body?.release) {
+          setLaunchpadSubjectReleasesState(prev => {
+            const next = prev.map(r => (r.id === id ? { ...r, ...body.release } : r));
+            safeLocalStorageSet('uppseekers_launchpad_releases_v1', next);
+            return next;
+          });
+        }
+      }
+    } catch {
+      try {
+        await new Promise((r) => setTimeout(r, 1200));
+        const retryRes = await postReleaseOnce();
+        persistedOk = retryRes.ok;
+      } catch {
+        persistedOk = false;
+      }
+    }
+
+    if (!persistedOk) {
+      setLaunchpadSubjectReleasesState(previousReleasesSnapshot);
+      safeLocalStorageSet('uppseekers_launchpad_releases_v1', previousReleasesSnapshot);
+      return false;
+    }
 
     // Trigger Student Notification + Auto-Create Week 1 To-Do Task when unlocked
     if (isUnlocked) {
@@ -2843,10 +2990,16 @@ function calculateReadiness(student: Student): number {
         title: 'New Launchpad Subject Unlocked',
         message: `New Launchpad Subject Unlocked: ${subjectTitle} is now available.`,
         link: `/student/launchpad?subject=${encodeURIComponent(subjectId)}&week=1`,
-        metadataJson: { subjectId, subjectTitle, weekNumber: 1, unlockedBy: unlockedBy || 'Counselor' }
+        metadataJson: {
+          subjectId,
+          subjectTitle,
+          weekNumber: 1,
+          unlockedBy: actor,
+          studentEmail: cleanEmail || undefined,
+        }
       });
 
-      const student = students.find(s => s.id === studentId);
+      const student = matchedStudent;
       if (student) {
         const w1TaskId = buildLaunchpadTaskId(studentId, subjectId, 1);
         const existingTasks = Array.isArray(student.tasks) ? student.tasks : [];
@@ -2858,7 +3011,7 @@ function calculateReadiness(student: Student): number {
             category: 'Launchpad',
             stage: 'TO_DO',
             dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
-            assignedBy: unlockedBy || student.counselor || 'Launchpad Counselor',
+            assignedBy: actor || student.counselor || 'Launchpad Counselor',
             description: `Launchpad Week 1: Read Guide, Watch Lecture, and submit the Practical Exercise for "${week1Title}".`,
             launchpadMeta: {
               subjectId,
@@ -2874,6 +3027,8 @@ function calculateReadiness(student: Student): number {
         }
       }
     }
+
+    return true;
   };
 
   const saveLaunchpadWeekProgress = (progressItem: LaunchpadWeekProgress) => {
@@ -3197,14 +3352,34 @@ function calculateReadiness(student: Student): number {
     }).catch(console.error);
   };
 
+  const fetchJsonWithColdStartRetry = async (url: string, token: string): Promise<any | null> => {
+    const delays = [0, 1200, 2400];
+    for (let i = 0; i < delays.length; i++) {
+      if (delays[i] > 0) {
+        await new Promise((r) => setTimeout(r, delays[i]));
+      }
+      try {
+        const sep = url.includes('?') ? '&' : '?';
+        const res = await fetch(`${url}${sep}t=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Authorization': `Bearer ${token}` },
+        });
+        if (res.ok) {
+          return await res.json();
+        }
+        if (res.status < 500) {
+          return null;
+        }
+      } catch {
+        // Retry on transient Cloud Run / Cloud SQL cold-start network errors
+      }
+    }
+    return null;
+  };
+
   const hydrateLaunchpadData = async (token: string) => {
     try {
-      const r = await fetch(`/api/launchpad/state?t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (!r.ok) return null;
-      const lpData = await r.json();
+      const lpData = await fetchJsonWithColdStartRetry('/api/launchpad/state', token);
       if (!lpData) return null;
 
       if (Array.isArray(lpData.subjects)) {
@@ -3305,13 +3480,9 @@ function calculateReadiness(student: Student): number {
 
   const hydratePortalData = async (token: string) => {
     try {
-      const response = await fetch(`/api/data?t=${Date.now()}`, {
-        cache: 'no-store',
-        headers: { 'Authorization': `Bearer ${token}` }
-      });
-      if (!response.ok) return null;
+      const data = await fetchJsonWithColdStartRetry('/api/data', token);
+      if (!data) return null;
 
-      const data = await response.json();
       let hydratedStudents: Student[] = [];
       let hydratedStaff: StaffMember[] = [];
 
@@ -3363,33 +3534,43 @@ function calculateReadiness(student: Student): number {
       // Sync active currentUser session with fresh server profile/role data
       setCurrentUser(prev => {
         if (!prev) return prev;
-        const prevEmail = (prev.email || '').trim().toLowerCase();
+        const savedAuthEmail = (localStorage.getItem('auth_user_email') || '').trim().toLowerCase();
+        const prevEmail = (savedAuthEmail || prev.email || '').trim().toLowerCase();
         const prevId = (prev.id || '').trim();
         const isPrevStudent = (prev.role || '').toUpperCase() === 'STUDENT';
 
-        if (isPrevStudent && hydratedStudents.length > 0) {
-          const matchedStu = hydratedStudents.find(
-            s =>
-              (prevId && s.id === prevId) ||
-              (prevEmail && (s.email || '').trim().toLowerCase() === prevEmail)
-          );
-          if (matchedStu) {
-            return {
-              ...prev,
-              ...matchedStu,
-              role: 'STUDENT',
-              status: 'Active',
-            } as any;
-          }
-        } else if (!isPrevStudent && hydratedStaff.length > 0) {
-          const matchedStaff = hydratedStaff.find(
-            st =>
-              (prevId && (st.id === prevId || (prevId === '1' && st.id === 'admin-1') || (prevId === 'admin-1' && st.id === '1'))) ||
-              (prevEmail && (st.email || '').trim().toLowerCase() === prevEmail)
-          );
-          if (matchedStaff) {
-            return { ...prev, ...matchedStaff };
-          }
+        const matchedStu = hydratedStudents.find(
+          s =>
+            (prevId && s.id === prevId) ||
+            (prevEmail && (s.email || '').trim().toLowerCase() === prevEmail)
+        );
+        const matchedStaff = hydratedStaff.find(
+          st =>
+            (prevId && (st.id === prevId || (prevId === '1' && st.id === 'admin-1') || (prevId === 'admin-1' && st.id === '1'))) ||
+            (prevEmail && (st.email || '').trim().toLowerCase() === prevEmail)
+        );
+
+        if (isPrevStudent && matchedStu) {
+          return {
+            ...prev,
+            ...matchedStu,
+            role: 'STUDENT',
+            status: 'Active',
+          } as any;
+        }
+        if (!isPrevStudent && matchedStaff) {
+          return { ...prev, ...matchedStaff };
+        }
+        if (matchedStu && !matchedStaff) {
+          return {
+            ...prev,
+            ...matchedStu,
+            role: 'STUDENT',
+            status: 'Active',
+          } as any;
+        }
+        if (matchedStaff && !matchedStu) {
+          return { ...prev, ...matchedStaff };
         }
         return prev;
       });
@@ -3409,6 +3590,13 @@ function calculateReadiness(student: Student): number {
     return portalData;
   };
 
+  // Re-fetch Launchpad & Portal state whenever the authenticated user changes
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const token = localStorage.getItem('auth_token') || '';
+    void hydrateLaunchpadData(token);
+  }, [currentUser?.id, currentUser?.email]);
+
   // Real-time WebSocket subscription (/ws/realtime) + reconnect & tab-visibility state reconciliation
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -3418,7 +3606,6 @@ function calculateReadiness(student: Student): number {
     let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
     let clientPingInterval: ReturnType<typeof setInterval> | null = null;
     let isDisposed = false;
-    let hasConnectedOnce = false;
     let reconnectAttempt = 0;
     let pendingDataSync = false;
     let pendingLaunchpadSync = false;
@@ -3456,11 +3643,8 @@ function calculateReadiness(student: Student): number {
 
         ws.onopen = () => {
           reconnectAttempt = 0;
-          if (hasConnectedOnce) {
-            // Reconcile full state from server immediately after reconnecting
-            scheduleRealtimeSync('both');
-          }
-          hasConnectedOnce = true;
+          // Reconcile full state from server immediately on connect and after any reconnect
+          scheduleRealtimeSync('both');
 
           if (clientPingInterval) clearInterval(clientPingInterval);
           clientPingInterval = setInterval(() => {

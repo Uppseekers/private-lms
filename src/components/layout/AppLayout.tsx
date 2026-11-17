@@ -257,37 +257,73 @@ export default function AppLayout() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const cleanCurrentUserEmail = (currentUser?.email || '').trim().toLowerCase();
+  const savedAuthEmailForLayout = (localStorage.getItem('auth_user_email') || '').trim().toLowerCase();
+  const cleanCurrentUserEmail = (
+    ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? currentUser?.email : '') ||
+    savedAuthEmailForLayout ||
+    currentUser?.email ||
+    ''
+  )
+    .trim()
+    .toLowerCase();
+
   const currentStudent =
     students.find(
       s =>
         (currentUser?.id && s.id === currentUser.id) ||
         (cleanCurrentUserEmail && (s.email || '').trim().toLowerCase() === cleanCurrentUserEmail)
     ) ||
-    ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? (currentUser as any) : students[0]);
+    ((currentUser?.role || '').toUpperCase() === 'STUDENT'
+      ? (currentUser as any)
+      : savedAuthEmailForLayout && savedAuthEmailForLayout !== 'uppseekers@gmail.com'
+      ? ({
+          id: currentUser?.id || savedAuthEmailForLayout,
+          name: savedAuthEmailForLayout.split('@')[0] || 'Student',
+          email: savedAuthEmailForLayout,
+        } as any)
+      : students[0]);
+
+  const currentStudentEmailKey = (
+    currentStudent?.email ||
+    ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? currentUser?.email : '') ||
+    (savedAuthEmailForLayout !== 'uppseekers@gmail.com' ? savedAuthEmailForLayout : '') ||
+    ''
+  )
+    .trim()
+    .toLowerCase();
 
   const currentStudentCandidateIds = React.useMemo(() => {
     const ids = new Set<string>();
     if (currentStudent?.id) ids.add(currentStudent.id);
-    if (currentUser?.id) ids.add(currentUser.id);
-    const emailKey = (currentStudent?.email || currentUser?.email || '').trim().toLowerCase();
-    if (emailKey) {
+    if (currentUser?.id && (currentUser?.role || '').toUpperCase() === 'STUDENT') {
+      ids.add(currentUser.id);
+    }
+    if (currentStudentEmailKey) {
       students.forEach(s => {
-        if ((s.email || '').trim().toLowerCase() === emailKey && s.id) {
+        if ((s.email || '').trim().toLowerCase() === currentStudentEmailKey && s.id) {
           ids.add(s.id);
         }
       });
     }
     return ids;
-  }, [currentStudent?.id, currentStudent?.email, currentUser?.id, currentUser?.email, students]);
+  }, [currentStudent?.id, currentStudentEmailKey, currentUser?.id, currentUser?.role, students]);
 
   const isStudentLaunchpadEnrolled = Boolean(
     currentStudent &&
       ((Array.isArray(launchpadEnrollments) &&
-        launchpadEnrollments.some(e => currentStudentCandidateIds.has(e.studentId))) ||
+        launchpadEnrollments.some(
+          e =>
+            currentStudentCandidateIds.has(e.studentId) ||
+            (currentStudentEmailKey &&
+              (e.studentEmail || '').trim().toLowerCase() === currentStudentEmailKey)
+        )) ||
         (Array.isArray(launchpadSubjectReleases) &&
           launchpadSubjectReleases.some(
-            r => currentStudentCandidateIds.has(r.studentId) && r.isUnlocked
+            r =>
+              r.isUnlocked &&
+              (currentStudentCandidateIds.has(r.studentId) ||
+                (currentStudentEmailKey &&
+                  (r.studentEmail || '').trim().toLowerCase() === currentStudentEmailKey))
           )))
   );
 

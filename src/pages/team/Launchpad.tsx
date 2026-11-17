@@ -224,10 +224,27 @@ export default function TeamLaunchpad() {
     );
   }, [students, studentTabAccess, hasStudentTabAccess, currentUser, permissionsMatrix]);
 
-  const enrolledIdsSet = useMemo(
-    () => new Set(launchpadEnrollments.map((e) => e.studentId)),
-    [launchpadEnrollments]
-  );
+  const enrolledIdsSet = useMemo(() => {
+    const set = new Set<string>();
+    const enrolledEmails = new Set<string>();
+    launchpadEnrollments.forEach((e) => {
+      if (e.studentId) set.add(e.studentId);
+      if (e.studentEmail) enrolledEmails.add(e.studentEmail.trim().toLowerCase());
+    });
+    launchpadSubjectReleases.forEach((r) => {
+      if (r.isUnlocked) {
+        if (r.studentId) set.add(r.studentId);
+        if (r.studentEmail) enrolledEmails.add(r.studentEmail.trim().toLowerCase());
+      }
+    });
+    if (enrolledEmails.size > 0) {
+      students.forEach((s) => {
+        const em = (s.email || '').trim().toLowerCase();
+        if (em && enrolledEmails.has(em)) set.add(s.id);
+      });
+    }
+    return set;
+  }, [launchpadEnrollments, launchpadSubjectReleases, students]);
 
   const enrolledScopedStudents = useMemo(
     () => scopedStudents.filter((s) => enrolledIdsSet.has(s.id)),
@@ -243,8 +260,31 @@ export default function TeamLaunchpad() {
   const safeLaunchpadSubjectReleases = Array.isArray(launchpadSubjectReleases) ? launchpadSubjectReleases : [];
   const safeLaunchpadCertifications = Array.isArray(launchpadCertifications) ? launchpadCertifications : [];
 
-  const getStudentReleases = (studentId: string) =>
-    safeLaunchpadSubjectReleases.filter((r) => r.studentId === studentId && r.isUnlocked);
+  const isSubjectUnlockedForStudentObj = (student: Student | undefined, subjectId: string): boolean => {
+    if (!student) return false;
+    const cleanEm = (student.email || '').trim().toLowerCase();
+    const matching = safeLaunchpadSubjectReleases.filter(
+      (r) =>
+        r.subjectId === subjectId &&
+        (r.studentId === student.id ||
+          (cleanEm && (r.studentEmail || '').trim().toLowerCase() === cleanEm))
+    );
+    if (matching.length === 0) return false;
+    const sorted = [...matching].sort((a, b) => {
+      const tB = b.unlockedAt ? new Date(b.unlockedAt).getTime() : 0;
+      const tA = a.unlockedAt ? new Date(a.unlockedAt).getTime() : 0;
+      return (Number.isFinite(tB) ? tB : 0) - (Number.isFinite(tA) ? tA : 0);
+    });
+    return Boolean(sorted[0]?.isUnlocked);
+  };
+
+  const getStudentReleases = (studentId: string) => {
+    const stu = students.find((s) => s.id === studentId);
+    if (!stu) {
+      return safeLaunchpadSubjectReleases.filter((r) => r.studentId === studentId && r.isUnlocked);
+    }
+    return activeSubjects.filter((subj) => isSubjectUnlockedForStudentObj(stu, subj.id));
+  };
 
   const getSubjectWeeksDone = (studentId: string, subjectId: string) => {
     const chs = getChaptersForSubject(subjectId);
@@ -3538,10 +3578,7 @@ ALLOW FILE UPLOAD: Yes`}
 
               <div className="divide-y divide-slate-200 border border-slate-200 rounded-2xl overflow-hidden">
                 {activeSubjects.map((subject) => {
-                  const release = launchpadSubjectReleases.find(
-                    (r) => r.studentId === drawerStudent.id && r.subjectId === subject.id
-                  );
-                  const isUnlocked = Boolean(release?.isUnlocked);
+                  const isUnlocked = isSubjectUnlockedForStudentObj(drawerStudent, subject.id);
                   const cert = launchpadCertifications.find(
                     (c) =>
                       c.studentId === drawerStudent.id &&
@@ -3610,14 +3647,25 @@ ALLOW FILE UPLOAD: Yes`}
                               ? 'Lock subject for student'
                               : 'Unlock & release subject to student'
                           }
-                          onClick={() => {
+                          onClick={async () => {
                             if (isRosterReadOnly) return;
-                            toggleLaunchpadSubjectRelease(
+                            const nextState = !isUnlocked;
+                            const ok = await toggleLaunchpadSubjectRelease(
                               drawerStudent.id,
                               subject.id,
-                              !isUnlocked,
-                              currentUser?.name || 'Counselor'
+                              nextState,
+                              currentUser?.name || 'Counselor',
+                              drawerStudent.email
                             );
+                            if (ok) {
+                              showToast(
+                                `${nextState ? 'Unlocked' : 'Locked'} "${subject.title}" for ${drawerStudent.name}`
+                              );
+                            } else {
+                              showToast(
+                                `Could not save "${subject.title}" status to server. Please retry.`
+                              );
+                            }
                           }}
                           className={cn(
                             'w-12 h-6 rounded-full relative transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500',
