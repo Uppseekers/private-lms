@@ -13,6 +13,7 @@ import {
   Activity,
 } from 'lucide-react';
 import { StaffMember } from '@/types';
+import { getFirebaseIdToken } from '@/lib/firebase';
 import { cn } from '@/lib/utils';
 
 interface ZohoConnectionSummary {
@@ -75,13 +76,12 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
     error?: string;
   } | null>(null);
 
-  const getAuthHeaders = (): Record<string, string> => {
+  const getAuthHeaders = async (): Promise<Record<string, string>> => {
     const email = (currentUser?.email || '').trim();
-    const uid = String(currentUser?.id || '1');
-    const token = email ? `custom_${uid}_${email}` : (localStorage.getItem('auth_token') || 'custom_user');
+    const token = await getFirebaseIdToken();
     return {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(email ? { 'x-staff-email': email } : {}),
       ...(currentUser?.name ? { 'x-staff-name': currentUser.name } : {}),
     };
@@ -90,9 +90,10 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
   const loadDiagnostics = async () => {
     setDiag(prev => ({ ...prev, loading: true, error: undefined }));
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch('/api/zoho/connections', {
         method: 'GET',
-        headers: getAuthHeaders(),
+        headers,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -169,9 +170,10 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
     setActionBanner(null);
     setIsConnecting(true);
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch('/api/zoho/auth/url', {
         method: 'GET',
-        headers: getAuthHeaders(),
+        headers,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.url) {
@@ -216,9 +218,10 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
     setIsTesting(true);
     setTestResult(null);
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch('/api/zoho/test', {
         method: 'POST',
-        headers: getAuthHeaders(),
+        headers,
         body: JSON.stringify(targetStaffKey ? { staffKey: targetStaffKey } : {}),
       });
       const data = await res.json().catch(() => ({}));
@@ -243,9 +246,10 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
     setDisconnectingKey(staffKey);
     setActionBanner(null);
     try {
+      const headers = await getAuthHeaders();
       const res = await fetch(`/api/zoho/connection?staffKey=${encodeURIComponent(staffKey)}`, {
         method: 'DELETE',
-        headers: getAuthHeaders(),
+        headers,
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

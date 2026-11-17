@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -10,6 +11,7 @@ import nodemailer from "nodemailer";
 import crypto from "crypto";
 import mammoth from "mammoth";
 import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
+import { adminAuth, adminDb, hasAdminServiceAccount } from "./src/lib/firebase-admin.ts";
 import { db, createPool } from "./src/db/index.ts";
 import {
   users,
@@ -117,6 +119,47 @@ async function safeDbQuery<T>(queryFn: () => Promise<T>, fallback: T): Promise<T
 
 function normEmail(email?: string | null): string {
   return (email || "").trim().toLowerCase();
+}
+
+function normEmailKey(email?: string | null): string {
+  const clean = normEmail(email);
+  return clean ? clean.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128) : "unknown_user";
+}
+
+async function isVerifiedFirebaseAdmin(req: AuthRequest): Promise<boolean> {
+  const email = normEmail(req.user?.email);
+  const uid = (req.user?.uid || "").trim();
+  if (!uid || !email) return false;
+  if (email === "uppseekers@gmail.com") return true;
+
+  if (hasAdminServiceAccount()) {
+    try {
+      const adminSnap = await adminDb.collection("admins").doc(uid).get();
+      if (adminSnap.exists) return true;
+      const dirSnap = await adminDb.collection("staff_directory").doc(normEmailKey(email)).get();
+      if (dirSnap.exists) {
+        const d = dirSnap.data() || {};
+        const role = String(d.role || "").toUpperCase();
+        const status = String(d.status || "Active").toLowerCase();
+        if (status !== "suspended" && (role === "SYSTEM_ADMIN" || role === "ADMIN")) {
+          return true;
+        }
+      }
+    } catch {
+      // Fall through to SQL check
+    }
+  }
+
+  if (hasSqlEnv()) {
+    const userRow = await safeDbQuery(
+      () => db.select().from(users).where(or(eq(users.email, email), eq(users.uid, uid))).then(r => r[0] || null),
+      null
+    );
+    const role = String(userRow?.role || "").toUpperCase();
+    if (role === "SYSTEM_ADMIN" || role === "ADMIN") return true;
+  }
+
+  return false;
 }
 
 const CORE_STUDENT_RELATIONAL_KEYS = new Set([
@@ -475,13 +518,16 @@ async function startServer() {
   const PORT = Number(process.env.PORT) || 3000;
   const SERVER_INSTANCE_ID = crypto.randomUUID();
 
-  // Real-time WebSocket server attached to the same HTTP server
+  // Real-time WebSocket server attached to the same HTTP server (disabled in Vercel serverless)
   interface AliveWebSocket extends WebSocket {
     isAlive?: boolean;
   }
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws/realtime" });
+  const wss: WebSocketServer | null = process.env.VERCEL
+    ? null
+    : new WebSocketServer({ server: httpServer, path: "/ws/realtime" });
 
   const sendToLocalWsClients = (serializedPayload: string) => {
+    if (!wss) return;
     wss.clients.forEach((client) => {
       if (client.readyState === WebSocket.OPEN) {
         try {
@@ -523,14 +569,14 @@ async function startServer() {
   };
 
   const ensurePgListener = async () => {
-    if (!hasSqlConfigured() || pgListenClient || pgListenConnecting || wss.clients.size === 0) {
+    if (!wss || !hasSqlConfigured() || pgListenClient || pgListenConnecting || wss.clients.size === 0) {
       return;
     }
     pgListenConnecting = true;
     try {
       const pool = createPool();
       const client = await pool.connect();
-      if (wss.clients.size === 0) {
+      if (!wss || wss.clients.size === 0) {
         client.release();
         pgListenConnecting = false;
         return;
@@ -557,7 +603,7 @@ async function startServer() {
           } catch {
             // Ignore release errors
           }
-          if (wss.clients.size > 0 && !pgReconnectTimer) {
+          if (wss && wss.clients.size > 0 && !pgReconnectTimer) {
             pgReconnectTimer = setTimeout(() => {
               pgReconnectTimer = null;
               void ensurePgListener();
@@ -571,7 +617,7 @@ async function startServer() {
 
       await client.query("LISTEN uppseekers_realtime");
     } catch {
-      if (wss.clients.size > 0 && !pgReconnectTimer) {
+      if (wss && wss.clients.size > 0 && !pgReconnectTimer) {
         pgReconnectTimer = setTimeout(() => {
           pgReconnectTimer = null;
           void ensurePgListener();
@@ -582,68 +628,70 @@ async function startServer() {
     }
   };
 
-  wss.on("connection", (ws: AliveWebSocket) => {
-    ws.isAlive = true;
-    if (pgIdleReleaseTimer) {
-      clearTimeout(pgIdleReleaseTimer);
-      pgIdleReleaseTimer = null;
-    }
-    void ensurePgListener();
-
-    ws.on("pong", () => {
+  if (wss) {
+    wss.on("connection", (ws: AliveWebSocket) => {
       ws.isAlive = true;
-    });
-    ws.on("message", (raw) => {
-      ws.isAlive = true;
-      try {
-        const msg = JSON.parse(String(raw));
-        if (msg?.type === "ping" && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: "pong", timestamp: new Date().toISOString() }));
-        }
-      } catch {
-        // Ignore malformed client frames
+      if (pgIdleReleaseTimer) {
+        clearTimeout(pgIdleReleaseTimer);
+        pgIdleReleaseTimer = null;
       }
-    });
-    ws.on("close", () => {
-      if (wss.clients.size === 0 && !pgIdleReleaseTimer) {
-        pgIdleReleaseTimer = setTimeout(() => {
-          pgIdleReleaseTimer = null;
-          if (wss.clients.size === 0) {
-            releasePgListener();
+      void ensurePgListener();
+
+      ws.on("pong", () => {
+        ws.isAlive = true;
+      });
+      ws.on("message", (raw) => {
+        ws.isAlive = true;
+        try {
+          const msg = JSON.parse(String(raw));
+          if (msg?.type === "ping" && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "pong", timestamp: new Date().toISOString() }));
           }
-        }, 30000);
+        } catch {
+          // Ignore malformed client frames
+        }
+      });
+      ws.on("close", () => {
+        if (wss && wss.clients.size === 0 && !pgIdleReleaseTimer) {
+          pgIdleReleaseTimer = setTimeout(() => {
+            pgIdleReleaseTimer = null;
+            if (wss && wss.clients.size === 0) {
+              releasePgListener();
+            }
+          }, 30000);
+        }
+      });
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(
+          JSON.stringify({
+            type: "connected",
+            timestamp: new Date().toISOString(),
+          })
+        );
       }
     });
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(
-        JSON.stringify({
-          type: "connected",
-          timestamp: new Date().toISOString(),
-        })
-      );
-    }
-  });
 
-  const wsHeartbeat = setInterval(() => {
-    wss.clients.forEach((client) => {
-      const ws = client as AliveWebSocket;
-      if (ws.isAlive === false) {
-        ws.terminate();
-        return;
-      }
-      ws.isAlive = false;
-      try {
-        ws.ping();
-      } catch {
-        // Ignore ping errors on closing sockets
-      }
+    const wsHeartbeat = setInterval(() => {
+      wss.clients.forEach((client) => {
+        const ws = client as AliveWebSocket;
+        if (ws.isAlive === false) {
+          ws.terminate();
+          return;
+        }
+        ws.isAlive = false;
+        try {
+          ws.ping();
+        } catch {
+          // Ignore ping errors on closing sockets
+        }
+      });
+    }, 25000);
+
+    wss.on("close", () => {
+      clearInterval(wsHeartbeat);
+      releasePgListener();
     });
-  }, 25000);
-
-  wss.on("close", () => {
-    clearInterval(wsHeartbeat);
-    releasePgListener();
-  });
+  }
 
   const broadcastRealtime = (event: {
     type: string;
@@ -670,152 +718,25 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
-  // Lazy single-flight schema introspection, idempotent DDL auto-migration, and default seeding
+  // Lazy single-flight schema introspection only when SQL is configured
   app.use("/api", async (_req, _res, next) => {
-    try {
-      await ensureProductionReady();
-    } catch {
-      // Handled internally by productionVault
+    if (hasSqlConfigured()) {
+      try {
+        await ensureProductionReady();
+      } catch {
+        // Handled internally by productionVault
+      }
     }
     next();
   });
 
   // API endpoints
 
-  // Credential Login (Email & Password)
-  app.post("/api/auth/login-credentials", async (req, res) => {
-    try {
-      const { email, password } = req.body;
-      if (!email || !password) {
-        res.status(400).json({ error: "Email and password are required" });
-        return;
-      }
-
-      const normalizedEmail = normEmail(email);
-      const lookupEmail = normalizedEmail === 'uppseekers@gmail.cm' ? 'uppseekers@gmail.com' : normalizedEmail;
-      const rawPassword = String(password);
-      const trimmedPassword = rawPassword.trim();
-
-      const allUsers = await readAllUsersSafe();
-      const validUserIds = new Set(allUsers.map((u) => u.id));
-      const allStaffData = (await safeDbQuery(() => db.select().from(staffData), [])).filter((sd) =>
-        validUserIds.has(sd.userId)
-      );
-      const allStudentsData = await readAllStudentsDataSafe();
-
-      const matchingUsers = allUsers.filter(u => normEmail(u.email) === lookupEmail);
-      // Prefer records with associated student/staff data if multiple rows share an email
-      const sortedMatches = [...matchingUsers].sort((a, b) => {
-        const aHasData = allStudentsData.some(s => s.userId === a.id) || allStaffData.some(s => s.userId === a.id) ? 1 : 0;
-        const bHasData = allStudentsData.some(s => s.userId === b.id) || allStaffData.some(s => s.userId === b.id) ? 1 : 0;
-        if (bHasData !== aHasData) return bHasData - aHasData;
-        return b.id - a.id;
-      });
-
-      const foundUser = sortedMatches.find(u => {
-        const storedPwd = typeof u.password === 'string' ? u.password : '';
-        const storedTrimmed = storedPwd.trim();
-        if (storedTrimmed.length > 0) {
-          return storedPwd === rawPassword || storedTrimmed === trimmedPassword;
-        }
-        return (
-          trimmedPassword === 'Uppseekers@1' ||
-          trimmedPassword === ((u.role || '').toUpperCase() === 'STUDENT' ? 'Student@123' : 'Staff@123')
-        );
-      });
-
-      if (foundUser) {
-        const isStudent = (foundUser.role || '').toUpperCase() === 'STUDENT';
-        if (!isStudent) {
-          const sd = allStaffData.find(s => s.userId === foundUser.id);
-          if (sd && String(sd.status || '').toLowerCase() === 'suspended') {
-            res.status(403).json({ error: "Your account is suspended. Please contact your administrator." });
-            return;
-          }
-          const resolvedRole = foundUser.role === 'STAFF' ? 'COUNSELOR' : (foundUser.role || 'COUNSELOR');
-          const defaultScope = ['SYSTEM_ADMIN', 'CATEGORY_MANAGER', 'OPERATIONS_LEAD', 'DEVELOPER'].includes(resolvedRole.toUpperCase())
-            ? 'All'
-            : 'Assigned Scope';
-          const enrichedStaff = {
-            id: foundUser.uid || String(foundUser.id),
-            uid: foundUser.uid || String(foundUser.id),
-            name: foundUser.name,
-            email: foundUser.email,
-            role: resolvedRole,
-            students: sd?.students || defaultScope,
-            status: sd?.status || 'Active',
-            password: foundUser.password || undefined,
-          };
-          const token = `custom_${enrichedStaff.id}_${enrichedStaff.email}`;
-          res.json({ user: enrichedStaff, token });
-          return;
-        } else {
-          const sd = allStudentsData.find(s => s.userId === foundUser.id);
-          const enrichedStudent = buildStudentFromRow(foundUser, sd);
-          const token = `custom_${enrichedStudent.id}_${enrichedStudent.email}`;
-          res.json({ user: enrichedStudent, token });
-          return;
-        }
-      }
-
-      // Check KV mirrors if SQL was empty/unavailable
-      const kvStudents = await sysKvGet<any[]>("portal_students_mirror", []);
-      const kvMatchedStu = kvStudents.find(
-        (s) => normEmail(s?.email) === lookupEmail &&
-          ((s.password && (s.password === rawPassword || String(s.password).trim() === trimmedPassword)) ||
-           (!s.password && (trimmedPassword === 'Student@123' || trimmedPassword === 'Uppseekers@1')))
-      );
-      if (kvMatchedStu) {
-        const enriched = { ...kvMatchedStu, role: 'STUDENT', status: kvMatchedStu.status || 'Active' };
-        res.json({ user: enriched, token: `custom_${enriched.id}_${enriched.email}` });
-        return;
-      }
-
-      const kvStaff = await sysKvGet<any[]>("portal_staff_mirror", []);
-      const kvMatchedStaff = kvStaff.find(
-        (st) => normEmail(st?.email) === lookupEmail &&
-          ((st.password && (st.password === rawPassword || String(st.password).trim() === trimmedPassword)) ||
-           (!st.password && (trimmedPassword === 'Staff@123' || trimmedPassword === 'Uppseekers@1')))
-      );
-      if (kvMatchedStaff) {
-        if (String(kvMatchedStaff.status || '').toLowerCase() === 'suspended') {
-          res.status(403).json({ error: "Your account is suspended. Please contact your administrator." });
-          return;
-        }
-        res.json({ user: kvMatchedStaff, token: `custom_${kvMatchedStaff.id}_${kvMatchedStaff.email}` });
-        return;
-      }
-
-      // Check default admin fallback only if admin does not have a custom password set in DB
-      const pwdMirror = await sysKvGet<Record<string, string>>("user_passwords", {});
-      const mirroredAdminPwd = pwdMirror?.["email:uppseekers@gmail.com"] || pwdMirror?.["uid:admin-1"];
-      const hasCustomAdminPwd =
-        Boolean(mirroredAdminPwd) ||
-        sortedMatches.some(u => typeof u.password === 'string' && u.password.trim().length > 0);
-      if (
-        (normalizedEmail === 'uppseekers@gmail.com' || normalizedEmail === 'uppseekers@gmail.cm') &&
-        ((hasCustomAdminPwd && mirroredAdminPwd && mirroredAdminPwd.trim() === trimmedPassword) ||
-          (!hasCustomAdminPwd && (trimmedPassword === 'Uppseekers@1' || trimmedPassword === 'Admin@123')))
-      ) {
-        const dbAdmin = sortedMatches[0];
-        const foundAdmin = {
-          id: dbAdmin?.uid || 'admin-1',
-          uid: dbAdmin?.uid || 'admin-1',
-          email: dbAdmin?.email || 'uppseekers@gmail.com',
-          name: dbAdmin?.name || 'System Admin',
-          role: 'SYSTEM_ADMIN',
-          students: 'All',
-          status: 'Active',
-        };
-        const token = `custom_${foundAdmin.uid}_${foundAdmin.email}`;
-        res.json({ user: foundAdmin, token });
-        return;
-      }
-
-      res.status(401).json({ error: "Invalid email or password" });
-    } catch (error) {
-      res.status(401).json({ error: "Authentication failed" });
-    }
+  // Legacy plaintext login deprecated — Firebase Email/Password Authentication is enforced client-side
+  app.post("/api/auth/login-credentials", (_req, res) => {
+    res.status(410).json({
+      error: "Legacy credential endpoint disabled. Sign in using Firebase Email & Password authentication.",
+    });
   });
 
   // Google / Firebase Token Login
@@ -1144,66 +1065,110 @@ async function startServer() {
     }
   });
 
-  app.post("/api/admin/change-password", requireAuth, async (req: AuthRequest, res) => {
+  // Admin Provision Firebase Auth User (Server-Side via Admin SDK when configured)
+  app.post("/api/firebase-admin/provision-user", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const { userId, email, newPassword, userType } = req.body;
-      const cleanNewPassword = typeof newPassword === 'string' ? newPassword.trim() : '';
-      if (!cleanNewPassword) return res.status(400).json({ error: "New password is required" });
+      const allowed = await isVerifiedFirebaseAdmin(req);
+      if (!allowed) {
+        return res.status(403).json({ error: "Forbidden: Only System Admins can provision portal users." });
+      }
+      if (!hasAdminServiceAccount()) {
+        return res.json({
+          ok: false,
+          fallbackToClient: true,
+          message: "FIREBASE_SERVICE_ACCOUNT_JSON is not configured on the server; falling back to client provisioner.",
+        });
+      }
 
-      await saveUserPasswordMirror(userId, email, cleanNewPassword);
+      const cleanEmail = normEmail(req.body?.email);
+      const displayName = String(req.body?.name || "").trim();
+      const password = typeof req.body?.password === "string" ? req.body.password.trim() : "";
 
-      await safeDbQuery(async () => {
-        const matches = await findAllMatchingUsers(userId, email);
+      if (!cleanEmail) {
+        return res.status(400).json({ error: "Valid email is required." });
+      }
+      if (!password || password.length < 6) {
+        return res.status(400).json({ error: "Password must be at least 6 characters." });
+      }
 
-        if (matches.length > 0) {
-          const matchedEmails = new Set(matches.map(m => normEmail(m.email)).filter(Boolean));
-          const allUsers = await readAllUsersSafe();
-          const targets = allUsers.filter(
-            u => matches.some(m => m.id === u.id) || (normEmail(u.email) && matchedEmails.has(normEmail(u.email)))
-          );
-          for (const target of targets) {
-            await saveUserPasswordMirror(target.uid, target.email, cleanNewPassword);
-            if (hasColumn("users", "password")) {
-              await db.update(users).set({ password: cleanNewPassword }).where(eq(users.id, target.id));
-            }
-          }
-        } else if (userId || email) {
-          const cleanEmail = normEmail(email);
-          const isStudent = userType === 'student';
-          const created = await upsertUserRowSafe({
-            uid: userId || `${isStudent ? 'STU' : 'STAFF'}-${Date.now()}`,
-            name: req.body.name || (cleanEmail ? cleanEmail.split('@')[0] : 'User'),
-            email: cleanEmail || `${String(userId).toLowerCase()}@uppseekers.local`,
-            password: cleanNewPassword,
-            defaultPassword: cleanNewPassword,
-            role: isStudent ? 'STUDENT' : (req.body.role || 'COUNSELOR'),
-          });
-          if (created?.id) {
-            if (isStudent) {
-              await upsertStudentDataRowSafe(created.id, {
-                intake: 'Fall 2026',
-                countries: ['USA'],
-                counselor: 'Unassigned',
-                readiness: 0,
-              });
-            } else if (hasTable("staff_data")) {
-              await db.insert(staffData).values({
-                userId: created.id,
-                status: 'Active',
-                students: 'All',
-              });
-            }
-          }
+      try {
+        const existing = await adminAuth.getUserByEmail(cleanEmail);
+        await adminAuth.updateUser(existing.uid, {
+          ...(displayName ? { displayName } : {}),
+          password,
+          emailVerified: true,
+        });
+        return res.json({ ok: true, uid: existing.uid, created: false });
+      } catch (lookupErr: any) {
+        if (lookupErr?.code !== "auth/user-not-found") {
+          throw lookupErr;
         }
-      }, null);
-
-      broadcastRealtime({ type: "user:password_changed", scope: "data", entity: "users" });
-      res.json({ success: true, message: "Password updated successfully" });
-    } catch (e: any) {
-      console.error("Error in /api/admin/change-password:", e);
-      res.json({ success: true });
+        const created = await adminAuth.createUser({
+          email: cleanEmail,
+          password,
+          displayName: displayName || cleanEmail.split("@")[0],
+          emailVerified: true,
+        });
+        return res.json({ ok: true, uid: created.uid, created: true });
+      }
+    } catch (err: any) {
+      console.error("Error in /api/firebase-admin/provision-user:", err);
+      return res.status(500).json({ ok: false, error: err?.message || "Failed to provision Firebase user" });
     }
   });
+
+  // Admin Change Firebase Auth User Password (Server-Side via Admin SDK when configured)
+  const handleAdminChangeFirebasePassword = async (req: AuthRequest, res: express.Response) => {
+    try {
+      const allowed = await isVerifiedFirebaseAdmin(req);
+      if (!allowed) {
+        return res.status(403).json({ error: "Forbidden: Only System Admins can change another user's password." });
+      }
+
+      const cleanEmail = normEmail(req.body?.email);
+      const cleanNewPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword.trim() : "";
+      if (!cleanEmail) {
+        return res.status(400).json({ error: "Target user email is required." });
+      }
+      if (!cleanNewPassword || cleanNewPassword.length < 6) {
+        return res.status(400).json({ error: "New password must be at least 6 characters." });
+      }
+
+      if (!hasAdminServiceAccount()) {
+        return res.json({
+          ok: false,
+          fallbackToClient: true,
+          message: "FIREBASE_SERVICE_ACCOUNT_JSON is not configured on the server.",
+        });
+      }
+
+      try {
+        const userRecord = await adminAuth.getUserByEmail(cleanEmail);
+        await adminAuth.updateUser(userRecord.uid, {
+          password: cleanNewPassword,
+          emailVerified: true,
+        });
+        return res.json({ ok: true, success: true, uid: userRecord.uid, message: "Firebase password updated successfully." });
+      } catch (err: any) {
+        if (err?.code === "auth/user-not-found") {
+          const created = await adminAuth.createUser({
+            email: cleanEmail,
+            password: cleanNewPassword,
+            displayName: String(req.body?.name || cleanEmail.split("@")[0]).trim(),
+            emailVerified: true,
+          });
+          return res.json({ ok: true, success: true, uid: created.uid, message: "Firebase Auth account created with the new password." });
+        }
+        throw err;
+      }
+    } catch (e: any) {
+      console.error("Error in admin password change:", e);
+      return res.status(500).json({ ok: false, error: e?.message || "Failed to update password in Firebase Auth." });
+    }
+  };
+
+  app.post("/api/firebase-admin/change-password", requireAuth, handleAdminChangeFirebasePassword);
+  app.post("/api/admin/change-password", requireAuth, handleAdminChangeFirebasePassword);
 
   // Request Password Reset - Triggers email with reset link and 6-digit OTP code
   app.post("/api/auth/request-password-reset", async (req, res) => {
@@ -1551,7 +1516,7 @@ async function startServer() {
   });
 
   // Google Sheets Real-Time Sync & Backup Endpoint
-  app.post("/api/sheets/sync", async (req, res) => {
+  app.post("/api/sheets/sync", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { accessToken, spreadsheetId, students = [], staff = [], events = [] } = req.body;
       
@@ -1686,7 +1651,7 @@ async function startServer() {
   });
 
   // AI Narrative Strategist API for Author's Compass
-  app.post("/api/ai/narrative-angles", async (req, res) => {
+  app.post("/api/ai/narrative-angles", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { essayType, prompt, wordCount, studentProfile } = req.body;
       if (!essayType || !wordCount) {
@@ -1829,7 +1794,7 @@ ${typeof studentProfile === 'string' ? studentProfile : JSON.stringify(studentPr
   });
 
   // AI SOP & Personal Essay Proofreader / Mentor API
-  app.post("/api/ai/proofread-essay", async (req, res) => {
+  app.post("/api/ai/proofread-essay", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { essayText } = req.body;
       if (!essayText || !essayText.trim()) {
@@ -3791,6 +3756,20 @@ Preserve the author's exact wording wherever present in the document. If a list 
   };
 
   const getZohoConnectionByKey = async (staffKey: string) => {
+    const safeKey = normEmailKey(staffKey);
+    if (hasAdminServiceAccount()) {
+      try {
+        const snap = await adminDb.collection('zoho_connections').doc(safeKey).get();
+        if (snap.exists) {
+          const data = snap.data() as any;
+          zohoConnectionsMemory.set(staffKey, data);
+          return data;
+        }
+      } catch (err) {
+        console.warn('Firestore zoho_connections read fallback:', err);
+      }
+    }
+
     const dbRow = await safeDbQuery(
       () => db.select().from(zohoConnections).where(eq(zohoConnections.staffKey, staffKey)).then(r => r[0] || null),
       null
@@ -3822,6 +3801,25 @@ Preserve the author's exact wording wherever present in the document. If a list 
     const meetingBase = record.meetingBase || ZOHO_MEETING_BASE;
     const memoryRow = { ...record, accountsServer, meetingBase, connectedAt: now, updatedAt: now };
     zohoConnectionsMemory.set(record.staffKey, memoryRow);
+
+    if (hasAdminServiceAccount()) {
+      try {
+        const safeKey = normEmailKey(record.staffKey);
+        await adminDb.collection('zoho_connections').doc(safeKey).set(
+          {
+            ...record,
+            accountsServer,
+            meetingBase,
+            tokenExpiresAt: record.tokenExpiresAt.toISOString(),
+            connectedAt: now.toISOString(),
+            updatedAt: now.toISOString(),
+          },
+          { merge: true }
+        );
+      } catch (err) {
+        console.warn('Firestore zoho_connections write warning:', err);
+      }
+    }
 
     await safeDbQuery(async () => {
       await db.insert(zohoConnections)
@@ -3855,6 +3853,13 @@ Preserve the author's exact wording wherever present in the document. If a list 
 
   const deleteZohoConnectionByKey = async (staffKey: string) => {
     zohoConnectionsMemory.delete(staffKey);
+    if (hasAdminServiceAccount()) {
+      try {
+        await adminDb.collection('zoho_connections').doc(normEmailKey(staffKey)).delete();
+      } catch (err) {
+        console.warn('Firestore zoho_connections delete warning:', err);
+      }
+    }
     await safeDbQuery(async () => {
       await db.delete(zohoConnections).where(eq(zohoConnections.staffKey, staffKey));
     }, null);
@@ -4235,12 +4240,29 @@ Preserve the author's exact wording wherever present in the document. If a list 
 
   const isAdminCaller = async (staff: { staffKey: string; staffUid: string; staffEmail: string }) => {
     if (staff.staffEmail === 'uppseekers@gmail.com') return true;
+    if (hasAdminServiceAccount()) {
+      try {
+        if (staff.staffUid) {
+          const adminSnap = await adminDb.collection('admins').doc(staff.staffUid).get();
+          if (adminSnap.exists) return true;
+        }
+        const dirSnap = await adminDb.collection('staff_directory').doc(normEmailKey(staff.staffEmail || staff.staffKey)).get();
+        if (dirSnap.exists) {
+          const role = String(dirSnap.data()?.role || '').toUpperCase();
+          if (role === 'SYSTEM_ADMIN' || role === 'ADMIN' || role === 'CATEGORY_MANAGER' || role === 'OPERATIONS_LEAD') {
+            return true;
+          }
+        }
+      } catch {
+        // Fallback to SQL check
+      }
+    }
     const userRow = await safeDbQuery(
       () => db.select().from(users).where(or(eq(users.email, staff.staffEmail), eq(users.uid, staff.staffUid))).then(r => r[0] || null),
       null
     );
     const role = (userRow?.role || '').toUpperCase();
-    return role === 'SYSTEM_ADMIN' || role === 'CATEGORY_MANAGER' || role === 'OPERATIONS_LEAD';
+    return role === 'SYSTEM_ADMIN' || role === 'ADMIN' || role === 'CATEGORY_MANAGER' || role === 'OPERATIONS_LEAD';
   };
 
   // 4. Disconnect current counselor's (or admin-selected counselor's) Zoho Meeting account
@@ -4302,14 +4324,27 @@ Preserve the author's exact wording wherever present in the document. If a list 
       }
 
       const admin = await isAdminCaller(staff);
+      const mergedMap = new Map<string, any>();
+
+      if (hasAdminServiceAccount()) {
+        try {
+          const snap = await adminDb.collection('zoho_connections').get();
+          snap.forEach((docSnap) => {
+            const row = docSnap.data();
+            if (row?.staffKey) mergedMap.set(row.staffKey, row);
+          });
+        } catch (err) {
+          console.warn('Firestore zoho_connections list warning:', err);
+        }
+      }
+
       const dbRows = await safeDbQuery(
         () => db.select().from(zohoConnections).orderBy(desc(zohoConnections.connectedAt)),
         [] as any[]
       );
 
-      const mergedMap = new Map<string, any>();
       for (const row of dbRows) {
-        mergedMap.set(row.staffKey, row);
+        if (!mergedMap.has(row.staffKey)) mergedMap.set(row.staffKey, row);
       }
       for (const [k, row] of zohoConnectionsMemory.entries()) {
         if (!mergedMap.has(k)) mergedMap.set(k, row);

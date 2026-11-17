@@ -278,7 +278,7 @@ export default function TeamReports() {
   const scopedMeetings = useMemo(() => {
     if (hasGlobalMeetingScope) return allMeetings;
     return allMeetings.filter(m => {
-      if (m.meetingOwnerName.toLowerCase() === currentUser.name?.toLowerCase()) return true;
+      if (currentUser?.name && m.meetingOwnerName.toLowerCase() === currentUser.name.toLowerCase()) return true;
       const studentMatch = students.find(s => s.id === m.studentId);
       if (studentMatch && isStudentAssignedToStaff(studentMatch, currentUser, permissionsMatrix)) return true;
       return false;
@@ -533,7 +533,7 @@ export default function TeamReports() {
   const scopedActivities = useMemo(() => {
     if (hasGlobalActivityScope) return allActivities;
     return allActivities.filter(a => {
-      if (a.performedBy.toLowerCase() === currentUser.name?.toLowerCase()) return true;
+      if (currentUser?.name && a.performedBy.toLowerCase() === currentUser.name.toLowerCase()) return true;
       const studentMatch = students.find(s => s.id === a.studentId);
       if (studentMatch && isStudentAssignedToStaff(studentMatch, currentUser, permissionsMatrix)) return true;
       return false;

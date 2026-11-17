@@ -1,218 +1,193 @@
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { GraduationCap } from 'lucide-react';
+import { GraduationCap, MailCheck, AlertCircle, RefreshCw, ShieldCheck } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
-import { db, auth } from '@/lib/firebase';
-import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
+import { auth, normalizeEmail } from '@/lib/firebase';
+import {
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
+  updateProfile,
+  signOut,
+} from 'firebase/auth';
+
+const BOOTSTRAP_ADMIN_EMAIL = 'uppseekers@gmail.com';
+
+function mapFirebaseAuthError(err: any): string {
+  const code = err?.code || '';
+  switch (code) {
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Invalid email or password. Double-check your credentials or use Forgot Password below.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/user-disabled':
+      return 'This account has been disabled. Please contact your administrator.';
+    case 'auth/too-many-requests':
+      return 'Too many failed attempts. Please wait a few minutes or reset your password.';
+    case 'auth/operation-not-allowed':
+      return 'Email/Password sign-in is not enabled yet in Firebase Console Authentication -> Sign-in method.';
+    case 'auth/network-request-failed':
+      return 'Network error while contacting Firebase Authentication. Please check your connection.';
+    default:
+      return err?.message || 'Unable to sign in. Please verify your email and password.';
+  }
+}
 
 export default function Login() {
   const navigate = useNavigate();
-  const { setCurrentUser, setIsAuthenticated, initializeData, staff, students } = useDatabase();
+  const { isAuthenticated, currentUser, isFirebaseAuthReady, authError, clearAuthError } = useDatabase();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
+  const [needsVerificationEmail, setNeedsVerificationEmail] = useState<string | null>(null);
+  const [showBootstrapAdminSetup, setShowBootstrapAdminSetup] = useState(false);
+
+  useEffect(() => {
+    if (isFirebaseAuthReady && isAuthenticated && currentUser) {
+      if ((currentUser.role || '').toUpperCase() === 'STUDENT') {
+        navigate('/student/dashboard', { replace: true });
+      } else {
+        navigate('/team/dashboard', { replace: true });
+      }
+    }
+  }, [isFirebaseAuthReady, isAuthenticated, currentUser, navigate]);
 
   const handleCredentialLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setNotice('');
+    setShowBootstrapAdminSetup(false);
+    clearAuthError();
+
+    const cleanEmail = normalizeEmail(email);
+    if (!cleanEmail || !password) {
+      setError('Please enter both your email address and password.');
+      return;
+    }
+
     setLoading(true);
-
-    const cleanEmail = email.trim().toLowerCase();
-    const cleanPassword = password.trim();
-
-    // 0. Authenticate against backend Cloud SQL credentials first
     try {
-      const res = await fetch('/api/auth/login-credentials', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: cleanEmail, password: cleanPassword }),
-      });
-      if (res.status === 403) {
-        const errPayload = await res.json().catch(() => ({}));
+      const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
+      if (!cred.user.emailVerified) {
+        setNeedsVerificationEmail(cred.user.email || cleanEmail);
+        setNotice(
+          'Your account exists, but your email address is not verified yet. Please click the verification link in your inbox, then click "I\'ve Verified — Continue".'
+        );
         setLoading(false);
-        setError(errPayload.error || 'Your account is suspended. Please contact your administrator.');
         return;
       }
-      if (res.ok) {
-        const data = await res.json();
-        if (data?.user) {
-          const resolvedToken = data.token || `custom_${data.user.id}_${data.user.email || cleanEmail}`;
-          localStorage.setItem('auth_user_email', data.user.email || cleanEmail);
-          localStorage.setItem('auth_token', resolvedToken);
-          setCurrentUser(data.user);
-          setIsAuthenticated(true);
-          void initializeData(resolvedToken);
-          setLoading(false);
-          if ((data.user.role || '').toUpperCase() === 'STUDENT') {
-            navigate('/student/dashboard');
-          } else {
-            navigate('/team/dashboard');
-          }
-          return;
-        }
+      // DatabaseContext onAuthStateChanged resolves the Firestore role & profile automatically
+    } catch (err: any) {
+      const code = err?.code || '';
+      setError(mapFirebaseAuthError(err));
+      if (
+        cleanEmail === BOOTSTRAP_ADMIN_EMAIL &&
+        (code === 'auth/invalid-credential' || code === 'auth/user-not-found')
+      ) {
+        setShowBootstrapAdminSetup(true);
       }
-    } catch {
-      // Fall through to local state checks if backend is unreachable
-    }
-
-    // 1. Check default System Admin credentials
-    if ((cleanEmail === 'uppseekers@gmail.com' || cleanEmail === 'uppseekers@gmail.cm') && (cleanPassword === 'Uppseekers@1' || cleanPassword === 'Admin@123')) {
-      const adminStaff = {
-        id: 'admin-1',
-        name: 'Admin',
-        email: 'uppseekers@gmail.com',
-        role: 'SYSTEM_ADMIN',
-        students: 'All',
-        status: 'Active' as const,
-        password: cleanPassword
-      };
-      
-      const adminToken = 'custom_admin-1_uppseekers@gmail.com';
-      localStorage.setItem('auth_user_email', 'uppseekers@gmail.com');
-      localStorage.setItem('auth_token', adminToken);
-      
-      if (auth.currentUser?.emailVerified && auth.currentUser.email?.toLowerCase() === 'uppseekers@gmail.com') {
-        try {
-          await setDoc(doc(db, 'staff', 'admin-1'), JSON.parse(JSON.stringify(adminStaff)));
-        } catch (err) {
-          console.warn('Firestore setDoc warning:', err);
-        }
-      }
-
-      setCurrentUser(adminStaff);
-      setIsAuthenticated(true);
-      void initializeData(adminToken);
+    } finally {
       setLoading(false);
-      navigate('/team/dashboard');
-      return;
     }
-
-    // 2. Check loaded local state (staff) and auto-sync to Cloud SQL if missing on server
-    const staffUser = staff.find(s => {
-      if (s.email?.toLowerCase().trim() !== cleanEmail) return false;
-      const storedPwd = (s.password || '').trim();
-      return !storedPwd || storedPwd === cleanPassword || s.password === password || cleanPassword === 'Uppseekers@1' || cleanPassword === 'Staff@123';
-    });
-    if (staffUser) {
-      if (String(staffUser.status || '').toLowerCase() === 'suspended') {
-        setLoading(false);
-        setError('Your account is suspended. Please contact your administrator.');
-        return;
-      }
-      const staffToken = `custom_${staffUser.id}_${staffUser.email}`;
-      localStorage.setItem('auth_user_email', staffUser.email);
-      localStorage.setItem('auth_token', staffToken);
-      fetch('/api/staff/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${staffToken}` },
-        body: JSON.stringify({ ...staffUser, password: staffUser.password || cleanPassword }),
-      }).catch(() => {});
-      setCurrentUser(staffUser);
-      setIsAuthenticated(true);
-      void initializeData(staffToken);
-      setLoading(false);
-      navigate('/team/dashboard');
-      return;
-    }
-
-    // 3. Check loaded local state (students) and auto-sync to Cloud SQL if missing on server
-    const studentUser = students.find(s => {
-      if (s.email?.toLowerCase().trim() !== cleanEmail) return false;
-      const storedPwd = (s.password || '').trim();
-      return !storedPwd || storedPwd === cleanPassword || s.password === password || cleanPassword === 'Uppseekers@1' || cleanPassword === 'Student@123';
-    });
-    if (studentUser) {
-      const stuToken = `custom_${studentUser.id}_${studentUser.email}`;
-      localStorage.setItem('auth_user_email', studentUser.email);
-      localStorage.setItem('auth_token', stuToken);
-      fetch('/api/students/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${stuToken}` },
-        body: JSON.stringify({ ...studentUser, password: studentUser.password || cleanPassword }),
-      }).catch(() => {});
-      setCurrentUser({
-        ...studentUser,
-        role: 'STUDENT',
-        status: 'Active',
-      } as any);
-      setIsAuthenticated(true);
-      void initializeData(stuToken);
-      setLoading(false);
-      navigate('/student/dashboard');
-      return;
-    }
-
-    // 4. Query Firestore directly as fallback only if an authenticated Firebase session is present
-    if (auth.currentUser?.emailVerified) {
-      try {
-        const staffSnap = await getDocs(collection(db, 'staff'));
-        let foundStaff: any = null;
-        staffSnap.forEach(d => {
-          const data = d.data();
-          if (data.email && data.email.toLowerCase().trim() === cleanEmail) {
-            const storedPwd = String(data.password || '').trim();
-            if (!storedPwd || storedPwd === cleanPassword || cleanPassword === 'Uppseekers@1' || cleanPassword === 'Staff@123') {
-              foundStaff = { ...data, id: data.id || d.id };
-            }
-          }
-        });
-
-        if (foundStaff) {
-          const staffToken = `custom_${foundStaff.id}_${foundStaff.email}`;
-          localStorage.setItem('auth_user_email', foundStaff.email);
-          localStorage.setItem('auth_token', staffToken);
-          setCurrentUser(foundStaff);
-          setIsAuthenticated(true);
-          void initializeData(staffToken);
-          setLoading(false);
-          navigate('/team/dashboard');
-          return;
-        }
-
-        const studentSnap = await getDocs(collection(db, 'students'));
-        let foundStudent: any = null;
-        studentSnap.forEach(d => {
-          const data = d.data();
-          if (data.email && data.email.toLowerCase().trim() === cleanEmail) {
-            const storedPwd = String(data.password || '').trim();
-            if (!storedPwd || storedPwd === cleanPassword || cleanPassword === 'Uppseekers@1' || cleanPassword === 'Student@123') {
-              foundStudent = { ...data, id: data.id || d.id };
-            }
-          }
-        });
-
-        if (foundStudent) {
-          const stuToken = `custom_${foundStudent.id}_${foundStudent.email}`;
-          localStorage.setItem('auth_user_email', foundStudent.email);
-          localStorage.setItem('auth_token', stuToken);
-          setCurrentUser({
-            ...foundStudent,
-            role: 'STUDENT',
-            status: 'Active',
-          } as any);
-          setIsAuthenticated(true);
-          void initializeData(stuToken);
-          setLoading(false);
-          navigate('/student/dashboard');
-          return;
-        }
-      } catch (err) {
-        console.error('Firestore query login err:', err);
-      }
-    }
-
-    setLoading(false);
-    setError('Invalid email or password');
   };
+
+  const handleBootstrapAdminCreate = async () => {
+    setError('');
+    setNotice('');
+    const cleanEmail = normalizeEmail(email);
+    if (cleanEmail !== BOOTSTRAP_ADMIN_EMAIL) return;
+    if (password.length < 6) {
+      setError('Please enter a password of at least 6 characters to initialize the primary admin account.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
+      await updateProfile(cred.user, { displayName: 'System Admin' }).catch(() => {});
+      await sendEmailVerification(cred.user);
+      setNeedsVerificationEmail(cleanEmail);
+      setShowBootstrapAdminSetup(false);
+      setNotice(
+        `Primary Admin account created and verification email sent to ${cleanEmail}. Verify your inbox, then click "I've Verified — Continue".`
+      );
+    } catch (err: any) {
+      if (err?.code === 'auth/email-already-in-use') {
+        setShowBootstrapAdminSetup(false);
+        setError(
+          'The primary admin account is already registered in Firebase Auth. Use Forgot / Reset Password if you need a new password.'
+        );
+      } else {
+        setError(mapFirebaseAuthError(err));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    setError('');
+    setNotice('');
+    if (!auth.currentUser) {
+      setNeedsVerificationEmail(null);
+      setError('Session expired. Please enter your email and password again.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await sendEmailVerification(auth.currentUser);
+      setNotice(`A fresh verification link was sent to ${auth.currentUser.email}. Check your inbox and spam folder.`);
+    } catch (err: any) {
+      setError(mapFirebaseAuthError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCheckVerified = async () => {
+    setError('');
+    setNotice('');
+    if (!auth.currentUser) {
+      setNeedsVerificationEmail(null);
+      setError('Session expired. Please sign in again.');
+      return;
+    }
+    setLoading(true);
+    try {
+      await auth.currentUser.reload();
+      if (!auth.currentUser.emailVerified) {
+        setError('Email is still marked as unverified. Please open the verification link in your inbox first.');
+        return;
+      }
+      // Re-trigger Firebase auth listener cleanly with verified token
+      const cleanEmail = normalizeEmail(email || auth.currentUser.email);
+      if (cleanEmail && password) {
+        await signOut(auth);
+        await signInWithEmailAndPassword(auth, cleanEmail, password);
+      } else {
+        window.location.reload();
+      }
+    } catch (err: any) {
+      setError(mapFirebaseAuthError(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const activeError = error || authError;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-slate-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div className="flex flex-col items-center">
-          <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg"> 
+          <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg">
             <GraduationCap className="h-8 w-8 text-white" />
           </div>
           <h2 className="mt-6 text-center text-3xl font-bold text-slate-900 tracking-tight">
@@ -222,53 +197,153 @@ export default function Login() {
             Student Counseling & Admissions Portal
           </p>
         </div>
-        
+
         <Card className="border-slate-200 shadow-sm">
           <CardHeader>
-            <CardTitle className="text-center text-xl text-slate-800">Sign in to your account</CardTitle>
+            <CardTitle className="text-center text-xl text-slate-800">
+              {needsVerificationEmail ? 'Verify Your Email' : 'Sign in to your account'}
+            </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
-            {error && (
-              <div className="bg-red-50 text-red-600 text-sm p-3 rounded-lg border border-red-100 text-center">
-                {error}
+            {activeError && (
+              <div className="bg-red-50 text-red-700 text-sm p-3 rounded-lg border border-red-200 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{activeError}</span>
               </div>
             )}
 
-            <form onSubmit={handleCredentialLogin} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Email Address</label>
-                <input 
-                  type="email" 
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
+            {notice && (
+              <div className="bg-blue-50 text-blue-800 text-xs p-3 rounded-lg border border-blue-200 leading-relaxed">
+                {notice}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
-                <input 
-                  type="password" 
-                  value={password}
-                  onChange={e => setPassword(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  required
-                />
-              </div>
-              <Button 
-                type="submit"
-                disabled={loading}
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 mt-2"
-              >
-                {loading ? 'Signing in...' : 'Sign In'}
-              </Button>
-            </form>
+            )}
 
-            <div className="pt-4 border-t border-slate-100 text-center">
-              <p className="text-xs text-slate-500">
-                Need to set or change your password? Please contact your platform administrator for a direct password update.
-              </p>
-            </div>
+            {needsVerificationEmail ? (
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5">
+                  <div className="flex items-center gap-2 font-bold text-amber-800">
+                    <MailCheck className="w-4 h-4 text-amber-600" />
+                    Email verification required for {needsVerificationEmail}
+                  </div>
+                  <p className="text-amber-700 leading-relaxed">
+                    Open the verification email sent to your address, click the confirmation link, and then continue below.
+                  </p>
+                </div>
+
+                <Button
+                  type="button"
+                  onClick={handleCheckVerified}
+                  disabled={loading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 flex items-center justify-center gap-2"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  {loading ? 'Checking verification...' : "I've Verified — Continue"}
+                </Button>
+
+                <div className="flex items-center justify-between gap-3 pt-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleResendVerification}
+                    disabled={loading}
+                    className="flex-1 text-xs flex items-center justify-center gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    Resend Email
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={async () => {
+                      await signOut(auth).catch(() => {});
+                      setNeedsVerificationEmail(null);
+                      setNotice('');
+                      setError('');
+                    }}
+                    className="flex-1 text-xs"
+                  >
+                    Use Different Email
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <form onSubmit={handleCredentialLogin} className="space-y-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      Email Address
+                    </label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="you@uppseekers.com"
+                      autoComplete="email"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-sm font-medium text-slate-700">
+                        Password
+                      </label>
+                      <Link
+                        to={`/reset-password${email ? `?email=${encodeURIComponent(email.trim())}` : ''}`}
+                        className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline"
+                      >
+                        Forgot Password?
+                      </Link>
+                    </div>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      autoComplete="current-password"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      required
+                    />
+                  </div>
+                  <Button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 mt-2"
+                  >
+                    {loading ? 'Signing in...' : 'Sign In'}
+                  </Button>
+                </form>
+
+                {showBootstrapAdminSetup && (
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-2.5">
+                    <p className="text-xs font-semibold text-amber-900">
+                      First-Time Setup for {BOOTSTRAP_ADMIN_EMAIL}
+                    </p>
+                    <p className="text-[11px] text-amber-800 leading-relaxed">
+                      If {BOOTSTRAP_ADMIN_EMAIL} has not been created in Firebase Authentication yet, initialize it with the password entered above.
+                    </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={handleBootstrapAdminCreate}
+                      disabled={loading}
+                      className="w-full text-xs border-amber-300 bg-white hover:bg-amber-100 text-amber-900 font-semibold"
+                    >
+                      Initialize Primary Admin Account
+                    </Button>
+                  </div>
+                )}
+
+                <div className="pt-4 border-t border-slate-100 text-center">
+                  <p className="text-xs text-slate-500">
+                    Need help accessing your account? Use{' '}
+                    <Link to="/reset-password" className="text-blue-600 font-medium hover:underline">
+                      Forgot Password
+                    </Link>{' '}
+                    or contact your Uppseekers administrator.
+                  </p>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

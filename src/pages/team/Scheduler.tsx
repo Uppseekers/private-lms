@@ -9,6 +9,7 @@ import {
   Copy, Check, ExternalLink, Unplug, Mail
 } from 'lucide-react';
 import { useDatabase, EventItem } from '@/context/DatabaseContext';
+import { getFirebaseIdToken } from '@/lib/firebase';
 import { cn } from '@/lib/utils';
 import { MeetingMOM, MeetingResourceLink, MeetingTask, OperationalLog, BatchClassSession } from '@/types';
 import { canStaffAccessAllStudents, isUserAdmin, isStudentAssignedToStaff, canStaffAccessEvent } from '@/lib/staffPermissions';
@@ -103,13 +104,12 @@ export default function TeamScheduler() {
   const [modalError, setModalError] = useState<string | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
 
-  const getStaffAuthHeaders = (): Record<string, string> => {
+  const getStaffAuthHeaders = async (): Promise<Record<string, string>> => {
     const email = (currentUser?.email || '').trim();
-    const uid = String(currentUser?.id || '1');
-    const token = email ? `custom_${uid}_${email}` : (localStorage.getItem('auth_token') || 'custom_user');
+    const token = await getFirebaseIdToken();
     return {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(email ? { 'x-staff-email': email } : {}),
       ...(currentUser?.name ? { 'x-staff-name': currentUser.name } : {}),
     };
@@ -118,9 +118,10 @@ export default function TeamScheduler() {
   const fetchZohoStatus = async () => {
     try {
       setZohoStatus(prev => ({ ...prev, loading: true }));
+      const headers = await getStaffAuthHeaders();
       const res = await fetch('/api/zoho/status', {
         method: 'GET',
-        headers: getStaffAuthHeaders(),
+        headers,
       });
       const data = await res.json().catch(() => ({}));
       setZohoStatus({
@@ -174,9 +175,10 @@ export default function TeamScheduler() {
     setModalError(null);
     setIsConnectingZoho(true);
     try {
+      const headers = await getStaffAuthHeaders();
       const res = await fetch('/api/zoho/auth/url', {
         method: 'GET',
-        headers: getStaffAuthHeaders(),
+        headers,
       });
       const data = await res.json().catch(() => ({}));
       if (data.redirectUri) {
@@ -224,9 +226,10 @@ export default function TeamScheduler() {
 
   const handleDisconnectZoho = async () => {
     try {
+      const headers = await getStaffAuthHeaders();
       await fetch('/api/zoho/connection', {
         method: 'DELETE',
-        headers: getStaffAuthHeaders(),
+        headers,
       });
       setZohoStatus(prev => ({ ...prev, connected: false, zohoEmail: '', zohoDisplayName: '' }));
       if (videoMode === 'zoho') setVideoMode('manual');
@@ -540,9 +543,10 @@ export default function TeamScheduler() {
       }
       setIsCreatingZohoMeeting(true);
       try {
+        const headers = await getStaffAuthHeaders();
         const res = await fetch('/api/zoho/meetings', {
           method: 'POST',
-          headers: getStaffAuthHeaders(),
+          headers,
           body: JSON.stringify({
             topic: formData.title.trim(),
             agenda: formData.notes.trim(),
@@ -626,7 +630,7 @@ export default function TeamScheduler() {
           location: locationLink, // Single persistent meeting join link across all instances
           notes: formData.notes,
           assignments: formData.assignments,
-          host: currentUser.name || 'Staff Mentor',
+          host: currentUser?.name || 'Staff Mentor',
           status: 'Scheduled' as const,
           isRecurring: true,
           seriesId,
@@ -683,8 +687,8 @@ export default function TeamScheduler() {
         const logEntry: OperationalLog = {
           id: 'LOG-' + Date.now(),
           timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          performedBy: currentUser.name || 'Staff Member',
-          role: currentUser.role || 'MENTOR',
+          performedBy: currentUser?.name || 'Staff Member',
+          role: currentUser?.role || 'MENTOR',
           studentId: targetStudent.id,
           activityType: 'Meeting Scheduled',
           description: `Scheduled recurring ${videoProvider === 'zoho' ? 'Zoho Meeting ' : ''}series (${occurrences.length} sessions) "${formData.title}" from ${formData.startDate} to ${formData.endDate} (${recurrenceSummary})`,
@@ -713,7 +717,7 @@ export default function TeamScheduler() {
         location: locationLink,
         notes: formData.notes,
         assignments: formData.assignments,
-        host: currentUser.name || 'Staff Mentor',
+        host: currentUser?.name || 'Staff Mentor',
         status: 'Scheduled' as const,
         videoProvider,
         zohoMeetingKey,
@@ -756,8 +760,8 @@ export default function TeamScheduler() {
         const logEntry: OperationalLog = {
           id: 'LOG-' + Date.now(),
           timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          performedBy: currentUser.name || 'Staff Member',
-          role: currentUser.role || 'MENTOR',
+          performedBy: currentUser?.name || 'Staff Member',
+          role: currentUser?.role || 'MENTOR',
           studentId: targetStudent.id,
           activityType: 'Meeting Scheduled',
           description: `Scheduled ${videoProvider === 'zoho' ? 'Zoho Meeting ' : ''}meeting "${formData.title}" on ${formData.date} at ${formData.startTime}`,
@@ -784,8 +788,8 @@ export default function TeamScheduler() {
     if (!momKeyPoints.trim() || !activeSessionModalEvt) return;
     const newMom: MeetingMOM = {
       id: 'MOM-' + Date.now(),
-      authorName: currentUser.name || 'Staff Member',
-      authorRole: currentUser.role || 'MENTOR',
+      authorName: currentUser?.name || 'Staff Member',
+      authorRole: currentUser?.role || 'MENTOR',
       date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
       keyPoints: momKeyPoints,
       studentProgress: momProgress,
@@ -819,8 +823,8 @@ export default function TeamScheduler() {
         const logEntry: OperationalLog = {
           id: 'LOG-' + Date.now(),
           timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          performedBy: currentUser.name || 'Staff Member',
-          role: currentUser.role || 'MENTOR',
+          performedBy: currentUser?.name || 'Staff Member',
+          role: currentUser?.role || 'MENTOR',
           studentId: targetStudent.id,
           activityType: 'Meeting Notes / MOM Added',
           description: `Added session MOM for "${activeSessionModalEvt.title}": ${momKeyPoints.substring(0, 80)}...`
@@ -852,7 +856,7 @@ export default function TeamScheduler() {
       id: 'MTASK-' + Date.now(),
       title: taskTitle,
       description: taskDesc,
-      assignedBy: currentUser.name || 'Staff Member',
+      assignedBy: currentUser?.name || 'Staff Member',
       assignedToStudentId: studentIdToAssign,
       assignedToStudentName: targetStudent?.name || 'Student',
       dateAssigned: new Date().toISOString().split('T')[0],
@@ -885,7 +889,7 @@ export default function TeamScheduler() {
         dueDate: newTask.dueDate || '',
         stage: 'TO_DO' as const,
         description: taskDesc,
-        assignedBy: `${currentUser.name} (${currentUser.role || 'Mentor'})`,
+        assignedBy: `${currentUser?.name || 'Staff Member'} (${currentUser?.role || 'Mentor'})`,
         externalUrl: taskUrl,
         attachments: []
       };
@@ -893,8 +897,8 @@ export default function TeamScheduler() {
       const logEntry: OperationalLog = {
         id: 'LOG-' + Date.now(),
         timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-        performedBy: currentUser.name || 'Staff Member',
-        role: currentUser.role || 'MENTOR',
+        performedBy: currentUser?.name || 'Staff Member',
+        role: currentUser?.role || 'MENTOR',
         studentId: targetStudent.id,
         activityType: 'Post-Meeting Task Assigned',
         description: `Assigned task "${taskTitle}" (Due: ${newTask.dueDate}) after session "${activeSessionModalEvt.title}"`,
@@ -921,7 +925,7 @@ export default function TeamScheduler() {
       title: resTitle,
       description: resDesc,
       url: resUrl,
-      addedBy: currentUser.name || 'Staff Member',
+      addedBy: currentUser?.name || 'Staff Member',
       addedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
     };
 
@@ -947,8 +951,8 @@ export default function TeamScheduler() {
         const logEntry: OperationalLog = {
           id: 'LOG-' + Date.now(),
           timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          performedBy: currentUser.name || 'Staff Member',
-          role: currentUser.role || 'MENTOR',
+          performedBy: currentUser?.name || 'Staff Member',
+          role: currentUser?.role || 'MENTOR',
           studentId: targetStudent.id,
           activityType: 'Resource Link Shared',
           description: `Shared resource link "${resTitle}" for session "${activeSessionModalEvt.title}"`,
@@ -1117,7 +1121,7 @@ export default function TeamScheduler() {
                      </select>
                    ) : (
                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-800 text-xs">
-                       No students are assigned to your staff role ({currentUser.role}). Contact Admin to assign students.
+                       No students are assigned to your staff role ({currentUser?.role || 'Staff'}). Contact Admin to assign students.
                      </div>
                    )}
                 </div>

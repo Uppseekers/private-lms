@@ -54,7 +54,9 @@ export default function TeamSettings() {
     setStudents,
     permissionsMatrix,
     setPermissionsMatrix,
-    roles
+    roles,
+    provisionPortalUser,
+    resetPortalUserPassword,
   } = useDatabase();
   const isAdmin = isUserAdmin(currentUser);
   const [activeTab, setActiveTab] = useState<TabType>('permissions');
@@ -73,30 +75,18 @@ export default function TeamSettings() {
     void userType;
     const cleanPwd = newPassword.trim();
     const targetMember = staff.find(s => s.id === userId);
-    const updatedStaff = staff.map(s => {
-      if (s.id === userId) {
-        return { ...s, password: cleanPwd };
-      }
-      return s;
+    const targetEmail = targetMember?.email || userForPasswordChange?.email || '';
+    const targetName = targetMember?.name || userForPasswordChange?.name || '';
+    const res = await resetPortalUserPassword({
+      email: targetEmail,
+      name: targetName,
+      newPassword: cleanPwd,
+      userType: 'staff',
     });
-    setStaff(updatedStaff);
-    const token = localStorage.getItem('auth_token') || 'admin_token';
-    try {
-      await fetch('/api/admin/change-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({
-          userId,
-          email: targetMember?.email || userForPasswordChange?.email || '',
-          name: targetMember?.name || userForPasswordChange?.name || '',
-          role: targetMember?.role || userForPasswordChange?.role || 'COUNSELOR',
-          newPassword: cleanPwd,
-          userType: 'staff'
-        })
-      });
-    } catch (e) {
-      console.warn('Backend password sync error (fallback active):', e);
+    if (res.ok) {
+      addAuditLog(`Updated Firebase Auth password / sent reset for ${targetName || targetEmail}`);
     }
+    return res;
   };
   
   const [formName, setFormName] = useState('');
@@ -128,8 +118,8 @@ export default function TeamSettings() {
     const newLog = {
       id: Math.random().toString(),
       date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: false }),
-      user: currentUser.name,
-      role: currentUser.role,
+      user: currentUser?.name || 'System Admin',
+      role: currentUser?.role || 'SYSTEM_ADMIN',
       action
     };
     setAuditLogs(prev => [newLog, ...prev]);
@@ -202,7 +192,7 @@ export default function TeamSettings() {
     setFormName(member.name);
     setFormEmail(member.email);
     setFormRole(member.role);
-    setFormPassword(member.password || '');
+    setFormPassword('');
     const isGlobal = (member.students || '').toLowerCase().includes('all') || 
                      (member.students || '').toLowerCase().includes('global') ||
                      member.role === 'CATEGORY_MANAGER' || 
@@ -226,28 +216,14 @@ export default function TeamSettings() {
               name: formName, 
               email: formEmail, 
               role: formRole, 
-              password: formPassword || s.password,
               students: formScope === 'Global Scope' || formRole === 'CATEGORY_MANAGER' || formRole === 'SYSTEM_ADMIN' ? 'All' : (s.students === 'All' ? '0 Students' : s.students)
             } 
           : s
       );
       setStaff(updatedStaff);
-      
-      const member = updatedStaff.find(s => s.id === editingId);
-      if (member) {
-        fetch('/api/staff/create', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
-          },
-          body: JSON.stringify(member)
-        }).catch(console.error);
-      }
-      
       addAuditLog(`Updated user ${formName} (Role: ${formRole}, Scope: ${formScope})`);
     } else {
-      const generatedPassword = formPassword || Math.random().toString(36).slice(-8) + Math.floor(Math.random() * 10);
+      const initialPassword = (formPassword || '').trim() || (Math.random().toString(36).slice(-8) + 'A1!');
       const newMember: StaffMember = {
         id: `STAFF-${Math.floor(Math.random() * 10000)}`,
         name: formName,
@@ -255,19 +231,15 @@ export default function TeamSettings() {
         role: formRole,
         students: assignedScopeStr,
         status: 'Active',
-        password: generatedPassword
       };
       setStaff([...staff, newMember]);
-      
-      fetch('/api/staff/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
-        },
-        body: JSON.stringify(newMember)
-      }).catch(console.error);
-
+      void provisionPortalUser({
+        name: formName,
+        email: formEmail,
+        password: initialPassword,
+        role: formRole,
+        userType: 'staff',
+      });
       addAuditLog(`Added new user ${formName} (Role: ${formRole}, Scope: ${formScope})`);
     }
     
@@ -457,11 +429,6 @@ export default function TeamSettings() {
     }
 
     setPermissionsMatrix(sanitizedMatrix);
-    try {
-      localStorage.setItem('uppseekers_permissions_v2', JSON.stringify(sanitizedMatrix));
-    } catch (e) {
-      console.warn('Could not save permissions to localStorage:', e);
-    }
 
     // 2. Check if selected role has global scope
     const roleCategories = sanitizedMatrix[selectedRoleForPerms] || [];
@@ -486,9 +453,9 @@ export default function TeamSettings() {
       });
       setStaff(updatedStaff);
 
-      const curRole = (currentUser.role || '').toUpperCase().replace(/[\s-]+/g, '_');
+      const curRole = (currentUser?.role || '').toUpperCase().replace(/[\s-]+/g, '_');
       const targetRole = selectedRoleForPerms.toUpperCase().replace(/[\s-]+/g, '_');
-      if (curRole === targetRole) {
+      if (currentUser && curRole === targetRole) {
         setCurrentUser({ ...currentUser, students: 'All' });
       }
     }
@@ -539,10 +506,12 @@ export default function TeamSettings() {
           Admin Settings Control Center
         </h1>
         <p className="text-sm text-slate-500 mt-1 flex items-center gap-2">
-          Access Level: {currentUser.role}
-          <select value={currentUser.id} onChange={e => setCurrentUser(staff.find(s => s.id === e.target.value)!)} className="ml-4 text-xs border rounded p-1">
-            {staff.map(s => <option key={s.id} value={s.id}>Test as: {s.name} ({s.role})</option>)}
-          </select>
+          Access Level: {currentUser?.role || 'SYSTEM_ADMIN'}
+          {currentUser && (
+            <select value={currentUser.id} onChange={e => setCurrentUser(staff.find(s => s.id === e.target.value) || currentUser)} className="ml-4 text-xs border rounded p-1">
+              {staff.map(s => <option key={s.id} value={s.id}>Test as: {s.name} ({s.role})</option>)}
+            </select>
+          )}
         </p>
       </div>
 
@@ -609,7 +578,7 @@ export default function TeamSettings() {
                 <tr>
                   <th className="px-6 py-4">Name & Email</th>
                   <th className="px-6 py-4">Role</th>
-                  {isAdmin && <th className="px-6 py-4">Password</th>}
+                  {isAdmin && <th className="px-6 py-4">Auth</th>}
                   <th className="px-6 py-4">Assigned Students</th>
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4 text-right">Actions</th>
@@ -628,8 +597,10 @@ export default function TeamSettings() {
                       </span>
                     </td>
                     {isAdmin && (
-                      <td className="px-6 py-4 font-mono text-xs text-slate-500">
-                        {member.password || '---'}
+                      <td className="px-6 py-4 text-xs text-slate-500">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-medium">
+                          Firebase Auth
+                        </span>
                       </td>
                     )}
                     <td className="px-6 py-4 text-slate-600 font-medium">
@@ -658,7 +629,6 @@ export default function TeamSettings() {
                             email: member.email,
                             role: member.role,
                             type: 'staff',
-                            currentPassword: member.password || 'Staff@123'
                           })} 
                           variant="ghost" 
                           size="sm" 
@@ -1456,9 +1426,9 @@ export default function TeamSettings() {
                 <input value={formEmail} onChange={e => setFormEmail(e.target.value)} type="email" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
               </div>
               <div>
-                {isAdmin && (
+                {isAdmin && !isEditMode && (
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Password (Admin Only)</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Initial Login Password</label>
                     <input value={formPassword} onChange={e => setFormPassword(e.target.value)} type="text" placeholder="Auto-generate if empty" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 mb-4" />
                   </div>
                 )}
@@ -1531,6 +1501,9 @@ export default function TeamSettings() {
           onClose={() => setUserForPasswordChange(null)}
           targetUser={userForPasswordChange}
           onSavePassword={handleSaveUserPassword}
+          onSendResetEmail={async (em) => {
+            await resetPortalUserPassword({ email: em, name: userForPasswordChange.name, userType: 'staff' });
+          }}
         />
       )}
     </div>

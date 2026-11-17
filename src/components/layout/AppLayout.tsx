@@ -38,8 +38,13 @@ import { Role } from '@/types';
 import { useDatabase } from '@/context/DatabaseContext';
 import { GoogleSheetsSyncModal } from '@/components/GoogleSheetsSyncModal';
 import ChangeUserPasswordModal from '@/components/ChangeUserPasswordModal';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db, auth } from '@/lib/firebase';
+import {
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
+  sendPasswordResetEmail,
+} from 'firebase/auth';
+import { auth } from '@/lib/firebase';
 import NotificationDetailsModal, { NotificationDetailData } from '@/components/NotificationDetailsModal';
 
 interface SidebarItem {
@@ -87,62 +92,55 @@ export default function AppLayout() {
   const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [showAllStudentNotifs, setShowAllStudentNotifs] = useState(false);
-  const [readNotifIds, setReadNotifIds] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem('uppseekers_read_notifications') || '[]');
-    } catch {
-      return [];
-    }
-  });
+  const [readNotifIds, setReadNotifIds] = useState<string[]>([]);
   const [notifFilter, setNotifFilter] = useState<'ALL' | 'TASKS' | 'DEADLINES' | 'BATCHES' | 'ESSAYS' | 'DOCS'>('ALL');
   const [activeNotificationModal, setActiveNotificationModal] = useState<NotificationDetailData | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const notifDropdownRef = useRef<HTMLDivElement>(null);
 
-  const { currentUser, permissionsMatrix, launchpadPermissions, launchpadEnrollments, launchpadSubjectReleases, appNotifications, staff, students, batches, events, setCurrentUser, setIsAuthenticated, setStaff, setStudents, firestoreStatus, signInWithGoogle, signOutAll } = useDatabase();
+  const {
+    currentUser,
+    permissionsMatrix,
+    launchpadPermissions,
+    launchpadEnrollments,
+    launchpadSubjectReleases,
+    appNotifications,
+    markAppNotificationRead,
+    staff,
+    students,
+    batches,
+    events,
+    firestoreStatus,
+    signOutAll,
+  } = useDatabase();
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
-  const [googleSyncing, setGoogleSyncing] = useState(false);
-  const [googleSyncError, setGoogleSyncError] = useState<string | null>(null);
 
-  const handleSaveCurrentUserPassword = async (userId: string, userType: 'student' | 'staff', newPassword: string) => {
-    // 1. Immediately update local state
-    const updatedUser = { ...currentUser, password: newPassword };
-    setCurrentUser(updatedUser);
-
-    if (userType === 'staff') {
-      const updatedStaff = staff.map(s => s.id === userId ? { ...s, password: newPassword } : s);
-      setStaff(updatedStaff);
-      if (auth.currentUser?.emailVerified) {
-        try {
-          await updateDoc(doc(db, 'staff', userId), { password: newPassword });
-        } catch (err) {
-          console.warn('Firestore password update warning:', err);
-        }
-      }
-    } else {
-      const updatedStudents = students.map(s => s.id === userId ? { ...s, password: newPassword } : s);
-      setStudents(updatedStudents);
-      if (auth.currentUser?.emailVerified) {
-        try {
-          await updateDoc(doc(db, 'students', userId), { password: newPassword });
-        } catch (err) {
-          console.warn('Firestore password update warning:', err);
-        }
-      }
+  const handleSaveCurrentUserPassword = async (
+    _userId: string,
+    _userType: 'student' | 'staff',
+    newPassword: string,
+    currentPasswordForReauth?: string
+  ) => {
+    const fbUser = auth.currentUser;
+    if (!fbUser || !fbUser.email) {
+      return { ok: false, error: 'Your Firebase session has expired. Please sign in again.' };
     }
-
-    // 2. Direct server sync (no email triggers)
+    if (!currentPasswordForReauth) {
+      return { ok: false, error: 'Please enter your current password to verify your identity.' };
+    }
     try {
-      await fetch('/api/admin/change-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, newPassword, userType, email: currentUser?.email })
-      });
-    } catch (e) {
-      console.warn('Backend password sync error:', e);
+      const cred = EmailAuthProvider.credential(fbUser.email, currentPasswordForReauth);
+      await reauthenticateWithCredential(fbUser, cred);
+      await updatePassword(fbUser, newPassword);
+      return { ok: true, mode: 'direct' as const };
+    } catch (err: any) {
+      if (err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential') {
+        return { ok: false, error: 'Current password is incorrect.' };
+      }
+      return { ok: false, error: err?.message || 'Failed to update password.' };
     }
   };
-  
+
   // Close mobile drawer and notifications on navigation/click-outside
   useEffect(() => {
     setIsMobileMenuOpen(false);
@@ -164,18 +162,19 @@ export default function AppLayout() {
   const markAllAsRead = () => {
     const allIds = notifications.map(n => n.id);
     setReadNotifIds(allIds);
-    try {
-      localStorage.setItem('uppseekers_read_notifications', JSON.stringify(allIds));
-    } catch {}
+    notifications.forEach(n => {
+      if (n.id.startsWith('app-') && !n.isRead) {
+        void markAppNotificationRead(n.id.slice(4));
+      }
+    });
   };
 
   const markOneAsRead = (id: string) => {
     if (!readNotifIds.includes(id)) {
-      const updated = [...readNotifIds, id];
-      setReadNotifIds(updated);
-      try {
-        localStorage.setItem('uppseekers_read_notifications', JSON.stringify(updated));
-      } catch {}
+      setReadNotifIds(prev => [...prev, id]);
+    }
+    if (id.startsWith('app-')) {
+      void markAppNotificationRead(id.slice(4));
     }
   };
 
@@ -257,15 +256,7 @@ export default function AppLayout() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const savedAuthEmailForLayout = (localStorage.getItem('auth_user_email') || '').trim().toLowerCase();
-  const cleanCurrentUserEmail = (
-    ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? currentUser?.email : '') ||
-    savedAuthEmailForLayout ||
-    currentUser?.email ||
-    ''
-  )
-    .trim()
-    .toLowerCase();
+  const cleanCurrentUserEmail = (currentUser?.email || '').trim().toLowerCase();
 
   const currentStudent =
     students.find(
@@ -273,20 +264,11 @@ export default function AppLayout() {
         (currentUser?.id && s.id === currentUser.id) ||
         (cleanCurrentUserEmail && (s.email || '').trim().toLowerCase() === cleanCurrentUserEmail)
     ) ||
-    ((currentUser?.role || '').toUpperCase() === 'STUDENT'
-      ? (currentUser as any)
-      : savedAuthEmailForLayout && savedAuthEmailForLayout !== 'uppseekers@gmail.com'
-      ? ({
-          id: currentUser?.id || savedAuthEmailForLayout,
-          name: savedAuthEmailForLayout.split('@')[0] || 'Student',
-          email: savedAuthEmailForLayout,
-        } as any)
-      : students[0]);
+    ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? (currentUser as any) : students[0]);
 
   const currentStudentEmailKey = (
     currentStudent?.email ||
     ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? currentUser?.email : '') ||
-    (savedAuthEmailForLayout !== 'uppseekers@gmail.com' ? savedAuthEmailForLayout : '') ||
     ''
   )
     .trim()
@@ -338,7 +320,7 @@ export default function AppLayout() {
     : [];
 
   const matchingStudents = (query && isTeam)
-    ? getScopedStudentsForStaff(students, currentUser).filter(s => s.name?.toLowerCase().includes(query) || s.email?.toLowerCase().includes(query) || s.counselor?.toLowerCase().includes(query))
+    ? getScopedStudentsForStaff(students, currentUser, permissionsMatrix, batches).filter(s => s.name?.toLowerCase().includes(query) || s.email?.toLowerCase().includes(query) || s.counselor?.toLowerCase().includes(query))
     : [];
 
   const matchingUniversities = query
@@ -515,7 +497,7 @@ export default function AppLayout() {
       });
     } else if (isTeam) {
       // Team / Counselor Notifications
-      const scoped = getScopedStudentsForStaff(students, currentUser);
+      const scoped = getScopedStudentsForStaff(students, currentUser, permissionsMatrix, batches);
       scoped.forEach((s: any) => {
         (s.tasks || []).filter((t: any) => t.status === 'In Progress' || t.status === 'Needs Revision' || t.submissionText || t.submissionFileUrl).forEach((t: any) => {
           list.push({
@@ -587,18 +569,6 @@ export default function AppLayout() {
     navigate('/login');
   };
 
-  const handleGoogleSync = async () => {
-    setGoogleSyncError(null);
-    setGoogleSyncing(true);
-    try {
-      await signInWithGoogle();
-    } catch (err: any) {
-      setGoogleSyncError(err?.message || 'Google sign-in failed.');
-    } finally {
-      setGoogleSyncing(false);
-    }
-  };
-
   return (
     <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       {/* Desktop Sidebar */}
@@ -649,8 +619,8 @@ export default function AppLayout() {
                 {currentUser?.name?.charAt(0) || 'U'}
               </div>
               <div className="overflow-hidden min-w-0">
-                <p className="text-xs font-bold truncate text-slate-900">{isTeam ? currentUser.name : (currentUser?.name || 'Student')}</p>
-                <p className="text-[10px] text-slate-400 truncate">{isTeam ? currentUser.role : 'Student Portal'}</p>
+                <p className="text-xs font-bold truncate text-slate-900">{isTeam ? (currentUser?.name || 'Team Member') : (currentUser?.name || 'Student')}</p>
+                <p className="text-[10px] text-slate-400 truncate">{isTeam ? (currentUser?.role || 'Staff') : 'Student Portal'}</p>
               </div>
             </div>
             <div className="flex items-center gap-1 shrink-0">
@@ -736,8 +706,8 @@ export default function AppLayout() {
                     {currentUser?.name?.charAt(0) || 'U'}
                   </div>
                   <div className="overflow-hidden min-w-0">
-                    <p className="text-xs font-bold truncate text-slate-900">{isTeam ? currentUser.name : (currentUser?.name || 'Student')}</p>
-                    <p className="text-[10px] text-slate-400 truncate">{isTeam ? currentUser.role : 'Student Portal'}</p>
+                    <p className="text-xs font-bold truncate text-slate-900">{isTeam ? (currentUser?.name || 'Team Member') : (currentUser?.name || 'Student')}</p>
+                    <p className="text-[10px] text-slate-400 truncate">{isTeam ? (currentUser?.role || 'Staff') : 'Student Portal'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
@@ -1235,30 +1205,17 @@ export default function AppLayout() {
 
         {/* Content View Container */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 flex flex-col gap-6 sm:gap-8 bg-slate-50">
-          {isTeam && firestoreStatus === 'permission-denied' && (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs shrink-0">
-              <div className="flex items-start gap-2.5">
-                <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-xs sm:text-sm font-bold text-amber-950">
-                    Connect your Google account (uppseekers@gmail.com) to load live students & conversations
-                  </p>
-                  <p className="text-[11px] sm:text-xs text-amber-800">
-                    Live database access requires Firebase Google sign-in. Currently showing fallback local data.
-                  </p>
-                  {googleSyncError && (
-                    <p className="text-[11px] font-semibold text-red-700 mt-1">{googleSyncError}</p>
-                  )}
-                </div>
+          {firestoreStatus === 'permission-denied' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex items-start gap-2.5 shadow-2xs shrink-0">
+              <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-xs sm:text-sm font-bold text-amber-950">
+                  Firestore permissions restricted for your current session
+                </p>
+                <p className="text-[11px] sm:text-xs text-amber-800">
+                  Please sign out and sign back in with your verified email/password account or contact your administrator to refresh your staff directory permissions.
+                </p>
               </div>
-              <button
-                type="button"
-                onClick={handleGoogleSync}
-                disabled={googleSyncing}
-                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-colors shrink-0 cursor-pointer disabled:opacity-60"
-              >
-                {googleSyncing ? 'Connecting Google...' : 'Connect Google (uppseekers@gmail.com)'}
-              </button>
             </div>
           )}
           {isTeam &&
@@ -1317,9 +1274,11 @@ export default function AppLayout() {
               email: currentUser.email,
               role: currentUser.role,
               type: (currentUser.role === 'STUDENT' || !isTeam) ? 'student' : 'staff',
-              currentPassword: currentUser.password
             }}
             onSavePassword={handleSaveCurrentUserPassword}
+            onSendResetEmail={async (em) => {
+              await sendPasswordResetEmail(auth, em, { url: `${window.location.origin}/login` });
+            }}
           />
         )}
 
@@ -1330,13 +1289,12 @@ export default function AppLayout() {
           onClose={() => setActiveNotificationModal(null)}
           onToggleRead={(id) => {
             if (readNotifIds.includes(id)) {
-              const updated = readNotifIds.filter(i => i !== id);
-              setReadNotifIds(updated);
-              localStorage.setItem('uppseekers_read_notifications', JSON.stringify(updated));
+              setReadNotifIds(prev => prev.filter(i => i !== id));
             } else {
-              const updated = [...readNotifIds, id];
-              setReadNotifIds(updated);
-              localStorage.setItem('uppseekers_read_notifications', JSON.stringify(updated));
+              setReadNotifIds(prev => [...prev, id]);
+              if (id.startsWith('app-')) {
+                void markAppNotificationRead(id.slice(4));
+              }
             }
           }}
           onNavigate={(link) => {

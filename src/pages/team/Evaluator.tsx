@@ -293,7 +293,7 @@ export default function Evaluator() {
     if (!mentorComment.trim()) return;
     const newComment = {
       id: 'CMT-' + Date.now(),
-      author: currentUser.name || 'Counselor',
+      author: currentUser?.name || 'Counselor',
       date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
       text: mentorComment.trim()
     };
@@ -318,7 +318,7 @@ export default function Evaluator() {
     const newVersion: EssayVersion = {
       versionNumber: latestVersionNum + 1,
       date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-      author: currentUser.name || 'Mentor Evaluator',
+      author: currentUser?.name || 'Mentor Evaluator',
       content: editedContent,
       inlineComments: commentsList
     };
@@ -340,8 +340,8 @@ export default function Evaluator() {
     const logEntry = {
       id: 'LOG-' + Date.now(),
       timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-      performedBy: currentUser.name || 'Evaluator',
-      role: currentUser.role || 'MENTOR',
+      performedBy: currentUser?.name || 'Evaluator',
+      role: currentUser?.role || 'MENTOR',
       studentId: targetStudent.id,
       activityType: 'Essay Evaluated',
       description: `Evaluated "${activeEssaySubmission.title}" for ${targetStudent.name}. Status set to "${evaluationStatus}" (${wordCount} words).`
@@ -387,8 +387,8 @@ export default function Evaluator() {
     const logEntry = {
       id: 'LOG-' + Date.now(),
       timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-      performedBy: currentUser.name || 'Evaluator',
-      role: currentUser.role || 'MENTOR',
+      performedBy: currentUser?.name || 'Evaluator',
+      role: currentUser?.role || 'MENTOR',
       studentId: targetStudent.id,
       activityType: 'Task Evaluated',
       description: `Evaluated Task "${activeTaskSubmission.title}" for ${targetStudent.name}. Stage updated to "${taskReviewStage.replace(/_/g, ' ')}".`

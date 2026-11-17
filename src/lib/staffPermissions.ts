@@ -80,30 +80,6 @@ export function canStaffAccessAllStudents(
     }
   }
 
-  // 4. Fallback check localStorage permissions matrix if available in browser context
-  if (typeof window !== 'undefined' && window.localStorage) {
-    try {
-      const saved = localStorage.getItem('uppseekers_permissions_v2');
-      if (saved) {
-        const matrix = JSON.parse(saved);
-        const roleCats = matrix[currentUser.role] || matrix[roleUpper];
-        if (roleCats && Array.isArray(roleCats)) {
-          for (const cat of roleCats) {
-            if (cat.items && Array.isArray(cat.items)) {
-              for (const item of cat.items) {
-                if (item.enabled && item.scope && item.scope.toLowerCase().includes('global')) {
-                  return true;
-                }
-              }
-            }
-          }
-        }
-      }
-    } catch (e) {
-      // Ignore parse errors
-    }
-  }
-
   return false;
 }
 
@@ -113,7 +89,8 @@ export function canStaffAccessAllStudents(
 export function isStudentAssignedToStaff(
   student: Student,
   currentUser?: StaffMember | null,
-  permissionsMatrix?: Record<string, any[]>
+  permissionsMatrix?: Record<string, any[]>,
+  batches: any[] = []
 ): boolean {
   if (!currentUser) return false;
   
@@ -162,24 +139,16 @@ export function isStudentAssignedToStaff(
     if (rawMentorsList.some((m: any) => typeof m === 'string' && matchesStaff(m))) return true;
   }
 
-  // Check if student is assigned to staff member via batches
-  if (typeof window !== 'undefined' && window.localStorage) {
-    try {
-      const savedBatches = localStorage.getItem('uppseekers_batches_v2');
-      if (savedBatches) {
-        const batches = JSON.parse(savedBatches);
-        if (Array.isArray(batches)) {
-          for (const b of batches) {
-            const hasMentor = Array.isArray(b.mentors) && b.mentors.some((m: string) => matchesStaff(m));
-            const hasStudent = Array.isArray(b.students) && b.students.some((sid: string) => sid === student.id);
-            if (hasMentor && hasStudent) {
-              return true;
-            }
-          }
-        }
+  // Check if student is assigned to staff member via batches passed from live Firestore state
+  if (Array.isArray(batches)) {
+    for (const b of batches) {
+      const hasMentor = Array.isArray(b?.mentors) && b.mentors.some((m: string) => matchesStaff(m));
+      const hasStudent =
+        Array.isArray(b?.students) &&
+        b.students.some((sid: string) => sid === student.id || sid?.toLowerCase?.() === student.email?.toLowerCase?.());
+      if (hasMentor && hasStudent) {
+        return true;
       }
-    } catch (e) {
-      // Ignore batch read errors
     }
   }
 
@@ -192,11 +161,12 @@ export function isStudentAssignedToStaff(
 export function getScopedStudentsForStaff(
   students: Student[],
   currentUser?: StaffMember | null,
-  permissionsMatrix?: Record<string, any[]>
+  permissionsMatrix?: Record<string, any[]>,
+  batches: any[] = []
 ): Student[] {
   if (!currentUser) return students;
   if (canStaffAccessAllStudents(currentUser, permissionsMatrix)) return students;
-  return students.filter(student => isStudentAssignedToStaff(student, currentUser, permissionsMatrix));
+  return students.filter(student => isStudentAssignedToStaff(student, currentUser, permissionsMatrix, batches));
 }
 
 /**
@@ -559,16 +529,7 @@ export function canStaffAccessReports(
 
   const roleUpper = (currentUser.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
 
-  let matrixSource = permissionsMatrix;
-  if (!matrixSource && typeof window !== 'undefined' && window.localStorage) {
-    try {
-      const saved = localStorage.getItem('uppseekers_permissions_v2');
-      if (saved) matrixSource = JSON.parse(saved);
-    } catch {
-      // Ignore parse errors
-    }
-  }
-
+  const matrixSource = permissionsMatrix;
   const roleCats = matrixSource ? (matrixSource[currentUser.role] || matrixSource[roleUpper]) : undefined;
 
   // Check explicit 1-to-1 tab visibility setting first
@@ -664,16 +625,8 @@ export function getStaffLaunchpadPermissions(
     editCurriculumAccess = 'none';
   }
 
-  // Check unified permissions matrix (state first, then localStorage fallback)
-  let matrixSource = permissionsMatrix;
-  if (!matrixSource && typeof window !== 'undefined' && window.localStorage) {
-    try {
-      const saved = localStorage.getItem('uppseekers_permissions_v2');
-      if (saved) matrixSource = JSON.parse(saved);
-    } catch {
-      // Ignore parse errors
-    }
-  }
+  // Check unified permissions matrix from live Firestore state
+  const matrixSource = permissionsMatrix;
 
   if (matrixSource) {
     const roleCats = matrixSource[currentUser.role] || matrixSource[roleUpper];

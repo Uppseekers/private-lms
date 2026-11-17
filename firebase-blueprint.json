@@ -1,42 +1,125 @@
 {
   "entities": {
-    "Student": {
-      "title": "Student",
-      "description": "Student record with academic and application details",
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Trusted administrator grant keyed by Firebase Auth UID",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string" },
-        "phone": { "type": "string" },
-        "intake": { "type": "string" },
-        "counselor": { "type": "string" },
-        "readiness": { "type": "number" },
-        "school": { "type": "string" }
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "role": { "type": "string", "maxLength": 40 }
       },
-      "required": ["id", "name", "email"]
+      "required": ["uid", "email", "role"]
+    },
+    "StaffDirectoryEntry": {
+      "title": "StaffDirectoryEntry",
+      "description": "O(1) deterministic lookup entry mapping normalized staff email key to active role",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "staffId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "name": { "type": "string", "maxLength": 200 },
+        "role": { "type": "string", "maxLength": 60 },
+        "status": { "type": "string", "enum": ["Active", "Suspended"], "maxLength": 40 },
+        "students": { "type": "string", "maxLength": 120 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "staffId", "email", "role", "status"]
     },
     "Staff": {
       "title": "Staff",
-      "description": "Staff member record",
+      "description": "Team member profile (no plaintext passwords stored)",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "email": { "type": "string" },
-        "role": { "type": "string" },
-        "status": { "type": "string" }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "role": { "type": "string", "maxLength": 60 },
+        "students": { "type": "string", "maxLength": 120 },
+        "status": { "type": "string", "enum": ["Active", "Suspended"], "maxLength": 40 },
+        "uid": { "type": "string", "maxLength": 128 },
+        "allowedViewerEmails": { "type": "array", "description": "Emails authorized to view this staff record" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "name", "email"]
+    },
+    "Student": {
+      "title": "Student",
+      "description": "Student record with academic, counselor, tasks, shortlist, and documents data (no plaintext portal password)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "phone": { "type": "string", "maxLength": 60 },
+        "intake": { "type": "string", "maxLength": 60 },
+        "school": { "type": "string", "maxLength": 200 },
+        "counselor": { "type": "string", "maxLength": 160 },
+        "researchMentor": { "type": "string", "maxLength": 160 },
+        "satMathMentor": { "type": "string", "maxLength": 160 },
+        "satVerbalMentor": { "type": "string", "maxLength": 160 },
+        "universityMentor": { "type": "string", "maxLength": 160 },
+        "readiness": { "type": "number" },
+        "countries": { "type": "array" },
+        "activities": { "type": "array" },
+        "operationalLogs": { "type": "array" },
+        "shortlist": { "type": "array" },
+        "documents": { "type": "array" },
+        "essays": { "type": "array" },
+        "tasks": { "type": "array" },
+        "extracurriculars": { "type": "array" },
+        "academicScores": { "type": "array" },
+        "credentials": { "type": "array" },
+        "conversations": { "type": "array" },
+        "taskSheetLink": { "type": "string", "maxLength": 500 },
+        "major1": { "type": "string", "maxLength": 160 },
+        "major2": { "type": "string", "maxLength": 160 },
+        "targetDegree": { "type": "string", "maxLength": 120 },
+        "targetCountry": { "type": "string", "maxLength": 120 },
+        "uid": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "maxLength": 40 },
+        "status": { "type": "string", "maxLength": 40 },
+        "allowedViewerEmails": { "type": "array", "description": "Team/student emails authorized to query this student" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "name", "email"]
+    },
+    "PortalSetting": {
+      "title": "PortalSetting",
+      "description": "Global portal settings such as the role permissions matrix",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "matrix": { "type": "object" },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "matrix"]
     },
     "Batch": {
       "title": "Batch",
       "description": "Batch cohort definition",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "name": { "type": "string" },
-        "program": { "type": "string" }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "type": { "type": "string", "maxLength": 60 },
+        "subject": { "type": "string", "maxLength": 120 },
+        "subSubject": { "type": "string", "maxLength": 120 },
+        "mentors": { "type": "array" },
+        "meetingLink": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "maxLength": 40 },
+        "capacity": { "type": "number" },
+        "students": { "type": "array" },
+        "totalSessions": { "type": "number" },
+        "completedSessions": { "type": "number" },
+        "scheduleDayTime": { "type": "string", "maxLength": 120 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "sessions": { "type": "array" },
+        "parentBatchId": { "type": "string", "maxLength": 128 },
+        "allowedViewerEmails": { "type": "array" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "name"]
     },
@@ -45,49 +128,328 @@
       "description": "Class or counselling event schedule",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "title": { "type": "string" },
-        "date": { "type": "string" },
-        "type": { "type": "string" }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "day": { "type": "string", "maxLength": 40 },
+        "date": { "type": "string", "maxLength": 40 },
+        "time": { "type": "string", "maxLength": 60 },
+        "duration": { "type": "string", "maxLength": 60 },
+        "stream": { "type": "string", "maxLength": 120 },
+        "batch": { "type": "string", "maxLength": 160 },
+        "students": { "type": "string", "maxLength": 500 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentIds": { "type": "array" },
+        "location": { "type": "string", "maxLength": 500 },
+        "notes": { "type": "string", "maxLength": 5000 },
+        "assignments": { "type": "string", "maxLength": 5000 },
+        "host": { "type": "string", "maxLength": 160 },
+        "organiser": { "type": "string", "maxLength": 160 },
+        "status": { "type": "string", "maxLength": 60 },
+        "moms": { "type": "array" },
+        "ratings": { "type": "array" },
+        "resources": { "type": "array" },
+        "tasks": { "type": "array" },
+        "isRecurring": { "type": "boolean" },
+        "seriesId": { "type": "string", "maxLength": 128 },
+        "sessionNumber": { "type": "number" },
+        "totalSessionsInSeries": { "type": "number" },
+        "recurrenceRule": { "type": "string", "maxLength": 200 },
+        "videoProvider": { "type": "string", "maxLength": 40 },
+        "zohoMeetingKey": { "type": "string", "maxLength": 128 },
+        "hostStartLink": { "type": "string", "maxLength": 1000 },
+        "participantEmails": { "type": "array" },
+        "allowedViewerEmails": { "type": "array" },
+        "type": { "type": "string", "maxLength": 60 },
+        "category": { "type": "string", "maxLength": 60 },
+        "attendees": { "type": "array" },
+        "link": { "type": "string", "maxLength": 1000 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "title"]
     },
     "Conversation": {
       "title": "Conversation",
-      "description": "Student conversation thread across WhatsApp, email, call, and portal channels",
+      "description": "Student conversation thread across channels",
       "type": "object",
       "properties": {
-        "id": { "type": "string" },
-        "studentId": { "type": "string" },
-        "studentName": { "type": "string" },
-        "channel": { "type": "string" },
-        "lastMessage": { "type": "string" },
-        "lastMessageAt": { "type": "string" },
-        "status": { "type": "string" }
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentName": { "type": "string", "maxLength": 200 },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "studentPhone": { "type": "string", "maxLength": 60 },
+        "counselor": { "type": "string", "maxLength": 160 },
+        "subject": { "type": "string", "maxLength": 200 },
+        "channel": { "type": "string", "maxLength": 60 },
+        "lastMessage": { "type": "string", "maxLength": 2000 },
+        "lastMessageAt": { "type": "string", "maxLength": 64 },
+        "unreadCount": { "type": "number" },
+        "status": { "type": "string", "maxLength": 40 },
+        "messages": { "type": "array" },
+        "allowedViewerEmails": { "type": "array" },
+        "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "studentId", "studentName"]
+    },
+    "LaunchpadSubject": {
+      "title": "LaunchpadSubject",
+      "description": "Launchpad career/leadership subject track definition",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "order": { "type": "number" },
+        "title": { "type": "string", "maxLength": 200 },
+        "description": { "type": "string", "maxLength": 2000 },
+        "accentHex": { "type": "string", "maxLength": 20 },
+        "surfaceTint": { "type": "string", "maxLength": 20 },
+        "iconKey": { "type": "string", "maxLength": 80 },
+        "customIconUrl": { "type": "string", "maxLength": 1000 },
+        "hasCurriculum": { "type": "boolean" },
+        "courseGoal": { "type": "string", "maxLength": 2000 },
+        "passingThreshold": { "type": "number" },
+        "certificateTitle": { "type": "string", "maxLength": 200 },
+        "isArchived": { "type": "boolean" },
+        "portalScope": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "title", "portalScope"]
+    },
+    "LaunchpadChapter": {
+      "title": "LaunchpadChapter",
+      "description": "Individual Launchpad week module/chapter document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "weekNumber": { "type": "number" },
+        "title": { "type": "string", "maxLength": 300 },
+        "learningObjectives": { "type": "array" },
+        "lecture": { "type": "object" },
+        "readingGuide": { "type": "object" },
+        "practicalExercise": { "type": "object" },
+        "portalScope": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "subjectId", "weekNumber", "title", "portalScope"]
+    },
+    "LaunchpadCertQuestion": {
+      "title": "LaunchpadCertQuestion",
+      "description": "Launchpad subject certification exam question",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "questionType": { "type": "string", "maxLength": 60 },
+        "sortOrder": { "type": "number" },
+        "payload": { "type": "object" },
+        "portalScope": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "subjectId", "questionType", "portalScope"]
+    },
+    "LaunchpadTeamPermission": {
+      "title": "LaunchpadTeamPermission",
+      "description": "Per-staff override for Launchpad access",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "userEmail": { "type": "string", "maxLength": 200 },
+        "accessScope": { "type": "string", "maxLength": 40 },
+        "launchpadStudentTabAccess": { "type": "string", "maxLength": 40 },
+        "launchpadReviewExerciseAccess": { "type": "string", "maxLength": 40 },
+        "launchpadEditCurriculumAccess": { "type": "string", "maxLength": 40 },
+        "updatedBy": { "type": "string", "maxLength": 160 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["userId", "accessScope"]
+    },
+    "LaunchpadEnrollment": {
+      "title": "LaunchpadEnrollment",
+      "description": "Student enrollment record in Launchpad",
+      "type": "object",
+      "properties": {
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "assignedBy": { "type": "string", "maxLength": 160 },
+        "assignedAt": { "type": "string", "maxLength": 64 },
+        "allowedViewerEmails": { "type": "array" }
+      },
+      "required": ["studentId", "assignedAt"]
+    },
+    "LaunchpadRelease": {
+      "title": "LaunchpadRelease",
+      "description": "Normalized per-student per-subject Launchpad unlock status document",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "isUnlocked": { "type": "boolean" },
+        "unlockedBy": { "type": "string", "maxLength": 160 },
+        "unlockedAt": { "type": "string", "maxLength": 64 },
+        "allowedViewerEmails": { "type": "array" }
+      },
+      "required": ["id", "studentId", "subjectId", "isUnlocked"]
+    },
+    "LaunchpadProgress": {
+      "title": "LaunchpadProgress",
+      "description": "Student week progress for a Launchpad module",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "weekNumber": { "type": "number" },
+        "lectureCompleted": { "type": "boolean" },
+        "readingCompleted": { "type": "boolean" },
+        "exerciseSubmissionJson": { "type": "object" },
+        "exerciseCompleted": { "type": "boolean" },
+        "evaluationStatus": { "type": "string", "maxLength": 40 },
+        "evaluatorFeedback": { "type": "string", "maxLength": 4000 },
+        "evaluatedBy": { "type": "string", "maxLength": 160 },
+        "evaluatedAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 },
+        "allowedViewerEmails": { "type": "array" }
+      },
+      "required": ["id", "studentId", "subjectId", "weekNumber"]
+    },
+    "LaunchpadCertification": {
+      "title": "LaunchpadCertification",
+      "description": "Launchpad certification exam completion record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "testScore": { "type": "number" },
+        "passed": { "type": "boolean" },
+        "answersJson": { "type": "object" },
+        "issuedAt": { "type": "string", "maxLength": 64 },
+        "certificateCode": { "type": "string", "maxLength": 120 },
+        "allowedViewerEmails": { "type": "array" }
+      },
+      "required": ["id", "studentId", "subjectId", "testScore", "passed"]
+    },
+    "AssignmentEvaluation": {
+      "title": "AssignmentEvaluation",
+      "description": "Counselor evaluation record for Launchpad practical exercise submissions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sourceType": { "type": "string", "maxLength": 40 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentName": { "type": "string", "maxLength": 200 },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "subjectId": { "type": "string", "maxLength": 128 },
+        "subjectTitle": { "type": "string", "maxLength": 200 },
+        "weekNumber": { "type": "number" },
+        "chapterTitle": { "type": "string", "maxLength": 300 },
+        "taskId": { "type": "string", "maxLength": 128 },
+        "submissionJson": { "type": "object" },
+        "status": { "type": "string", "maxLength": 40 },
+        "feedback": { "type": "string", "maxLength": 4000 },
+        "evaluatedBy": { "type": "string", "maxLength": 160 },
+        "submittedAt": { "type": "string", "maxLength": 64 },
+        "evaluatedAt": { "type": "string", "maxLength": 64 },
+        "allowedViewerEmails": { "type": "array" }
+      },
+      "required": ["id", "studentId", "subjectId"]
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "Real-time notification for students and team members",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientType": { "type": "string", "enum": ["student", "staff"], "maxLength": 20 },
+        "recipientId": { "type": "string", "maxLength": 128 },
+        "recipientEmail": { "type": "string", "maxLength": 200 },
+        "title": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 1000 },
+        "category": { "type": "string", "maxLength": 60 },
+        "link": { "type": "string", "maxLength": 500 },
+        "metadataJson": { "type": "object" },
+        "isRead": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "allowedViewerEmails": { "type": "array" }
+      },
+      "required": ["id", "recipientType", "recipientId", "title"]
     }
   },
   "firestore": {
-    "/students/{studentId}": {
-      "schema": { "$ref": "#/entities/Student" },
-      "description": "Collection of student profiles"
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminRecord" },
+      "description": "System Admin privilege records keyed by Firebase Auth UID"
+    },
+    "/staff_directory/{emailKey}": {
+      "schema": { "$ref": "#/entities/StaffDirectoryEntry" },
+      "description": "Deterministic emailKey lookup entries for active staff authorization"
     },
     "/staff/{staffId}": {
       "schema": { "$ref": "#/entities/Staff" },
-      "description": "Collection of staff profiles"
+      "description": "Team staff profiles"
+    },
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Student profiles, tasks, shortlist, essays, and documents"
+    },
+    "/portal_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/PortalSetting" },
+      "description": "Global portal settings and permissions matrix"
     },
     "/batches/{batchId}": {
       "schema": { "$ref": "#/entities/Batch" },
-      "description": "Collection of batch cohorts"
+      "description": "Cohort batches and mentor/student rosters"
     },
     "/events/{eventId}": {
       "schema": { "$ref": "#/entities/Event" },
-      "description": "Collection of scheduled events and meetings"
+      "description": "Scheduled counseling and class sessions"
     },
     "/conversations/{conversationId}": {
       "schema": { "$ref": "#/entities/Conversation" },
-      "description": "Collection of live student conversations and message threads"
+      "description": "Student communication threads"
+    },
+    "/launchpad_subjects/{subjectId}": {
+      "schema": { "$ref": "#/entities/LaunchpadSubject" },
+      "description": "Launchpad curriculum subjects"
+    },
+    "/launchpad_chapters/{chapterId}": {
+      "schema": { "$ref": "#/entities/LaunchpadChapter" },
+      "description": "Individual Launchpad week chapters"
+    },
+    "/launchpad_cert_questions/{questionId}": {
+      "schema": { "$ref": "#/entities/LaunchpadCertQuestion" },
+      "description": "Launchpad certification exam questions"
+    },
+    "/launchpad_team_permissions/{permId}": {
+      "schema": { "$ref": "#/entities/LaunchpadTeamPermission" },
+      "description": "Per-staff Launchpad overrides"
+    },
+    "/launchpad_enrollments/{studentId}": {
+      "schema": { "$ref": "#/entities/LaunchpadEnrollment" },
+      "description": "Launchpad student enrollments"
+    },
+    "/launchpad_releases/{releaseId}": {
+      "schema": { "$ref": "#/entities/LaunchpadRelease" },
+      "description": "Normalized per-student per-subject unlock flags"
+    },
+    "/launchpad_progress/{progressId}": {
+      "schema": { "$ref": "#/entities/LaunchpadProgress" },
+      "description": "Normalized per-student per-week Launchpad progress"
+    },
+    "/launchpad_certifications/{certId}": {
+      "schema": { "$ref": "#/entities/LaunchpadCertification" },
+      "description": "Normalized Launchpad certification records"
+    },
+    "/assignment_evaluations/{evalId}": {
+      "schema": { "$ref": "#/entities/AssignmentEvaluation" },
+      "description": "Launchpad practical exercise evaluations"
+    },
+    "/notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/AppNotification" },
+      "description": "Student and staff notifications"
     }
   }
 }

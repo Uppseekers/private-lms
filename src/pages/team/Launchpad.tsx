@@ -38,6 +38,7 @@ import {
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { useDatabase } from '@/context/DatabaseContext';
+import { getFirebaseIdToken } from '@/lib/firebase';
 import {
   LaunchpadSubject,
   LaunchpadWeekModule,
@@ -94,12 +95,7 @@ export default function TeamLaunchpad() {
     toggleLaunchpadSubjectRelease,
     launchpadProgress,
     launchpadCertifications,
-    initializeData,
   } = useDatabase();
-
-  useEffect(() => {
-    void initializeData(localStorage.getItem('auth_token') || '');
-  }, []);
 
   const { studentTabAccess, editCurriculumAccess } = useMemo(
     () => getStaffLaunchpadPermissions(currentUser, launchpadPermissions, permissionsMatrix),
@@ -730,17 +726,13 @@ export default function TeamLaunchpad() {
         reader.readAsDataURL(file);
       });
 
-      const email = (currentUser?.email || '').trim();
-      const uid = String(currentUser?.id || '1');
-      const token =
-        localStorage.getItem('auth_token') ||
-        (email ? `custom_${uid}_${email}` : 'custom_1_uppseekers@gmail.com');
+      const token = await getFirebaseIdToken();
 
       const res = await fetch('/api/launchpad/parse-chapter-doc', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           fileName: file.name,

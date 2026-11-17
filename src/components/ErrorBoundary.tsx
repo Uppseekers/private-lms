@@ -34,11 +34,6 @@ export default class ErrorBoundary extends Component<Props, State> {
   };
 
   private handleClearStorageAndReload = () => {
-    try {
-      // Clear oversized caches that might have triggered quota issues
-      localStorage.removeItem('uppseekers_temp_preview');
-      localStorage.removeItem('uppseekers_read_notifications');
-    } catch {}
     this.setState({ hasError: false, error: null, errorInfo: null });
     window.location.href = '/';
   };

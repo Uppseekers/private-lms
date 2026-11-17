@@ -1,12 +1,17 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema.ts';
 
 declare global {
   var _postgresPool: Pool | undefined;
+  var _drizzleDb: NodePgDatabase<typeof schema> | undefined;
 }
 
-export const createPool = () => {
+export function isSqlConfigured(): boolean {
+  return Boolean(process.env.SQL_HOST && process.env.SQL_DB_NAME && process.env.SQL_USER);
+}
+
+export const createPool = (): Pool => {
   if (!global._postgresPool) {
     global._postgresPool = new Pool({
       host: process.env.SQL_HOST,
@@ -24,5 +29,18 @@ export const createPool = () => {
   return global._postgresPool;
 };
 
-const pool = createPool();
-export const db = drizzle(pool, { schema });
+export function getDb(): NodePgDatabase<typeof schema> {
+  if (!global._drizzleDb) {
+    global._drizzleDb = drizzle(createPool(), { schema });
+  }
+  return global._drizzleDb;
+}
+
+// Lazy proxy so importing `db` in Firestore-only / Vercel serverless mode never instantiates a PG pool
+export const db: NodePgDatabase<typeof schema> = new Proxy({} as NodePgDatabase<typeof schema>, {
+  get(_target, prop, receiver) {
+    const instance = getDb() as any;
+    const value = Reflect.get(instance, prop, receiver);
+    return typeof value === 'function' ? value.bind(instance) : value;
+  },
+});

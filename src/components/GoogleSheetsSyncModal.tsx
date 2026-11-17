@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useDatabase } from '@/context/DatabaseContext';
+import { getFirebaseIdToken } from '@/lib/firebase';
 import { 
   formatStudentsForSheet, 
   formatTasksForSheet, 
@@ -45,9 +46,13 @@ export const GoogleSheetsSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
     setErrorMessage('');
 
     try {
+      const token = await getFirebaseIdToken();
       const response = await fetch('/api/sheets/sync', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           spreadsheetId: spreadsheetId || undefined,
           students,

@@ -5,6 +5,7 @@ import { Search, Save, Send, AlertCircle, Plus, CheckCircle2, Clock, MessageSqua
 import Markdown from 'react-markdown';
 import { cn } from '@/lib/utils';
 import { useDatabase } from '@/context/DatabaseContext';
+import { getFirebaseIdToken } from '@/lib/firebase';
 import { Student, Essay, EssayVersion, Task, TaskStage } from '@/types';
 
 
@@ -594,12 +595,12 @@ function EssayEditor({ essay, onClose, onSave, onSubmit, onRename, onDelete }: {
     setIsAiProofreading(true);
     setAiProofreadError('');
     try {
-      const token = localStorage.getItem('auth_token') || 'custom_demo_token';
+      const token = await getFirebaseIdToken();
       const res = await fetch('/api/ai/proofread-essay', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ essayText: content })
       });
@@ -1232,7 +1233,7 @@ export function AiProofreaderModal({
     setSelectedOptionIndex(null);
     setNarrativeRawResult('');
     try {
-      const token = localStorage.getItem('auth_token') || 'custom_demo_token';
+      const token = await getFirebaseIdToken();
       const studentProfileContext = currentStudent ? {
         name: currentStudent.name,
         major: currentStudent.major1 || currentStudent.major2 || 'Undecided',
@@ -1245,7 +1246,7 @@ export function AiProofreaderModal({
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({
           essayType: essayCategory,
@@ -1316,12 +1317,12 @@ ${opt.grammarAndToneAdvice}
     setIsLoading(true);
     setErrorMessage('');
     try {
-      const token = localStorage.getItem('auth_token') || 'custom_demo_token';
+      const token = await getFirebaseIdToken();
       const res = await fetch('/api/ai/proofread-essay', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ essayText: inputText })
       });

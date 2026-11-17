@@ -1,20 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { 
-  Key, 
-  Mail, 
-  Send, 
-  CheckCircle2, 
-  AlertCircle, 
-  X, 
-  Eye, 
-  EyeOff, 
+import {
+  Key,
+  Mail,
+  Send,
+  CheckCircle2,
+  AlertCircle,
+  X,
+  Eye,
+  EyeOff,
   Lock,
-  ExternalLink,
-  ShieldAlert
 } from 'lucide-react';
-import { db } from '@/lib/firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { auth, normalizeEmail } from '@/lib/firebase';
+import {
+  EmailAuthProvider,
+  reauthenticateWithCredential,
+  updatePassword,
+  sendPasswordResetEmail,
+} from 'firebase/auth';
 
 interface ChangePasswordModalProps {
   isOpen: boolean;
@@ -30,24 +33,16 @@ export default function ChangePasswordModal({
   userName = '',
 }: ChangePasswordModalProps) {
   const [email, setEmail] = useState(userEmail);
-  const [activeTab, setActiveTab] = useState<'email' | 'direct'>('email');
-  
-  // Email-triggered flow state
-  const [emailSent, setEmailSent] = useState(false);
-  const [code, setCode] = useState('');
-  const [token, setToken] = useState('');
+  const [activeTab, setActiveTab] = useState<'direct' | 'email'>('direct');
+
+  const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  
-  // Direct change flow state
-  const [currentPassword, setCurrentPassword] = useState('');
-  
-  // Status
+
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (userEmail) {
@@ -58,15 +53,11 @@ export default function ChangePasswordModal({
   if (!isOpen) return null;
 
   const resetForm = () => {
-    setEmailSent(false);
-    setCode('');
-    setToken('');
     setNewPassword('');
     setConfirmPassword('');
     setCurrentPassword('');
     setError('');
     setSuccessMsg('');
-    setPreviewUrl(null);
   };
 
   const handleClose = () => {
@@ -74,224 +65,67 @@ export default function ChangePasswordModal({
     onClose();
   };
 
-  // Sync password with Firestore document
-  const syncWithFirestore = async (targetEmail: string, pass: string) => {
-    try {
-      const cleanEmail = targetEmail.trim().toLowerCase();
-      // Update in students
-      const stuSnap = await getDocs(collection(db, 'students'));
-      for (const d of stuSnap.docs) {
-        const data = d.data();
-        if (data.email && data.email.trim().toLowerCase() === cleanEmail) {
-          await updateDoc(doc(db, 'students', d.id), { password: pass });
-        }
-      }
-      // Update in staff
-      const staffSnap = await getDocs(collection(db, 'staff'));
-      for (const d of staffSnap.docs) {
-        const data = d.data();
-        if (data.email && data.email.trim().toLowerCase() === cleanEmail) {
-          await updateDoc(doc(db, 'staff', d.id), { password: pass });
-        }
-      }
-    } catch (e) {
-      console.warn('Firestore password sync:', e);
-    }
-  };
-
-  // Trigger password reset email
-  const handleTriggerEmail = async () => {
-    const cleanEmail = email.trim().toLowerCase();
+  const handleTriggerResetEmail = async () => {
+    const cleanEmail = normalizeEmail(email || auth.currentUser?.email);
     if (!cleanEmail) {
-      setError('Please enter your email address');
+      setError('Please enter your email address.');
       return;
     }
 
     setLoading(true);
     setError('');
     setSuccessMsg('');
-    setPreviewUrl(null);
-
     try {
-      let apiSuccess = false;
-      try {
-        const res = await fetch('/api/auth/request-password-reset', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: cleanEmail }),
-        });
-        const text = await res.text();
-        let data: any = null;
-        try { data = JSON.parse(text); } catch {}
-
-        if (res.ok && data && data.success) {
-          apiSuccess = true;
-          setEmailSent(true);
-          if (data.token) setToken(data.token);
-          if (data.code) setCode(data.code);
-          if (data.previewUrl) setPreviewUrl(data.previewUrl);
-          setSuccessMsg(`Password reset email triggered to ${cleanEmail}! Enter the verification code below.`);
-        }
-      } catch (fetchErr) {
-        console.warn('[ChangePasswordModal Notice] API request notice:', fetchErr);
-      }
-
-      if (!apiSuccess) {
-        const fallbackCode = Math.floor(100000 + Math.random() * 900000).toString();
-        const fallbackToken = `local_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-        setCode(fallbackCode);
-        setToken(fallbackToken);
-        try {
-          sessionStorage.setItem(`pwd_reset_${cleanEmail}`, JSON.stringify({
-            code: fallbackCode,
-            token: fallbackToken,
-            expiresAt: Date.now() + 3600000
-          }));
-        } catch {}
-        setEmailSent(true);
-        setSuccessMsg(`Verification code generated: ${fallbackCode}. Enter this code below to set your new password.`);
-      }
+      await sendPasswordResetEmail(auth, cleanEmail, {
+        url: `${window.location.origin}/login`,
+      });
+      setSuccessMsg(`A password reset link has been sent to ${cleanEmail} via Firebase Authentication.`);
     } catch (err: any) {
-      setError(err.message || 'Error triggering reset email');
+      setError(err?.message || 'Error sending password reset email.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Complete password reset with code
-  const handleCompleteReset = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    if (newPassword.length < 6) {
-      setError('Password must be at least 6 characters long');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-
-    const cleanEmail = email.trim().toLowerCase();
-    setLoading(true);
-
-    try {
-      let resetSuccessful = false;
-      try {
-        const res = await fetch('/api/auth/complete-password-reset', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            email: cleanEmail,
-            code: code.trim(),
-            token: token.trim(),
-            newPassword,
-          }),
-        });
-        const text = await res.text();
-        let data: any = null;
-        try { data = JSON.parse(text); } catch {}
-
-        if (res.ok && data && data.success) {
-          resetSuccessful = true;
-        }
-      } catch (apiErr) {
-        console.warn('[ChangePasswordModal Notice] API complete notice:', apiErr);
-      }
-
-      if (!resetSuccessful) {
-        try {
-          const stored = sessionStorage.getItem(`pwd_reset_${cleanEmail}`);
-          if (stored) {
-            const parsed = JSON.parse(stored);
-            if (parsed.code === code.trim() || parsed.token === token.trim()) {
-              resetSuccessful = true;
-              sessionStorage.removeItem(`pwd_reset_${cleanEmail}`);
-            }
-          }
-        } catch {}
-      }
-
-      if (resetSuccessful || code.trim().length === 6) {
-        await syncWithFirestore(cleanEmail, newPassword);
-
-        // Update local storage caches
-        try {
-          const rawStudents = localStorage.getItem('uppseekers_students_v2');
-          if (rawStudents) {
-            const studentsArr = JSON.parse(rawStudents);
-            const updated = studentsArr.map((s: any) => 
-              s.email?.toLowerCase().trim() === cleanEmail ? { ...s, password: newPassword } : s
-            );
-            localStorage.setItem('uppseekers_students_v2', JSON.stringify(updated));
-          }
-          const rawStaff = localStorage.getItem('uppseekers_staff_v2');
-          if (rawStaff) {
-            const staffArr = JSON.parse(rawStaff);
-            const updated = staffArr.map((s: any) => 
-              s.email?.toLowerCase().trim() === cleanEmail ? { ...s, password: newPassword } : s
-            );
-            localStorage.setItem('uppseekers_staff_v2', JSON.stringify(updated));
-          }
-        } catch {}
-
-        setSuccessMsg('Your password has been successfully updated!');
-        setTimeout(() => {
-          handleClose();
-        }, 2000);
-      } else {
-        throw new Error('Invalid verification code. Please check the code and try again.');
-      }
-    } catch (err: any) {
-      setError(err.message || 'Error completing reset');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Direct change password handler
   const handleDirectChange = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setSuccessMsg('');
 
+    if (!currentPassword) {
+      setError('Please enter your current password to verify your identity.');
+      return;
+    }
     if (newPassword.length < 6) {
-      setError('Password must be at least 6 characters long');
+      setError('New password must be at least 6 characters long.');
       return;
     }
     if (newPassword !== confirmPassword) {
-      setError('Passwords do not match');
+      setError('New passwords do not match.');
       return;
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    const fbUser = auth.currentUser;
+    if (!fbUser || !fbUser.email) {
+      setError('No active Firebase session found. Please sign in again.');
+      return;
+    }
+
     setLoading(true);
-
     try {
-      // Check admin or direct endpoint
-      const res = await fetch('/api/admin/change-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token') || 'custom_user'}`
-        },
-        body: JSON.stringify({
-          email: cleanEmail,
-          newPassword,
-        })
-      });
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        throw new Error(data.error || 'Failed to change password');
-      }
-
-      await syncWithFirestore(cleanEmail, newPassword);
-      setSuccessMsg('Password successfully changed!');
+      const cred = EmailAuthProvider.credential(fbUser.email, currentPassword);
+      await reauthenticateWithCredential(fbUser, cred);
+      await updatePassword(fbUser, newPassword);
+      setSuccessMsg('Your password has been updated successfully!');
       setTimeout(() => {
         handleClose();
-      }, 1500);
+      }, 1400);
     } catch (err: any) {
-      setError(err.message || 'Error changing password');
+      if (err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential') {
+        setError('Your current password is incorrect.');
+      } else {
+        setError(err?.message || 'Error updating password.');
+      }
     } finally {
       setLoading(false);
     }
@@ -300,7 +134,6 @@ export default function ChangePasswordModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 animate-in fade-in duration-200">
       <div className="bg-white w-full max-w-lg rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col">
-        {/* Header */}
         <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-blue-600/30 border border-blue-500/30 flex items-center justify-center text-blue-400">
@@ -309,7 +142,7 @@ export default function ChangePasswordModal({
             <div>
               <h3 className="font-semibold text-base leading-snug">Change Password</h3>
               <p className="text-xs text-slate-400">
-                {userName ? `${userName} • ` : ''}{email || 'User Account'}
+                {userName ? `${userName} • ` : ''}{email || auth.currentUser?.email || 'User Account'}
               </p>
             </div>
           </div>
@@ -321,23 +154,10 @@ export default function ChangePasswordModal({
           </button>
         </div>
 
-        {/* Tab selection */}
         <div className="flex border-b border-slate-200 bg-slate-50 text-xs font-medium">
           <button
             type="button"
-            onClick={() => { setActiveTab('email'); setError(''); }}
-            className={`flex-1 py-2.5 px-4 text-center border-b-2 flex items-center justify-center gap-1.5 transition ${
-              activeTab === 'email'
-                ? 'border-blue-600 text-blue-600 bg-white font-semibold'
-                : 'border-transparent text-slate-500 hover:text-slate-700'
-            }`}
-          >
-            <Mail className="w-3.5 h-3.5" />
-            Email Verification Flow (Recommended)
-          </button>
-          <button
-            type="button"
-            onClick={() => { setActiveTab('direct'); setError(''); }}
+            onClick={() => { setActiveTab('direct'); setError(''); setSuccessMsg(''); }}
             className={`flex-1 py-2.5 px-4 text-center border-b-2 flex items-center justify-center gap-1.5 transition ${
               activeTab === 'direct'
                 ? 'border-blue-600 text-blue-600 bg-white font-semibold'
@@ -345,11 +165,22 @@ export default function ChangePasswordModal({
             }`}
           >
             <Lock className="w-3.5 h-3.5" />
-            Direct Password Change
+            Update Password Now
+          </button>
+          <button
+            type="button"
+            onClick={() => { setActiveTab('email'); setError(''); setSuccessMsg(''); }}
+            className={`flex-1 py-2.5 px-4 text-center border-b-2 flex items-center justify-center gap-1.5 transition ${
+              activeTab === 'email'
+                ? 'border-blue-600 text-blue-600 bg-white font-semibold'
+                : 'border-transparent text-slate-500 hover:text-slate-700'
+            }`}
+          >
+            <Mail className="w-3.5 h-3.5" />
+            Send Reset Email
           </button>
         </div>
 
-        {/* Content Body */}
         <div className="p-6 space-y-4">
           {error && (
             <div className="bg-red-50 text-red-600 text-xs p-3 rounded-lg border border-red-100 flex items-start gap-2">
@@ -361,154 +192,23 @@ export default function ChangePasswordModal({
           {successMsg && (
             <div className="bg-emerald-50 text-emerald-700 text-xs p-3 rounded-lg border border-emerald-100 flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" />
-              <div className="flex-1">
-                <p className="font-medium">{successMsg}</p>
-                {previewUrl && (
-                  <a
-                    href={previewUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center gap-1 mt-1 font-semibold text-emerald-800 underline hover:text-emerald-900"
-                  >
-                    <ExternalLink className="w-3 h-3" /> View Triggered Email (Dev Preview)
-                  </a>
-                )}
-              </div>
+              <p className="font-medium">{successMsg}</p>
             </div>
           )}
 
-          {/* Tab 1: Email Triggered Reset Flow */}
-          {activeTab === 'email' && (
-            <div className="space-y-4">
-              <div className="bg-blue-50/70 border border-blue-100 rounded-xl p-3.5">
-                <p className="text-xs text-blue-900 leading-relaxed font-medium">
-                  We will trigger an email to your user email ID (<strong>{email}</strong>) with a secure reset link and a 6-digit OTP verification code.
-                </p>
-              </div>
-
-              {!emailSent ? (
-                <div className="space-y-4 pt-1">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      User Email Address
-                    </label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      required
-                    />
-                  </div>
-
-                  <Button
-                    type="button"
-                    onClick={handleTriggerEmail}
-                    disabled={loading || !email}
-                    className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 flex items-center justify-center gap-2"
-                  >
-                    <Send className="w-4 h-4" />
-                    {loading ? 'Triggering Email...' : 'Trigger Password Reset Email'}
-                  </Button>
-                </div>
-              ) : (
-                <form onSubmit={handleCompleteReset} className="space-y-3.5 pt-1">
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-xs font-medium text-slate-700">
-                        6-Digit Verification Code
-                      </label>
-                      <button
-                        type="button"
-                        onClick={handleTriggerEmail}
-                        className="text-xs text-blue-600 hover:underline"
-                      >
-                        Resend email?
-                      </button>
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      placeholder="e.g. 481920"
-                      maxLength={6}
-                      value={code}
-                      onChange={(e) => setCode(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm tracking-widest font-mono text-center focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      New Password
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showPassword ? 'text' : 'password'}
-                        required
-                        placeholder="At least 6 characters"
-                        value={newPassword}
-                        onChange={(e) => setNewPassword(e.target.value)}
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-3 pr-10 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPassword(!showPassword)}
-                        className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
-                      >
-                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">
-                      Confirm New Password
-                    </label>
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      placeholder="Re-enter new password"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-
-                  <div className="pt-2 flex items-center justify-end gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => setEmailSent(false)}
-                      className="text-xs"
-                    >
-                      Back
-                    </Button>
-                    <Button
-                      type="submit"
-                      disabled={loading}
-                      className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs px-4"
-                    >
-                      {loading ? 'Updating Password...' : 'Save New Password'}
-                    </Button>
-                  </div>
-                </form>
-              )}
-            </div>
-          )}
-
-          {/* Tab 2: Direct Change Password Flow */}
-          {activeTab === 'direct' && (
+          {activeTab === 'direct' ? (
             <form onSubmit={handleDirectChange} className="space-y-3.5">
               <div>
                 <label className="block text-xs font-medium text-slate-700 mb-1">
-                  User Account Email
+                  Current Password
                 </label>
                 <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  type={showPassword ? 'text' : 'password'}
                   required
+                  placeholder="Enter your current password"
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
 
@@ -550,12 +250,7 @@ export default function ChangePasswordModal({
               </div>
 
               <div className="pt-2 flex items-center justify-end gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleClose}
-                  className="text-xs"
-                >
+                <Button type="button" variant="outline" onClick={handleClose} className="text-xs">
                   Cancel
                 </Button>
                 <Button
@@ -563,10 +258,42 @@ export default function ChangePasswordModal({
                   disabled={loading}
                   className="bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs px-4"
                 >
-                  {loading ? 'Changing Password...' : 'Update Password Directly'}
+                  {loading ? 'Updating Password...' : 'Save New Password'}
                 </Button>
               </div>
             </form>
+          ) : (
+            <div className="space-y-4">
+              <div className="bg-blue-50/70 border border-blue-100 rounded-xl p-3.5">
+                <p className="text-xs text-blue-900 leading-relaxed font-medium">
+                  Forgot your current password? Send a secure Firebase password reset link to{' '}
+                  <strong>{email || auth.currentUser?.email}</strong>.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Account Email Address
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  required
+                />
+              </div>
+
+              <Button
+                type="button"
+                onClick={handleTriggerResetEmail}
+                disabled={loading || !email}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 flex items-center justify-center gap-2"
+              >
+                <Send className="w-4 h-4" />
+                {loading ? 'Sending Reset Email...' : 'Send Password Reset Email'}
+              </Button>
+            </div>
           )}
         </div>
       </div>

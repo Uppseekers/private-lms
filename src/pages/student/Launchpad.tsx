@@ -65,12 +65,7 @@ export default function StudentLaunchpad() {
     launchpadCertifications: rawLaunchpadCertifications,
     saveLaunchpadCertification,
     launchpadEvaluations: rawLaunchpadEvaluations,
-    initializeData,
   } = useDatabase();
-
-  useEffect(() => {
-    void initializeData(localStorage.getItem('auth_token') || '');
-  }, []);
 
   const launchpadSubjects = Array.isArray(rawLaunchpadSubjects) ? rawLaunchpadSubjects : [];
   const launchpadChapters = Array.isArray(rawLaunchpadChapters) ? rawLaunchpadChapters : [];
@@ -82,15 +77,7 @@ export default function StudentLaunchpad() {
   const launchpadEvaluations = Array.isArray(rawLaunchpadEvaluations) ? rawLaunchpadEvaluations : [];
 
   const currentStudent = useMemo(() => {
-    const savedAuthEmail = (localStorage.getItem('auth_user_email') || '').trim().toLowerCase();
-    const cleanUserEmail = (
-      ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? currentUser?.email : '') ||
-      savedAuthEmail ||
-      currentUser?.email ||
-      ''
-    )
-      .trim()
-      .toLowerCase();
+    const cleanUserEmail = (currentUser?.email || '').trim().toLowerCase();
 
     return (
       students.find(
@@ -98,31 +85,15 @@ export default function StudentLaunchpad() {
           (currentUser?.id && s.id === currentUser.id) ||
           (cleanUserEmail && (s.email || '').trim().toLowerCase() === cleanUserEmail)
       ) ||
-      ((currentUser?.role || '').toUpperCase() === 'STUDENT'
-        ? (currentUser as any)
-        : savedAuthEmail && savedAuthEmail !== 'uppseekers@gmail.com'
-        ? ({
-            id: currentUser?.id || savedAuthEmail,
-            name: savedAuthEmail.split('@')[0] || 'Student',
-            email: savedAuthEmail,
-          } as any)
-        : students[0])
+      ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? (currentUser as any) : students[0])
     );
   }, [students, currentUser]);
 
-  const studentId = currentStudent?.id || currentUser?.id || 'STU-101';
+  const studentId = currentStudent?.id || currentUser?.id || '';
   const studentName = currentStudent?.name || currentUser?.name || 'Student';
   const cleanStudentEmail = useMemo(() => {
-    const savedAuthEmail = (localStorage.getItem('auth_user_email') || '').trim().toLowerCase();
-    return (
-      currentStudent?.email ||
-      ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? currentUser?.email : '') ||
-      (savedAuthEmail !== 'uppseekers@gmail.com' ? savedAuthEmail : '') ||
-      ''
-    )
-      .trim()
-      .toLowerCase();
-  }, [currentStudent?.email, currentUser?.email, currentUser?.role]);
+    return (currentStudent?.email || currentUser?.email || '').trim().toLowerCase();
+  }, [currentStudent?.email, currentUser?.email]);
 
   const studentCandidateIds = useMemo(() => {
     const ids = new Set<string>();

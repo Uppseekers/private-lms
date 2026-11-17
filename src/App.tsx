@@ -26,11 +26,40 @@ import StudentActivityLog from './pages/student/ActivityLog';
 import StudentLaunchpad from './pages/student/Launchpad';
 import TeamLaunchpad from './pages/team/Launchpad';
 
-const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
-  const { isAuthenticated } = useDatabase();
-  if (!isAuthenticated) {
+const ProtectedRoute = ({
+  children,
+  allowedRoleType,
+}: {
+  children: React.ReactNode;
+  allowedRoleType?: 'student' | 'team';
+}) => {
+  const { isAuthenticated, isFirebaseAuthReady, currentUser } = useDatabase();
+
+  if (!isFirebaseAuthReady) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            Verifying Portal Session...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated || !currentUser) {
     return <Navigate to="/login" replace />;
   }
+
+  const isStudent = (currentUser.role || '').toUpperCase() === 'STUDENT';
+  if (allowedRoleType === 'team' && isStudent) {
+    return <Navigate to="/student/dashboard" replace />;
+  }
+  if (allowedRoleType === 'student' && !isStudent) {
+    return <Navigate to="/team/dashboard" replace />;
+  }
+
   return <>{children}</>;
 };
 
@@ -44,7 +73,7 @@ export default function App() {
           <Route path="/reset-password" element={<ResetPassword />} />
           
           {/* Student Routes */}
-          <Route path="/student" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+          <Route path="/student" element={<ProtectedRoute allowedRoleType="student"><AppLayout /></ProtectedRoute>}>
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<StudentDashboard />} />
             <Route path="profile" element={<StudentProfile />} />
@@ -60,7 +89,7 @@ export default function App() {
           </Route>
 
           {/* Team Routes */}
-          <Route path="/team" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
+          <Route path="/team" element={<ProtectedRoute allowedRoleType="team"><AppLayout /></ProtectedRoute>}>
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<TeamDashboard />} />
             <Route path="scheduler" element={<TeamScheduler />} />

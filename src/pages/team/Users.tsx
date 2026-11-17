@@ -13,7 +13,17 @@ import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/Cha
 import BulkCounselorTransferModal from '@/components/BulkCounselorTransferModal';
 
 export default function TeamUsers() {
-  const { students, setStudents, updateStudent, staff, setStaff, currentUser, permissionsMatrix } = useDatabase();
+  const {
+    students,
+    setStudents,
+    updateStudent,
+    staff,
+    setStaff,
+    currentUser,
+    permissionsMatrix,
+    provisionPortalUser,
+    resetPortalUserPassword,
+  } = useDatabase();
   const isAdmin = isUserAdmin(currentUser);
   const [activeViewTab, setActiveViewTab] = useState<'students' | 'staff'>('students');
   const [searchQuery, setSearchQuery] = useState('');
@@ -39,70 +49,27 @@ export default function TeamUsers() {
     const cleanPwd = newPassword.trim();
     let targetEmail = userForPasswordChange?.email || '';
     let targetName = userForPasswordChange?.name || '';
-    let targetRole = userForPasswordChange?.role || '';
 
     if (userType === 'student') {
       const targetStu = students.find(s => s.id === userId);
       if (targetStu) {
         targetEmail = targetStu.email || targetEmail;
         targetName = targetStu.name || targetName;
-        const updatedStudent: Student = {
-          ...targetStu,
-          password: cleanPwd,
-          activities: [
-            {
-              id: 'act_' + Date.now(),
-              date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-              type: 'SYSTEM',
-              description: `Portal password updated by Admin (${currentUser?.name || 'Admin'})`
-            },
-            ...(targetStu.activities || [])
-          ]
-        };
-        void updateStudent(updatedStudent);
-        if (selectedStudent?.id === userId) {
-          setSelectedStudent(updatedStudent);
-        }
       }
     } else {
       const targetStf = staff.find(s => s.id === userId);
       if (targetStf) {
         targetEmail = targetStf.email || targetEmail;
         targetName = targetStf.name || targetName;
-        targetRole = targetStf.role || targetRole;
-      }
-      const updatedStaff = staff.map(s => {
-        if (s.id === userId) {
-          return { ...s, password: cleanPwd };
-        }
-        return s;
-      });
-      setStaff(updatedStaff);
-      if (selectedStaffMember?.id === userId) {
-        setSelectedStaffMember({ ...selectedStaffMember, password: cleanPwd });
       }
     }
 
-    const token = localStorage.getItem('auth_token') || 'admin_token';
-    try {
-      await fetch('/api/admin/change-password', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`
-        },
-        body: JSON.stringify({
-          userId,
-          email: targetEmail,
-          name: targetName,
-          role: targetRole,
-          newPassword: cleanPwd,
-          userType
-        })
-      });
-    } catch (e) {
-      console.warn('Backend password sync error (fallback active):', e);
-    }
+    return resetPortalUserPassword({
+      email: targetEmail,
+      name: targetName,
+      newPassword: cleanPwd,
+      userType,
+    });
   };
 
   const filteredStudents = (students || []).filter(s => {
@@ -524,7 +491,6 @@ export default function TeamUsers() {
                               email: student.email,
                               role: 'Student',
                               type: 'student',
-                              currentPassword: student.password || 'Student@123'
                             });
                           }}
                         >
@@ -627,7 +593,6 @@ export default function TeamUsers() {
                               email: member.email,
                               role: member.role,
                               type: 'staff',
-                              currentPassword: member.password || 'Staff@123'
                             });
                           }}
                         >
@@ -705,16 +670,15 @@ export default function TeamUsers() {
               <h3 className="text-base font-bold text-slate-900">Add New Staff / Mentor User</h3>
               <button onClick={() => setIsAddStaffModalOpen(false)} className="text-slate-400 hover:text-slate-600"><X className="w-5 h-5" /></button>
             </div>
-            <AddStaffForm onClose={() => setIsAddStaffModalOpen(false)} onAdd={(newStaff) => {
+            <AddStaffForm onClose={() => setIsAddStaffModalOpen(false)} onAdd={(newStaff, initialPassword) => {
               setStaff([...staff, newStaff]);
-              fetch('/api/staff/create', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${localStorage.getItem('auth_token') || 'custom_user'}`
-                },
-                body: JSON.stringify(newStaff)
-              }).catch(console.error);
+              void provisionPortalUser({
+                name: newStaff.name,
+                email: newStaff.email,
+                password: initialPassword,
+                role: newStaff.role,
+                userType: 'staff',
+              });
               setIsAddStaffModalOpen(false);
             }} />
           </div>
@@ -735,6 +699,16 @@ export default function TeamUsers() {
               onClose={() => setIsImportModalOpen(false)} 
               onImport={(newStudents) => {
                 setStudents([...newStudents, ...students]);
+                newStudents.forEach((stu) => {
+                  const tempPwd = Math.random().toString(36).slice(-8) + 'S1!';
+                  void provisionPortalUser({
+                    name: stu.name,
+                    email: stu.email,
+                    password: tempPwd,
+                    role: 'STUDENT',
+                    userType: 'student',
+                  });
+                });
                 setIsImportModalOpen(false);
               }}
               counselorName={currentUser?.name || 'Admin'}
@@ -750,6 +724,13 @@ export default function TeamUsers() {
           onClose={() => setUserForPasswordChange(null)}
           targetUser={userForPasswordChange}
           onSavePassword={handleSaveUserPassword}
+          onSendResetEmail={async (em) => {
+            await resetPortalUserPassword({
+              email: em,
+              name: userForPasswordChange.name,
+              userType: userForPasswordChange.type,
+            });
+          }}
         />
       )}
 
@@ -773,7 +754,7 @@ export default function TeamUsers() {
   );
 }
 
-function AddStaffForm({ onClose, onAdd }: { onClose: () => void, onAdd: (s: StaffMember) => void }) {
+function AddStaffForm({ onClose, onAdd }: { onClose: () => void, onAdd: (s: StaffMember, initialPassword: string) => void }) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('COUNSELOR');
@@ -783,14 +764,13 @@ function AddStaffForm({ onClose, onAdd }: { onClose: () => void, onAdd: (s: Staf
     e.preventDefault();
     if (!name || !email) return;
     onAdd({
-      id: Math.random().toString(),
+      id: `STAFF-${Math.floor(1000 + Math.random() * 9000)}`,
       name,
       email,
       role,
       students: 'All',
       status: 'Active',
-      password
-    });
+    }, password.trim() || 'Uppseekers@123');
   };
 
   return (
@@ -998,7 +978,7 @@ function StudentDetailDrawer({
   initialTab?: string;
   initialActivityMode?: 'extended' | 'mini';
 }) {
-  const { currentUser, events, batches, permissionsMatrix, conversations, sendConversationMessage } = useDatabase();
+  const { currentUser, events, batches, permissionsMatrix, conversations, sendConversationMessage, resetPortalUserPassword } = useDatabase();
   const [activeTab, setActiveTab] = useState(initialTab);
   const [activityViewMode, setActivityViewMode] = useState<'extended' | 'mini'>(initialActivityMode);
   const [cardViewOverrides, setCardViewOverrides] = useState<Record<string, 'extended' | 'mini'>>({});
@@ -2272,40 +2252,21 @@ function StudentDetailDrawer({
             email: student.email,
             role: 'Student',
             type: 'student',
-            currentPassword: student.password || 'Student@123'
           }}
-          onSavePassword={async (userId, type, newPassword) => {
-            const cleanPwd = newPassword.trim();
-            const updatedStudent: Student = {
-              ...student,
-              password: cleanPwd,
-              activities: [
-                {
-                  id: 'act_' + Date.now(),
-                  date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-                  type: 'SYSTEM',
-                  description: `Portal password updated by Admin (${currentUser?.name || 'Admin'})`
-                },
-                ...(student.activities || [])
-              ]
-            };
-            onUpdate(updatedStudent);
-            const token = localStorage.getItem('auth_token') || 'admin_token';
-            try {
-              await fetch('/api/admin/change-password', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({
-                  userId,
-                  email: student.email,
-                  name: student.name,
-                  newPassword: cleanPwd,
-                  userType: 'student'
-                })
-              });
-            } catch (e) {
-              console.warn('Backend password sync error:', e);
-            }
+          onSavePassword={async (_userId, _type, newPassword) => {
+            return resetPortalUserPassword({
+              email: student.email,
+              name: student.name,
+              newPassword: newPassword.trim(),
+              userType: 'student',
+            });
+          }}
+          onSendResetEmail={async (em) => {
+            await resetPortalUserPassword({
+              email: em,
+              name: student.name,
+              userType: 'student',
+            });
           }}
         />
       )}
@@ -2987,7 +2948,7 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
 }
 
 function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s: Student) => void }) {
-  const { staff } = useDatabase();
+  const { staff, provisionPortalUser } = useDatabase();
   const newId = `STU-2026-${Math.floor(Math.random() * 1000).toString().padStart(4, '0')}`;
   
   const [formData, setFormData] = useState({
@@ -3010,8 +2971,7 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
   const handleSave = () => {
     if(!formData.name || !formData.email) return; // basic validation
     
-    // Generate a secure random password (8 chars)
-    const generatedPassword = formData.password || Math.random().toString(36).slice(-8) + Math.floor(Math.random() * 10);
+    const initialPassword = (formData.password || '').trim() || (Math.random().toString(36).slice(-8) + 'A1!');
 
     const newStudent: Student = {
       id: newId,
@@ -3026,45 +2986,33 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
       satVerbalMentor: formData.satVerbalMentor,
       satMathMentor: formData.satMathMentor,
       readiness: 0,
-      password: generatedPassword,
       activities: [
         {
           id: '1',
           date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
           type: 'SYSTEM',
-          description: formData.sendInvite ? 'Student profile created. Invitation email sent.' : 'Student profile created.'
+          description: formData.sendInvite ? 'Student profile created. Firebase Auth invite triggered.' : 'Student profile created.'
         }
       ],
       shortlist: [],
       documents: [],
-    essays: []
-  };
+      essays: []
+    };
+
+    void provisionPortalUser({
+      name: newStudent.name,
+      email: newStudent.email,
+      password: initialPassword,
+      role: 'STUDENT',
+      userType: 'student',
+    });
 
     if (formData.sendInvite) {
-      // Send student to Cloud SQL DB
-      fetch('/api/students/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
-        },
-        body: JSON.stringify(newStudent)
-      }).catch(console.error);
-
       setShowToast(true);
       setTimeout(() => {
         onSave(newStudent);
-      }, 1500);
+      }, 1000);
     } else {
-      fetch('/api/students/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${localStorage.getItem('auth_token') || ''}`
-        },
-        body: JSON.stringify(newStudent)
-      }).catch(console.error);
-
       onSave(newStudent);
     }
   }
@@ -4129,7 +4077,7 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
 
 
 function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
-  const { currentUser, staff } = useDatabase();
+  const { currentUser, staff, resetPortalUserPassword } = useDatabase();
   const [isEditing, setIsEditing] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   
@@ -4310,8 +4258,8 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                   </div>
                   <div className="bg-white p-2.5 rounded-lg border border-amber-200/80 flex items-center justify-between">
                     <div>
-                      <span className="text-slate-400 font-bold block text-[10px] uppercase">Portal Password</span>
-                      <span className="text-slate-800 font-mono font-bold">{student.password || 'Student@123 (Default)'}</span>
+                      <span className="text-slate-400 font-bold block text-[10px] uppercase">Authentication Provider</span>
+                      <span className="text-slate-800 font-semibold">Managed via Firebase Auth (encrypted)</span>
                     </div>
                   </div>
                 </div>
@@ -4627,40 +4575,21 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
             email: student.email,
             role: 'Student',
             type: 'student',
-            currentPassword: student.password || 'Student@123'
           }}
-          onSavePassword={async (userId, type, newPassword) => {
-            const cleanPwd = newPassword.trim();
-            const updatedStudent: Student = {
-              ...student,
-              password: cleanPwd,
-              activities: [
-                {
-                  id: 'act_' + Date.now(),
-                  date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-                  type: 'SYSTEM',
-                  description: `Portal password updated by Admin (${currentUser?.name || 'Admin'})`
-                },
-                ...(student.activities || [])
-              ]
-            };
-            onUpdate(updatedStudent);
-            const token = localStorage.getItem('auth_token') || 'admin_token';
-            try {
-              await fetch('/api/admin/change-password', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({
-                  userId,
-                  email: student.email,
-                  name: student.name,
-                  newPassword: cleanPwd,
-                  userType: 'student'
-                })
-              });
-            } catch (e) {
-              console.warn('Backend password sync error:', e);
-            }
+          onSavePassword={async (_userId, _type, newPassword) => {
+            return resetPortalUserPassword({
+              email: student.email,
+              name: student.name,
+              newPassword: newPassword.trim(),
+              userType: 'student',
+            });
+          }}
+          onSendResetEmail={async (em) => {
+            await resetPortalUserPassword({
+              email: em,
+              name: student.name,
+              userType: 'student',
+            });
           }}
         />
       )}
@@ -4678,7 +4607,7 @@ function StaffDetailDrawer({
   onClose: () => void; 
   onSelectStudent?: (student: Student) => void;
 }) {
-  const { students, events, updateStudent, permissionsMatrix, currentUser, staff, setStaff } = useDatabase();
+  const { students, events, updateStudent, permissionsMatrix, currentUser, staff, setStaff, resetPortalUserPassword } = useDatabase();
   const [activeTab, setActiveTab] = useState<'students' | 'tasks' | 'logs'>('students');
   const [logSearchQuery, setLogSearchQuery] = useState('');
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
@@ -4841,7 +4770,7 @@ function StaffDetailDrawer({
         <div className="bg-slate-950 border-b border-amber-500/20 px-6 py-2.5 flex items-center justify-between text-xs text-amber-200 shrink-0">
           <div className="flex items-center gap-2">
             <Shield className="w-4 h-4 text-amber-400 shrink-0" />
-            <span>Admin Access: Current Password: <strong className="font-mono text-amber-300">{staffMember.password || 'Staff@123'}</strong></span>
+            <span>Authentication: <strong className="text-amber-300">Firebase Email/Password Auth (encrypted)</strong></span>
           </div>
           <Button
             size="sm"
@@ -4849,7 +4778,7 @@ function StaffDetailDrawer({
             onClick={() => setIsChangePasswordOpen(true)}
             className="text-xs font-bold text-amber-300 hover:text-white hover:bg-amber-500/20 h-7 px-2.5 flex items-center gap-1"
           >
-            <KeyRound className="w-3.5 h-3.5" /> Change Password
+            <KeyRound className="w-3.5 h-3.5" /> Reset Password
           </Button>
         </div>
       )}
@@ -5080,34 +5009,21 @@ function StaffDetailDrawer({
             email: staffMember.email,
             role: staffMember.role,
             type: 'staff',
-            currentPassword: staffMember.password || 'Staff@123'
           }}
-          onSavePassword={async (userId, type, newPassword) => {
-            const cleanPwd = newPassword.trim();
-            const updatedStaff = staff.map(s => {
-              if (s.id === userId) {
-                return { ...s, password: cleanPwd };
-              }
-              return s;
+          onSavePassword={async (_userId, _type, newPassword) => {
+            return resetPortalUserPassword({
+              email: staffMember.email,
+              name: staffMember.name,
+              newPassword: newPassword.trim(),
+              userType: 'staff',
             });
-            setStaff(updatedStaff);
-            const token = localStorage.getItem('auth_token') || 'admin_token';
-            try {
-              await fetch('/api/admin/change-password', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({
-                  userId,
-                  email: staffMember.email,
-                  name: staffMember.name,
-                  role: staffMember.role,
-                  newPassword: cleanPwd,
-                  userType: 'staff'
-                })
-              });
-            } catch (e) {
-              console.warn('Backend password sync error:', e);
-            }
+          }}
+          onSendResetEmail={async (em) => {
+            await resetPortalUserPassword({
+              email: em,
+              name: staffMember.name,
+              userType: 'staff',
+            });
           }}
         />
       )}
