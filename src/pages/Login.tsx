@@ -166,6 +166,7 @@ export default function Login() {
         setError('Email is still marked as unverified. Please open the verification link in your inbox first.');
         return;
       }
+      await auth.currentUser.getIdToken(true);
       // Re-trigger Firebase auth listener cleanly with verified token
       const cleanEmail = normalizeEmail(email || auth.currentUser.email);
       if (cleanEmail && password) {

@@ -62,6 +62,7 @@ import {
   toValidDocId,
   OperationType,
   buildFirestoreErrorInfo,
+  testFirestoreConnection,
 } from '@/lib/firebase';
 import { normalizeTask, normalizeActivity } from '@/lib/taskActivityUtils';
 import { isUserAdmin, canStaffAccessAllStudents } from '@/lib/staffPermissions';
@@ -994,51 +995,61 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
     if (!seededCatalogRef.current) {
       seededCatalogRef.current = true;
-      const existingSubjSnap = await getDocs(collection(db, 'launchpad_subjects'));
-      if (existingSubjSnap.empty) {
-        const defaultSubjs = buildDefaultLaunchpadSubjects();
-        for (const s of defaultSubjs) {
-          const safeId = toValidDocId(s.id, 'subj');
-          await setDoc(
-            doc(db, 'launchpad_subjects', safeId),
-            stripUndefinedAndNulls({
-              ...s,
-              id: safeId,
-              portalScope: 'verified_portal',
-              updatedAt: now,
-            })
-          );
+      try {
+        const existingSubjSnap = await getDocs(
+          query(collection(db, 'launchpad_subjects'), where('portalScope', '==', 'verified_portal'))
+        );
+        if (existingSubjSnap.empty) {
+          const defaultSubjs = buildDefaultLaunchpadSubjects();
+          for (const s of defaultSubjs) {
+            const safeId = toValidDocId(s.id, 'subj');
+            await setDoc(
+              doc(db, 'launchpad_subjects', safeId),
+              stripUndefinedAndNulls({
+                ...s,
+                id: safeId,
+                portalScope: 'verified_portal',
+                updatedAt: now,
+              })
+            );
+          }
+          const defaultChaps = buildDefaultLaunchpadChapters();
+          for (const ch of defaultChaps) {
+            const safeId = toValidDocId(ch.id || `${ch.subjectId || 'comm-public-speaking'}__w${ch.weekNumber}`, 'chap');
+            await setDoc(
+              doc(db, 'launchpad_chapters', safeId),
+              stripUndefinedAndNulls({
+                ...ch,
+                id: safeId,
+                subjectId: ch.subjectId || 'comm-public-speaking',
+                portalScope: 'verified_portal',
+                updatedAt: now,
+              })
+            );
+          }
+          const defaultQs = buildDefaultCertQuestions();
+          for (const q of defaultQs) {
+            const safeId = toValidDocId(q.id, 'cq');
+            await setDoc(
+              doc(db, 'launchpad_cert_questions', safeId),
+              stripUndefinedAndNulls({
+                ...q,
+                id: safeId,
+                portalScope: 'verified_portal',
+                updatedAt: now,
+              })
+            );
+          }
         }
-        const defaultChaps = buildDefaultLaunchpadChapters();
-        for (const ch of defaultChaps) {
-          const safeId = toValidDocId(ch.id || `${ch.subjectId || 'comm-public-speaking'}__w${ch.weekNumber}`, 'chap');
-          await setDoc(
-            doc(db, 'launchpad_chapters', safeId),
-            stripUndefinedAndNulls({
-              ...ch,
-              id: safeId,
-              subjectId: ch.subjectId || 'comm-public-speaking',
-              portalScope: 'verified_portal',
-              updatedAt: now,
-            })
-          );
-        }
-        const defaultQs = buildDefaultCertQuestions();
-        for (const q of defaultQs) {
-          const safeId = toValidDocId(q.id, 'cq');
-          await setDoc(
-            doc(db, 'launchpad_cert_questions', safeId),
-            stripUndefinedAndNulls({
-              ...q,
-              id: safeId,
-              portalScope: 'verified_portal',
-              updatedAt: now,
-            })
-          );
-        }
+      } catch (seedErr) {
+        console.warn('Launchpad catalog initial seed skipped/deferred:', seedErr);
       }
     }
   };
+
+  useEffect(() => {
+    void testFirestoreConnection();
+  }, []);
 
   // Resolve verified Firebase user into Staff or Student profile from Firestore
   useEffect(() => {
@@ -1072,6 +1083,11 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       setAuthError(null);
 
       try {
+        const tokenResult = await user.getIdTokenResult();
+        if (!tokenResult.claims.email_verified) {
+          await user.getIdToken(true);
+        }
+
         if (authEmail === BOOTSTRAP_ADMIN_EMAIL) {
           await ensureBootstrappedAdminRecords(user);
           if (cancelled) return;
@@ -1692,6 +1708,11 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     if (typeof out.satMathMentor === 'string') out.satMathMentor = out.satMathMentor.slice(0, 160);
     if (typeof out.satVerbalMentor === 'string') out.satVerbalMentor = out.satVerbalMentor.slice(0, 160);
     if (typeof out.universityMentor === 'string') out.universityMentor = out.universityMentor.slice(0, 160);
+    if (typeof out.taskSheetLink === 'string') out.taskSheetLink = out.taskSheetLink.slice(0, 500);
+    if (typeof out.major1 === 'string') out.major1 = out.major1.slice(0, 160);
+    if (typeof out.major2 === 'string') out.major2 = out.major2.slice(0, 160);
+    if (typeof out.targetDegree === 'string') out.targetDegree = out.targetDegree.slice(0, 120);
+    if (typeof out.targetCountry === 'string') out.targetCountry = out.targetCountry.slice(0, 120);
     out.readiness = Number.isFinite(Number(out.readiness)) ? Number(out.readiness) : 0;
     if (Array.isArray(out.countries)) out.countries = out.countries.slice(0, 20).map((c: any) => String(c));
     out.allowedViewerEmails = computeStudentViewerEmails({ ...raw, id: safeId, email: cleanEmail });

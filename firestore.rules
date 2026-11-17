@@ -404,15 +404,18 @@ service cloud.firestore {
     }
 
     match /staff_directory/{emailKey} {
-      allow get: if isVerified() && isValidId(emailKey) && (isAdmin() || ('email' in existing() && existing().email == authEmailLower()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && 'email' in existing() && existing().email == authEmailLower());
+      allow get: if isVerified() && isValidId(emailKey) && (isAdmin() || emailKey == authEmailKey() || ('email' in existing() && existing().email == authEmailLower()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().email == authEmailLower());
       allow create, update: if isAdmin() && isValidId(emailKey) && isValidStaffDirectory(incoming()) && incoming().id == emailKey;
       allow delete: if isAdmin() && isValidId(emailKey);
     }
 
     match /staff/{staffId} {
       allow get: if isVerified() && isValidId(staffId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().email == authEmailLower()
+      ));
       allow create: if isAdmin() && isValidId(staffId) && isValidStaff(incoming()) && incoming().id == staffId;
       allow update: if isVerified() && isValidId(staffId) && isValidStaff(incoming()) && (
         isAdmin() ||
@@ -427,7 +430,10 @@ service cloud.firestore {
 
     match /students/{studentId} {
       allow get: if isVerified() && isValidId(studentId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().email == authEmailLower()
+      ));
       allow create: if (isAdmin() || isActiveStaff()) && isValidId(studentId) && isValidStudent(incoming()) && incoming().id == studentId;
       allow update: if isVerified() && isValidId(studentId) && isValidStudent(incoming()) && incoming().id == existing().id && (
         isAdmin() ||
@@ -459,7 +465,7 @@ service cloud.firestore {
 
     match /batches/{batchId} {
       allow get: if isVerified() && isValidId(batchId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && authEmailLower() in existing().allowedViewerEmails);
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(batchId) && isValidBatch(incoming()) && incoming().id == batchId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(batchId);
     }
@@ -471,8 +477,8 @@ service cloud.firestore {
       );
       allow list: if isBootstrappedAdmin() || (
         isVerified() && (
-          isEmailAuthorizedInDoc(existing()) ||
-          ('participantEmails' in existing() && existing().participantEmails is list && authEmailLower() in existing().participantEmails)
+          authEmailLower() in existing().allowedViewerEmails ||
+          authEmailLower() in existing().participantEmails
         )
       );
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(eventId) && isValidEvent(incoming()) && incoming().id == eventId;
@@ -481,7 +487,10 @@ service cloud.firestore {
 
     match /conversations/{conversationId} {
       allow get: if isVerified() && isValidId(conversationId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().studentEmail == authEmailLower()
+      ));
       allow create, update: if isVerified() && isValidId(conversationId) && isValidConversation(incoming()) && incoming().id == conversationId && (
         isAdmin() || isActiveStaff() || ('studentEmail' in incoming() && incoming().studentEmail == authEmailLower())
       );
@@ -490,21 +499,21 @@ service cloud.firestore {
 
     match /launchpad_subjects/{subjectId} {
       allow get: if isVerified() && isValidId(subjectId);
-      allow list: if isVerified() && existing().portalScope == 'verified_portal';
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().portalScope == 'verified_portal');
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(subjectId) && isValidLaunchpadSubject(incoming()) && incoming().id == subjectId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(subjectId);
     }
 
     match /launchpad_chapters/{chapterId} {
       allow get: if isVerified() && isValidId(chapterId);
-      allow list: if isVerified() && existing().portalScope == 'verified_portal';
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().portalScope == 'verified_portal');
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(chapterId) && isValidLaunchpadChapter(incoming()) && incoming().id == chapterId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(chapterId);
     }
 
     match /launchpad_cert_questions/{questionId} {
       allow get: if isVerified() && isValidId(questionId);
-      allow list: if isVerified() && existing().portalScope == 'verified_portal';
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().portalScope == 'verified_portal');
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(questionId) && isValidLaunchpadCertQuestion(incoming()) && incoming().id == questionId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(questionId);
     }
@@ -517,7 +526,7 @@ service cloud.firestore {
       );
       allow list: if isBootstrappedAdmin() || (
         isVerified() && (
-          ('userEmail' in existing() && existing().userEmail == authEmailLower()) ||
+          existing().userEmail == authEmailLower() ||
           existing().userId == request.auth.uid
         )
       );
@@ -527,21 +536,30 @@ service cloud.firestore {
 
     match /launchpad_enrollments/{studentId} {
       allow get: if isVerified() && isValidId(studentId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().studentEmail == authEmailLower()
+      ));
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(studentId) && isValidLaunchpadEnrollment(incoming()) && incoming().studentId == studentId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(studentId);
     }
 
     match /launchpad_releases/{releaseId} {
       allow get: if isVerified() && isValidId(releaseId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().studentEmail == authEmailLower()
+      ));
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(releaseId) && isValidLaunchpadRelease(incoming()) && incoming().id == releaseId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(releaseId);
     }
 
     match /launchpad_progress/{progressId} {
       allow get: if isVerified() && isValidId(progressId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().studentEmail == authEmailLower()
+      ));
       allow create: if isVerified() && isValidId(progressId) && isValidLaunchpadProgress(incoming()) && incoming().id == progressId && (
         isAdmin() || isActiveStaff() || ('studentEmail' in incoming() && incoming().studentEmail == authEmailLower())
       );
@@ -562,7 +580,10 @@ service cloud.firestore {
 
     match /launchpad_certifications/{certId} {
       allow get: if isVerified() && isValidId(certId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().studentEmail == authEmailLower()
+      ));
       allow create, update: if isVerified() && isValidId(certId) && isValidLaunchpadCertification(incoming()) && incoming().id == certId && (
         isAdmin() || isActiveStaff() || ('studentEmail' in incoming() && incoming().studentEmail == authEmailLower())
       );
@@ -571,7 +592,10 @@ service cloud.firestore {
 
     match /assignment_evaluations/{evalId} {
       allow get: if isVerified() && isValidId(evalId) && (isAdmin() || isEmailAuthorizedInDoc(existing()));
-      allow list: if isBootstrappedAdmin() || (isVerified() && isEmailAuthorizedInDoc(existing()));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().studentEmail == authEmailLower()
+      ));
       allow create: if isVerified() && isValidId(evalId) && isValidEvaluation(incoming()) && incoming().id == evalId && (
         isAdmin() || isActiveStaff() ||
         ('studentEmail' in incoming() && incoming().studentEmail == authEmailLower() && incoming().status == 'Submitted')
@@ -592,7 +616,11 @@ service cloud.firestore {
 
     match /notifications/{notifId} {
       allow get: if isVerified() && isValidId(notifId) && (isAdmin() || isEmailAuthorizedInDoc(existing()) || existing().recipientId == request.auth.uid);
-      allow list: if isBootstrappedAdmin() || (isVerified() && (isEmailAuthorizedInDoc(existing()) || existing().recipientId == request.auth.uid));
+      allow list: if isBootstrappedAdmin() || (isVerified() && (
+        authEmailLower() in existing().allowedViewerEmails ||
+        existing().recipientEmail == authEmailLower() ||
+        existing().recipientId == request.auth.uid
+      ));
       allow create: if isVerified() && isValidId(notifId) && isValidNotification(incoming()) && incoming().id == notifId && (
         isAdmin() || isActiveStaff() || (incoming().category == 'LAUNCHPAD' && incoming().recipientType == 'staff')
       );
