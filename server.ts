@@ -25,7 +25,8 @@ import {
   launchpadCertifications,
   notificationsTable,
   assignmentEvaluations,
-  zohoConnections
+  zohoConnections,
+  portalSettings
 } from "./src/db/schema.ts";
 import { eq, or, asc, desc, sql } from "drizzle-orm";
 import {
@@ -106,27 +107,108 @@ function normEmail(email?: string | null): string {
   return (email || "").trim().toLowerCase();
 }
 
+const CORE_STUDENT_RELATIONAL_KEYS = new Set([
+  "id",
+  "uid",
+  "userId",
+  "name",
+  "email",
+  "password",
+  "role",
+  "phone",
+  "intake",
+  "countries",
+  "readiness",
+  "counselor",
+  "school",
+  "activities",
+  "extracurriculars",
+  "academicScores",
+  "shortlist",
+  "documents",
+  "essays",
+  "tasks",
+  "profileJson",
+]);
+
+function extractStudentProfileJson(
+  student: Record<string, any> | null | undefined,
+  existingProfile?: Record<string, any> | null
+): Record<string, any> {
+  const merged: Record<string, any> = {
+    ...(existingProfile && typeof existingProfile === "object" ? existingProfile : {}),
+  };
+  if (!student || typeof student !== "object") {
+    return merged;
+  }
+  for (const [key, value] of Object.entries(student)) {
+    if (CORE_STUDENT_RELATIONAL_KEYS.has(key)) continue;
+    if (value === undefined) continue;
+    merged[key] = value;
+  }
+  return merged;
+}
+
+function buildStudentFromRow(u: any, sd: any): Record<string, any> {
+  const profile =
+    sd?.profileJson && typeof sd.profileJson === "object" ? sd.profileJson : {};
+  const resolvedId = u?.uid || (sd?.id ? `STU-${sd.id}` : String(u?.id || ""));
+  return {
+    ...profile,
+    id: resolvedId,
+    uid: resolvedId,
+    name: u?.name || "Student",
+    email: u?.email || "",
+    password: u?.password || "",
+    role: "STUDENT",
+    status: profile.status || "Active",
+    phone: sd?.phone ?? profile.phone ?? "",
+    intake: sd?.intake ?? profile.intake ?? "Fall 2026",
+    countries: Array.isArray(sd?.countries) && sd.countries.length > 0
+      ? sd.countries
+      : (Array.isArray(profile.countries) ? profile.countries : ["USA"]),
+    readiness: sd?.readiness ?? profile.readiness ?? 0,
+    counselor: sd?.counselor ?? profile.counselor ?? "Unassigned",
+    school: sd?.school ?? profile.school ?? "",
+    activities: Array.isArray(sd?.activities) ? sd.activities : [],
+    extracurriculars: Array.isArray(sd?.extracurriculars) ? sd.extracurriculars : [],
+    academicScores: Array.isArray(sd?.academicScores) ? sd.academicScores : [],
+    shortlist: Array.isArray(sd?.shortlist) ? sd.shortlist : [],
+    documents: Array.isArray(sd?.documents) ? sd.documents : [],
+    essays: Array.isArray(sd?.essays) ? sd.essays : [],
+    tasks: Array.isArray(sd?.tasks) ? sd.tasks : [],
+  };
+}
+
+async function findAllMatchingUsers(uid?: string, email?: string) {
+  const cleanUid = (uid || "").trim();
+  const cleanEmail = normEmail(email);
+  const uidAliases =
+    cleanUid === "1" || cleanUid === "admin-1" ? ["1", "admin-1"] : cleanUid ? [cleanUid] : [];
+  const effectiveEmail =
+    cleanEmail || (cleanUid === "1" || cleanUid === "admin-1" ? "uppseekers@gmail.com" : "");
+
+  const all = await db.select().from(users);
+  return all.filter((u) => {
+    const uUid = (u.uid || "").trim();
+    const uEmail = normEmail(u.email);
+    if (uidAliases.length > 0 && uidAliases.includes(uUid)) return true;
+    if (effectiveEmail && uEmail === effectiveEmail) return true;
+    return false;
+  });
+}
+
 async function findUserByUidOrEmail(uid?: string, email?: string) {
   const cleanUid = (uid || "").trim();
   const cleanEmail = normEmail(email);
-  if (cleanUid && cleanEmail) {
-    return db
-      .select()
-      .from(users)
-      .where(or(eq(users.uid, cleanUid), sql`lower(trim(${users.email})) = ${cleanEmail}`))
-      .then((r) => r[0]);
-  }
-  if (cleanUid) {
-    return db.select().from(users).where(eq(users.uid, cleanUid)).then((r) => r[0]);
-  }
-  if (cleanEmail) {
-    return db
-      .select()
-      .from(users)
-      .where(sql`lower(trim(${users.email})) = ${cleanEmail}`)
-      .then((r) => r[0]);
-  }
-  return undefined;
+  const matches = await findAllMatchingUsers(cleanUid, cleanEmail);
+  if (matches.length === 0) return undefined;
+  // Prefer exact UID match first, otherwise exact email match
+  return (
+    matches.find((m) => cleanUid && (m.uid || "").trim() === cleanUid) ||
+    matches.find((m) => cleanEmail && normEmail(m.email) === cleanEmail) ||
+    matches[0]
+  );
 }
 
 async function startServer() {
@@ -135,22 +217,113 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
-  // Seed default System Admin if not exists in SQL
+  // Seed default System Admin, default Staff, and default Students if not already in Cloud SQL
   safeDbQuery(async () => {
-    const adminUser = await db.select().from(users).where(eq(users.email, 'uppseekers@gmail.com')).then(r => r[0]);
-    if (!adminUser) {
-      const inserted = await db.insert(users).values({
-        uid: 'admin-1',
-        email: 'uppseekers@gmail.com',
-        name: 'System Admin',
-        password: 'Uppseekers@1',
-        role: 'SYSTEM_ADMIN'
-      }).returning();
-      await db.insert(staffData).values({
-        userId: inserted[0].id,
-        status: 'Active',
-        students: 'All'
-      });
+    const existingUsers = await db.select().from(users);
+    const hasUser = (uid: string, email: string) =>
+      existingUsers.some(
+        (u) => (u.uid || "").trim() === uid || normEmail(u.email) === normEmail(email)
+      );
+
+    const defaultStaffSeed = [
+      { uid: 'admin-1', email: 'uppseekers@gmail.com', name: 'Admin', password: 'Uppseekers@1', role: 'SYSTEM_ADMIN', students: 'All' },
+      { uid: '2', email: 'sarah@uppseekers.com', name: 'Sarah Jenkins', password: 'Staff@123', role: 'COUNSELOR', students: '2 Students' },
+      { uid: '3', email: 'vikram.roy@uppseekers.com', name: 'Dr. Vikram Roy', password: 'Staff@123', role: 'RESEARCH_GUIDE', students: '2 Students' },
+      { uid: '4', email: 'marcus@uppseekers.com', name: 'Marcus Vance', password: 'Staff@123', role: 'CATEGORY_MANAGER', students: 'All' },
+      { uid: '5', email: 'elena@uppseekers.com', name: 'Elena Rostova', password: 'Staff@123', role: 'SAT_VERBAL_FACULTY', students: '1 Student' },
+      { uid: '6', email: 'rajesh.menon@uppseekers.com', name: 'Rajesh Menon', password: 'Staff@123', role: 'SAT_MATH_FACULTY', students: '1 Student' },
+    ];
+
+    for (const st of defaultStaffSeed) {
+      if (!hasUser(st.uid, st.email)) {
+        const inserted = await db.insert(users).values({
+          uid: st.uid,
+          email: st.email,
+          name: st.name,
+          password: st.password,
+          role: st.role,
+        }).onConflictDoNothing({ target: users.uid }).returning();
+        if (inserted[0]) {
+          await db.insert(staffData).values({
+            userId: inserted[0].id,
+            status: 'Active',
+            students: st.students,
+          });
+        }
+      }
+    }
+
+    const defaultStudentsSeed = [
+      {
+        uid: 'STU-101',
+        name: 'Aarav Sharma',
+        email: 'aarav.sharma@example.com',
+        phone: '+91 9876543210',
+        intake: 'Fall 2026',
+        school: 'Delhi Public School',
+        counselor: 'Sarah Jenkins',
+        readiness: 75,
+        countries: ['USA', 'UK'],
+        password: 'Student@123',
+        profileJson: { researchMentor: 'Dr. Vikram Roy' },
+      },
+      {
+        uid: 'STU-102',
+        name: 'Ananya Iyer',
+        email: 'ananya.iyer@example.com',
+        phone: '+91 9812345678',
+        intake: 'Fall 2026',
+        school: 'The Doon School',
+        counselor: 'Sarah Jenkins',
+        readiness: 65,
+        countries: ['USA', 'Canada'],
+        password: 'Student@123',
+        profileJson: { satVerbalMentor: 'Elena Rostova' },
+      },
+      {
+        uid: 'STU-103',
+        name: 'Qasim Khan',
+        email: 'qasim.khan@example.com',
+        phone: '+91 9988776655',
+        intake: 'Fall 2026',
+        school: 'St. Xavier High School',
+        counselor: 'Admin',
+        readiness: 85,
+        countries: ['USA', 'UK'],
+        password: 'Student@123',
+        profileJson: { researchMentor: 'Dr. Vikram Roy' },
+      },
+    ];
+
+    for (const stu of defaultStudentsSeed) {
+      if (!hasUser(stu.uid, stu.email)) {
+        const inserted = await db.insert(users).values({
+          uid: stu.uid,
+          email: stu.email,
+          name: stu.name,
+          password: stu.password,
+          role: 'STUDENT',
+        }).onConflictDoNothing({ target: users.uid }).returning();
+        if (inserted[0]) {
+          await db.insert(studentsData).values({
+            userId: inserted[0].id,
+            phone: stu.phone,
+            intake: stu.intake,
+            countries: stu.countries,
+            readiness: stu.readiness,
+            counselor: stu.counselor,
+            school: stu.school,
+            activities: [],
+            extracurriculars: [],
+            academicScores: [],
+            shortlist: [],
+            documents: [],
+            essays: [],
+            tasks: [],
+            profileJson: stu.profileJson,
+          });
+        }
+      }
     }
   }, null);
 
@@ -226,19 +399,34 @@ async function startServer() {
         return;
       }
 
-      const normalizedEmail = email.toLowerCase().trim();
+      const normalizedEmail = normEmail(email);
       const lookupEmail = normalizedEmail === 'uppseekers@gmail.cm' ? 'uppseekers@gmail.com' : normalizedEmail;
+      const rawPassword = String(password);
+      const trimmedPassword = rawPassword.trim();
 
       const allUsers = await safeDbQuery(() => db.select().from(users), []);
       const allStaffData = await safeDbQuery(() => db.select().from(staffData), []);
       const allStudentsData = await safeDbQuery(() => db.select().from(studentsData), []);
 
       const matchingUsers = allUsers.filter(u => normEmail(u.email) === lookupEmail);
-      const foundUser = matchingUsers.find(u => {
-        if (u.password && u.password.length > 0) {
-          return u.password === password;
+      // Prefer records with associated student/staff data if multiple rows share an email
+      const sortedMatches = [...matchingUsers].sort((a, b) => {
+        const aHasData = allStudentsData.some(s => s.userId === a.id) || allStaffData.some(s => s.userId === a.id) ? 1 : 0;
+        const bHasData = allStudentsData.some(s => s.userId === b.id) || allStaffData.some(s => s.userId === b.id) ? 1 : 0;
+        if (bHasData !== aHasData) return bHasData - aHasData;
+        return b.id - a.id;
+      });
+
+      const foundUser = sortedMatches.find(u => {
+        const storedPwd = typeof u.password === 'string' ? u.password : '';
+        const storedTrimmed = storedPwd.trim();
+        if (storedTrimmed.length > 0) {
+          return storedPwd === rawPassword || storedTrimmed === trimmedPassword;
         }
-        return password === 'Uppseekers@1' || password === (u.role === 'STUDENT' ? 'Student@123' : 'Staff@123');
+        return (
+          trimmedPassword === 'Uppseekers@1' ||
+          trimmedPassword === ((u.role || '').toUpperCase() === 'STUDENT' ? 'Student@123' : 'Staff@123')
+        );
       });
 
       if (foundUser) {
@@ -268,37 +456,21 @@ async function startServer() {
           return;
         } else {
           const sd = allStudentsData.find(s => s.userId === foundUser.id);
-          const enrichedStudent = {
-            id: foundUser.uid || String(foundUser.id),
-            uid: foundUser.uid || String(foundUser.id),
-            name: foundUser.name,
-            email: foundUser.email,
-            role: 'STUDENT',
-            status: 'Active',
-            password: foundUser.password || undefined,
-            phone: sd?.phone || '',
-            intake: sd?.intake || 'Fall 2026',
-            countries: sd?.countries || ['USA'],
-            readiness: sd?.readiness || 0,
-            counselor: sd?.counselor || 'Unassigned',
-            school: sd?.school || '',
-            activities: sd?.activities || [],
-            extracurriculars: sd?.extracurriculars || [],
-            academicScores: sd?.academicScores || [],
-            shortlist: sd?.shortlist || [],
-            documents: sd?.documents || [],
-            essays: sd?.essays || [],
-            tasks: sd?.tasks || [],
-          };
+          const enrichedStudent = buildStudentFromRow(foundUser, sd);
           const token = `custom_${enrichedStudent.id}_${enrichedStudent.email}`;
           res.json({ user: enrichedStudent, token });
           return;
         }
       }
 
-      // Check default admin fallback only if not overridden by DB password mismatch
-      if ((normalizedEmail === 'uppseekers@gmail.com' || normalizedEmail === 'uppseekers@gmail.cm') && (password === 'Uppseekers@1' || password === 'Admin@123')) {
-        const dbAdmin = matchingUsers[0];
+      // Check default admin fallback only if admin does not have a custom password set in DB
+      const hasCustomAdminPwd = sortedMatches.some(u => typeof u.password === 'string' && u.password.trim().length > 0);
+      if (
+        !hasCustomAdminPwd &&
+        (normalizedEmail === 'uppseekers@gmail.com' || normalizedEmail === 'uppseekers@gmail.cm') &&
+        (trimmedPassword === 'Uppseekers@1' || trimmedPassword === 'Admin@123')
+      ) {
+        const dbAdmin = sortedMatches[0];
         const foundAdmin = {
           id: dbAdmin?.uid || 'admin-1',
           uid: dbAdmin?.uid || 'admin-1',
@@ -382,6 +554,7 @@ async function startServer() {
 
       const uid = s.id || `STU-${Date.now()}`;
       const cleanEmail = normEmail(s.email);
+      const cleanPassword = typeof s.password === 'string' && s.password.trim() ? s.password.trim() : undefined;
       let user = await findUserByUidOrEmail(uid, cleanEmail);
 
       if (!user) {
@@ -389,7 +562,7 @@ async function startServer() {
           uid,
           email: cleanEmail,
           name: s.name,
-          password: s.password || 'Student@123',
+          password: cleanPassword || 'Student@123',
           role: 'STUDENT',
         }).returning();
         user = insertedUsers[0];
@@ -409,10 +582,12 @@ async function startServer() {
           documents: s.documents || [],
           essays: s.essays || [],
           tasks: s.tasks || [],
+          profileJson: extractStudentProfileJson(s, null),
         });
       } else {
         const userUpdates: any = { name: s.name || user.name };
-        if (s.password) userUpdates.password = s.password;
+        if (cleanEmail && cleanEmail.includes('@')) userUpdates.email = cleanEmail;
+        if (cleanPassword) userUpdates.password = cleanPassword;
         await db.update(users).set(userUpdates).where(eq(users.id, user.id));
 
         const existingSd = await db.select().from(studentsData).where(eq(studentsData.userId, user.id)).then(r => r[0]);
@@ -432,6 +607,7 @@ async function startServer() {
             documents: s.documents ?? [],
             essays: s.essays ?? [],
             tasks: s.tasks ?? [],
+            profileJson: extractStudentProfileJson(s, null),
           });
         } else {
           await db.update(studentsData).set({
@@ -448,6 +624,7 @@ async function startServer() {
             documents: s.documents !== undefined ? s.documents : existingSd.documents,
             essays: s.essays !== undefined ? s.essays : existingSd.essays,
             tasks: s.tasks !== undefined ? s.tasks : existingSd.tasks,
+            profileJson: extractStudentProfileJson(s, existingSd.profileJson),
           }).where(eq(studentsData.userId, user.id));
         }
       }
@@ -470,6 +647,7 @@ async function startServer() {
 
       const uid = s.id || `STAFF-${Date.now()}`;
       const cleanEmail = normEmail(s.email);
+      const cleanPassword = typeof s.password === 'string' && s.password.trim() ? s.password.trim() : undefined;
       let user = await findUserByUidOrEmail(uid, cleanEmail);
 
       if (!user) {
@@ -477,7 +655,7 @@ async function startServer() {
           uid,
           email: cleanEmail,
           name: s.name,
-          password: s.password || 'Staff@123',
+          password: cleanPassword || 'Staff@123',
           role: s.role || 'COUNSELOR',
         }).returning();
         user = insertedUsers[0];
@@ -492,7 +670,8 @@ async function startServer() {
           name: s.name || user.name,
           role: s.role || user.role,
         };
-        if (s.password) userUpdates.password = s.password;
+        if (cleanEmail && cleanEmail.includes('@')) userUpdates.email = cleanEmail;
+        if (cleanPassword) userUpdates.password = cleanPassword;
         await db.update(users).set(userUpdates).where(eq(users.id, user.id));
 
         const existingStaff = await db.select().from(staffData).where(eq(staffData.userId, user.id)).then(r => r[0]);
@@ -524,13 +703,14 @@ async function startServer() {
         for (const s of staffArr) {
           if (!s?.id || !s?.email) continue;
           const cleanEmail = normEmail(s.email);
+          const cleanPassword = typeof s.password === 'string' && s.password.trim() ? s.password.trim() : undefined;
           let userRecord = await findUserByUidOrEmail(s.id, cleanEmail);
           if (!userRecord) {
             const inserted = await db.insert(users).values({
               uid: s.id,
               email: cleanEmail,
               name: s.name || cleanEmail,
-              password: s.password || 'Staff@123',
+              password: cleanPassword || 'Staff@123',
               role: s.role || 'COUNSELOR',
             }).returning();
             userRecord = inserted[0];
@@ -541,7 +721,8 @@ async function startServer() {
             });
           } else {
             const updates: any = { name: s.name || userRecord.name, role: s.role || userRecord.role };
-            if (s.password) updates.password = s.password;
+            if (cleanEmail && cleanEmail.includes('@')) updates.email = cleanEmail;
+            if (cleanPassword) updates.password = cleanPassword;
             await db.update(users).set(updates).where(eq(users.id, userRecord.id));
             const existingStaff = await db.select().from(staffData).where(eq(staffData.userId, userRecord.id)).then(r => r[0]);
             if (existingStaff) {
@@ -589,13 +770,14 @@ async function startServer() {
         for (const student of studentsArr) {
           if (!student?.id) continue;
           const cleanEmail = normEmail(student.email);
+          const cleanPassword = typeof student.password === 'string' && student.password.trim() ? student.password.trim() : undefined;
           let userRecord = await findUserByUidOrEmail(student.id, cleanEmail);
           if (!userRecord) {
             const inserted = await db.insert(users).values({
               uid: student.id,
               email: cleanEmail || `${student.id.toLowerCase()}@uppseekers.local`,
               name: student.name || 'Student',
-              password: student.password || 'Student@123',
+              password: cleanPassword || 'Student@123',
               role: 'STUDENT',
             }).returning();
             userRecord = inserted[0];
@@ -614,12 +796,16 @@ async function startServer() {
               documents: student.documents || [],
               essays: student.essays || [],
               tasks: student.tasks || [],
+              profileJson: extractStudentProfileJson(student, null),
             });
             continue;
           }
 
           const userUpdates: any = { name: student.name || userRecord.name };
-          if (student.password) userUpdates.password = student.password;
+          if (cleanEmail && cleanEmail.includes('@') && !cleanEmail.endsWith('@uppseekers.local')) {
+            userUpdates.email = cleanEmail;
+          }
+          if (cleanPassword) userUpdates.password = cleanPassword;
           await db.update(users).set(userUpdates).where(eq(users.id, userRecord.id));
           const existingSd = await db.select().from(studentsData).where(eq(studentsData.userId, userRecord.id)).then(r => r[0]);
           if (!existingSd) {
@@ -638,6 +824,7 @@ async function startServer() {
               documents: student.documents ?? [],
               essays: student.essays ?? [],
               tasks: student.tasks ?? [],
+              profileJson: extractStudentProfileJson(student, null),
             });
           } else {
             await db.update(studentsData).set({
@@ -654,6 +841,7 @@ async function startServer() {
               documents: student.documents !== undefined ? student.documents : existingSd.documents,
               essays: student.essays !== undefined ? student.essays : existingSd.essays,
               tasks: student.tasks !== undefined ? student.tasks : existingSd.tasks,
+              profileJson: extractStudentProfileJson(student, existingSd.profileJson),
             }).where(eq(studentsData.userId, userRecord.id));
           }
         }
@@ -687,13 +875,14 @@ async function startServer() {
       if (!student?.id) return res.status(400).json({ error: "Missing student ID" });
       await safeDbQuery(async () => {
         const cleanEmail = normEmail(student.email);
+        const cleanPassword = typeof student.password === 'string' && student.password.trim() ? student.password.trim() : undefined;
         let userRecord = await findUserByUidOrEmail(student.id, cleanEmail);
         if (!userRecord) {
           const inserted = await db.insert(users).values({
             uid: student.id,
             email: cleanEmail || `${student.id.toLowerCase()}@uppseekers.local`,
             name: student.name || 'Student',
-            password: student.password || 'Student@123',
+            password: cleanPassword || 'Student@123',
             role: 'STUDENT',
           }).returning();
           userRecord = inserted[0];
@@ -712,13 +901,17 @@ async function startServer() {
             documents: student.documents || [],
             essays: student.essays || [],
             tasks: student.tasks || [],
+            profileJson: extractStudentProfileJson(student, null),
           });
           return;
         }
 
         const userUpdates: any = { name: student.name || userRecord.name };
-        if (student.password) {
-          userUpdates.password = student.password;
+        if (cleanEmail && cleanEmail.includes('@') && !cleanEmail.endsWith('@uppseekers.local')) {
+          userUpdates.email = cleanEmail;
+        }
+        if (cleanPassword) {
+          userUpdates.password = cleanPassword;
         }
         await db.update(users).set(userUpdates).where(eq(users.id, userRecord.id));
         const existingSd = await db.select().from(studentsData).where(eq(studentsData.userId, userRecord.id)).then(r => r[0]);
@@ -738,6 +931,7 @@ async function startServer() {
             documents: student.documents ?? [],
             essays: student.essays ?? [],
             tasks: student.tasks ?? [],
+            profileJson: extractStudentProfileJson(student, null),
           });
         } else {
           await db.update(studentsData).set({
@@ -754,6 +948,7 @@ async function startServer() {
             documents: student.documents !== undefined ? student.documents : existingSd.documents,
             essays: student.essays !== undefined ? student.essays : existingSd.essays,
             tasks: student.tasks !== undefined ? student.tasks : existingSd.tasks,
+            profileJson: extractStudentProfileJson(student, existingSd.profileJson),
           }).where(eq(studentsData.userId, userRecord.id));
         }
       }, null);
@@ -767,20 +962,29 @@ async function startServer() {
   app.post("/api/admin/change-password", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { userId, email, newPassword, userType } = req.body;
-      if (!newPassword) return res.status(400).json({ error: "New password is required" });
+      const cleanNewPassword = typeof newPassword === 'string' ? newPassword.trim() : '';
+      if (!cleanNewPassword) return res.status(400).json({ error: "New password is required" });
 
       await safeDbQuery(async () => {
-        const userRecord = await findUserByUidOrEmail(userId, email);
+        const matches = await findAllMatchingUsers(userId, email);
 
-        if (userRecord) {
-          await db.update(users).set({ password: newPassword }).where(eq(users.id, userRecord.id));
+        if (matches.length > 0) {
+          const matchedEmails = new Set(matches.map(m => normEmail(m.email)).filter(Boolean));
+          const allUsers = await db.select().from(users);
+          const idsToUpdate = allUsers
+            .filter(u => matches.some(m => m.id === u.id) || (normEmail(u.email) && matchedEmails.has(normEmail(u.email))))
+            .map(u => u.id);
+          for (const targetId of idsToUpdate) {
+            await db.update(users).set({ password: cleanNewPassword }).where(eq(users.id, targetId));
+          }
         } else if (userId || email) {
+          const cleanEmail = normEmail(email);
           const isStudent = userType === 'student';
           const inserted = await db.insert(users).values({
             uid: userId || `${isStudent ? 'STU' : 'STAFF'}-${Date.now()}`,
-            name: req.body.name || 'User',
-            email: normEmail(email),
-            password: newPassword,
+            name: req.body.name || (cleanEmail ? cleanEmail.split('@')[0] : 'User'),
+            email: cleanEmail || `${String(userId).toLowerCase()}@uppseekers.local`,
+            password: cleanNewPassword,
             role: isStudent ? 'STUDENT' : (req.body.role || 'COUNSELOR'),
           }).returning();
           if (inserted[0]) {
@@ -798,6 +1002,7 @@ async function startServer() {
                 documents: [],
                 essays: [],
                 tasks: [],
+                profileJson: {},
               });
             } else {
               await db.insert(staffData).values({
@@ -1003,17 +1208,20 @@ async function startServer() {
         return;
       }
 
-      // Update in PostgreSQL users table if present
+      // Update in PostgreSQL users table (case-insensitive trimmed email match across all matching rows)
+      const cleanResetPassword = newPassword.trim();
       await safeDbQuery(async () => {
-        const userRec = await db.select().from(users).where(eq(users.email, targetEmail)).then(r => r[0]);
-        if (userRec) {
-          await db.update(users).set({ password: newPassword }).where(eq(users.id, userRec.id));
+        const matches = await findAllMatchingUsers(undefined, targetEmail);
+        if (matches.length > 0) {
+          for (const m of matches) {
+            await db.update(users).set({ password: cleanResetPassword }).where(eq(users.id, m.id));
+          }
         } else {
           await db.insert(users).values({
             uid: `USER-${Date.now()}`,
             name: targetEmail.split('@')[0],
             email: targetEmail,
-            password: newPassword,
+            password: cleanResetPassword,
             role: 'STUDENT',
           });
         }
@@ -1520,35 +1728,47 @@ Provide your response in two clearly labeled sections using Markdown:
     }
   });
 
+  app.post("/api/settings/permissions", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const matrix = req.body?.permissionsMatrix || req.body;
+      if (!matrix || typeof matrix !== "object") {
+        res.status(400).json({ error: "Invalid permissions matrix" });
+        return;
+      }
+      await safeDbQuery(async () => {
+        await db
+          .insert(portalSettings)
+          .values({
+            key: "permissions_matrix",
+            valueJson: matrix,
+            updatedAt: new Date(),
+          })
+          .onConflictDoUpdate({
+            target: portalSettings.key,
+            set: {
+              valueJson: matrix,
+              updatedAt: new Date(),
+            },
+          });
+      }, null);
+      res.json({ success: true });
+    } catch (e) {
+      res.json({ success: true });
+    }
+  });
+
   app.get("/api/data", async (req, res) => {
     try {
       const allUsers = await safeDbQuery(() => db.select().from(users), []);
       const allStudentsData = await safeDbQuery(() => db.select().from(studentsData), []);
       const allStaffData = await safeDbQuery(() => db.select().from(staffData), []);
+      const allSettings = await safeDbQuery(() => db.select().from(portalSettings), []);
+      const permsRow = allSettings.find(r => r.key === "permissions_matrix");
 
       const studentsByKey = new Map<string, any>();
       allStudentsData.forEach(sd => {
         const u = allUsers.find(u => u.id === sd.userId);
-        const item = {
-          id: u?.uid || `STU-${sd.id}`,
-          name: u?.name || 'Unknown',
-          email: u?.email || '',
-          password: u?.password || '',
-          role: u?.role || 'STUDENT',
-          phone: sd.phone || '',
-          intake: sd.intake || 'Fall 2026',
-          countries: sd.countries || ['USA'],
-          readiness: sd.readiness || 0,
-          counselor: sd.counselor || 'Unassigned',
-          school: sd.school || '',
-          activities: sd.activities || [],
-          extracurriculars: sd.extracurriculars || [],
-          academicScores: sd.academicScores || [],
-          shortlist: sd.shortlist || [],
-          documents: sd.documents || [],
-          essays: sd.essays || [],
-          tasks: sd.tasks || [],
-        };
+        const item = buildStudentFromRow(u, sd);
         const key = normEmail(item.email) || item.id;
         studentsByKey.set(key, item);
       });
@@ -1559,26 +1779,7 @@ Provide your response in two clearly labeled sections using Markdown:
         .forEach(u => {
           const key = normEmail(u.email) || u.uid;
           if (!studentsByKey.has(key) && !Array.from(studentsByKey.values()).some(s => s.id === u.uid)) {
-            studentsByKey.set(key, {
-              id: u.uid || `STU-${u.id}`,
-              name: u.name || 'Student',
-              email: u.email || '',
-              password: u.password || '',
-              role: 'STUDENT',
-              phone: '',
-              intake: 'Fall 2026',
-              countries: ['USA'],
-              readiness: 0,
-              counselor: 'Unassigned',
-              school: '',
-              activities: [],
-              extracurriculars: [],
-              academicScores: [],
-              shortlist: [],
-              documents: [],
-              essays: [],
-              tasks: [],
-            });
+            studentsByKey.set(key, buildStudentFromRow(u, null));
           }
         });
       const students = Array.from(studentsByKey.values());
@@ -1634,9 +1835,15 @@ Provide your response in two clearly labeled sections using Markdown:
         date: e.date,
       }));
 
-      res.json({ students, staff, batches, events });
+      res.json({
+        students,
+        staff,
+        batches,
+        events,
+        permissionsMatrix: permsRow?.valueJson || null,
+      });
     } catch (error) {
-      res.json({ students: [], staff: [], batches: [], events: [] });
+      res.json({ students: [], staff: [], batches: [], events: [], permissionsMatrix: null });
     }
   });
 

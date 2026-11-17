@@ -70,9 +70,12 @@ export default function TeamSettings() {
   const [userForPasswordChange, setUserForPasswordChange] = useState<TargetUserForPassword | null>(null);
 
   const handleSaveUserPassword = async (userId: string, userType: 'student' | 'staff', newPassword: string) => {
+    void userType;
+    const cleanPwd = newPassword.trim();
+    const targetMember = staff.find(s => s.id === userId);
     const updatedStaff = staff.map(s => {
       if (s.id === userId) {
-        return { ...s, password: newPassword };
+        return { ...s, password: cleanPwd };
       }
       return s;
     });
@@ -82,7 +85,14 @@ export default function TeamSettings() {
       await fetch('/api/admin/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ userId, newPassword, userType: 'staff' })
+        body: JSON.stringify({
+          userId,
+          email: targetMember?.email || userForPasswordChange?.email || '',
+          name: targetMember?.name || userForPasswordChange?.name || '',
+          role: targetMember?.role || userForPasswordChange?.role || 'COUNSELOR',
+          newPassword: cleanPwd,
+          userType: 'staff'
+        })
       });
     } catch (e) {
       console.warn('Backend password sync error (fallback active):', e);

@@ -1,5 +1,5 @@
 import { useDatabase } from '@/context/DatabaseContext';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { CheckCircle2, Upload, Plus, ShieldCheck, Clock, FileText, AlertCircle, Trash2, Edit3, X, Calendar, Key, Mail } from 'lucide-react';
@@ -69,13 +69,51 @@ const fullIntakeOptions = intakeYears.flatMap(yr => intakeTerms.map(term => `${t
 export default function StudentProfile() {
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
+  const [isDirty, setIsDirty] = useState(false);
   const { updateStudent, currentUser, students, staff } = useDatabase();
   
-  // Resolve live, complete student record from database
-  const student = students.find(s => 
+  // Resolve live, complete student record from database without falling back to unrelated students[0]
+  const matchedStudent = students.find(s => 
     (currentUser?.id && s.id === currentUser.id) || 
-    (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
-  ) || students[0] || (currentUser as any);
+    (currentUser?.email && s.email?.toLowerCase().trim() === currentUser.email?.toLowerCase().trim())
+  );
+  const student: any = matchedStudent
+    ? { ...(currentUser as any), ...matchedStudent }
+    : ((currentUser?.email || currentUser?.id) ? (currentUser as any) : students[0]);
+
+  const buildFormStateFromStudent = (stu: any) => ({
+    name: stu?.name || '',
+    dob: stu?.dob || '',
+    gender: stu?.gender || '',
+    nationality: stu?.nationality || '',
+    cityCountry: stu?.cityCountry || '',
+    email: stu?.email || '',
+    phone: (stu?.phone || '').split('|')[0].trim(),
+    passportStatus: stu?.passportStatus || '',
+    passportExpiry: stu?.passportExpiry || '',
+    school: stu?.school || '',
+    curriculum: stu?.curriculum || '',
+    grade: stu?.grade || '',
+    gpa: stu?.gpa || '',
+    classRank: stu?.classRank || '',
+    graduationYear: stu?.graduationYear || '',
+    satTotal: stu?.satTotal || stu?.academicScores?.find((s: any) => s.type === 'SAT')?.score || '',
+    satRw: stu?.satRw || '',
+    satMath: stu?.satMath || '',
+    actScore: stu?.actScore || '',
+    engTest: stu?.engTest || '',
+    engScore: stu?.engScore || '',
+    primaryCountry: stu?.primaryCountry || stu?.countries?.[0] || '',
+    otherCountries: stu?.otherCountries || (Array.isArray(stu?.countries) && stu.countries.length > 1 ? stu.countries.slice(1).join(', ') : ''),
+    major1: stu?.major1 || '',
+    major2: stu?.major2 || '',
+  });
+
+  const [formValues, setFormValues] = useState(() => buildFormStateFromStudent(student));
+  const updateField = (field: keyof ReturnType<typeof buildFormStateFromStudent>, val: string) => {
+    setIsDirty(true);
+    setFormValues(prev => ({ ...prev, [field]: val }));
+  };
 
   // Look up staff details for assigned mentors
   const counselorStaff = staff.find(st => 
@@ -84,6 +122,7 @@ export default function StudentProfile() {
       st.name?.toLowerCase() === student.counselor?.toLowerCase()
     )
   );
+  void counselorStaff;
 
   const researchMentorName = student?.researchMentor || (student as any)?.researchGuide;
   const researchStaff = staff.find(st => 
@@ -92,6 +131,7 @@ export default function StudentProfile() {
       st.name?.toLowerCase() === researchMentorName?.toLowerCase()
     )
   );
+  void researchStaff;
 
   const satVerbalName = student?.satVerbalMentor || student?.satMentor || (student as any)?.satEducator;
   const satVerbalStaff = staff.find(st => 
@@ -100,6 +140,7 @@ export default function StudentProfile() {
       st.name?.toLowerCase() === satVerbalName?.toLowerCase()
     )
   );
+  void satVerbalStaff;
 
   const satMathName = student?.satMathMentor;
   const satMathStaff = staff.find(st => 
@@ -108,6 +149,7 @@ export default function StudentProfile() {
       st.name?.toLowerCase() === satMathName?.toLowerCase()
     )
   );
+  void satMathStaff;
 
   // Split intake into term and year if present
   const initialIntakeParts = (student?.intake || '').split(' ');
@@ -115,11 +157,41 @@ export default function StudentProfile() {
   const [intakeYear, setIntakeYear] = useState<string>(initialIntakeParts[1] || currentYear.toString());
 
   // Only load student.extracurriculars for profile building extracurricular activities. Do NOT pull website/counselor activities logs!
-  const initialProfileActivities = (student?.extracurriculars || []).filter((a: any) => !a.activityType && !a.performedBy && !a.attendees);
-  const [activities, setActivities] = useState<any[]>(initialProfileActivities);
+  const getCleanProfileActivities = (stu: any) =>
+    (stu?.extracurriculars || []).filter((a: any) => !a.activityType && !a.performedBy && !a.attendees);
+  const [activities, setActivities] = useState<any[]>(() => getCleanProfileActivities(student));
   const [isActivityModalOpen, setIsActivityModalOpen] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [editingActivityIdx, setEditingActivityIdx] = useState<number | null>(null);
+
+  // Sync controlled profile state when Cloud SQL hydration arrives on any device
+  const hydrationSignature = JSON.stringify({
+    id: student?.id || '',
+    matched: Boolean(matchedStudent),
+    name: student?.name || '',
+    email: student?.email || '',
+    phone: student?.phone || '',
+    school: student?.school || '',
+    dob: student?.dob || '',
+    gpa: student?.gpa || '',
+    satTotal: student?.satTotal || '',
+    satRw: student?.satRw || '',
+    satMath: student?.satMath || '',
+    major1: student?.major1 || '',
+    major2: student?.major2 || '',
+    intake: student?.intake || '',
+    countries: student?.countries || [],
+    extCount: (student?.extracurriculars || []).length,
+  });
+
+  useEffect(() => {
+    if (isDirty) return;
+    setFormValues(buildFormStateFromStudent(student));
+    const parts = (student?.intake || '').split(' ');
+    if (parts[0] && intakeTerms.includes(parts[0])) setIntakeTerm(parts[0]);
+    if (parts[1]) setIntakeYear(parts[1]);
+    setActivities(getCleanProfileActivities(student));
+  }, [hydrationSignature]);
   
   // Activity form state
   const [actTitle, setActTitle] = useState('');
@@ -210,10 +282,12 @@ export default function StudentProfile() {
         setActivities([...activities, newAct]);
       }
     }
+    setIsDirty(true);
     setIsActivityModalOpen(false);
   };
 
   const handleRemoveActivity = (idx: number) => {
+    setIsDirty(true);
     setActivities(activities.filter((_, i) => i !== idx));
   };
 
@@ -230,48 +304,69 @@ export default function StudentProfile() {
   const completion = Math.round((score / 8) * 100);
 
   return (
-    <form onSubmit={(e) => {
+    <form onSubmit={async (e) => {
       e.preventDefault();
       setIsSaving(true);
-      const fd = new FormData(e.target);
       const combinedIntake = `${intakeTerm} ${intakeYear}`;
-      
-      const rawPhone = (fd.get('phone') as string) || '';
-      // Clean any accumulated ' | email@...' from phone field
-      const cleanedPhone = rawPhone.split('|')[0].trim();
-      const enteredEmail = (fd.get('email') as string)?.trim() || student?.email || '';
+      const cleanedPhone = (formValues.phone || '').split('|')[0].trim();
+      const enteredEmail = (formValues.email || '').trim() || student?.email || '';
+
+      const targetCountriesList: string[] = [];
+      if (formValues.primaryCountry.trim()) {
+        targetCountriesList.push(formValues.primaryCountry.trim());
+      }
+      if (formValues.otherCountries.trim()) {
+        formValues.otherCountries
+          .split(',')
+          .map(c => c.trim())
+          .filter(Boolean)
+          .forEach(c => {
+            if (!targetCountriesList.includes(c)) targetCountriesList.push(c);
+          });
+      }
+      const resolvedCountries =
+        targetCountriesList.length > 0
+          ? targetCountriesList
+          : (formValues.nationality ? [formValues.nationality] : (student?.countries || ['USA']));
 
       const updated = {
         ...student,
-        name: fd.get('name') || student?.name || '',
+        id: student?.id || currentUser?.id,
+        name: formValues.name.trim() || student?.name || '',
         phone: cleanedPhone,
         email: enteredEmail,
-        countries: fd.get('countries') ? [fd.get('countries')] : (student?.countries || []),
+        nationality: formValues.nationality,
+        primaryCountry: formValues.primaryCountry.trim(),
+        otherCountries: formValues.otherCountries.trim(),
+        countries: resolvedCountries,
         intake: combinedIntake,
-        school: fd.get('school') || student?.school || '',
-        dob: fd.get('dob') || student?.dob || '',
-        gender: fd.get('gender') || student?.gender || '',
-        cityCountry: fd.get('cityCountry') || student?.cityCountry || '',
-        passportStatus: fd.get('passportStatus') || student?.passportStatus || '',
-        passportExpiry: fd.get('passportExpiry') || student?.passportExpiry || '',
-        curriculum: fd.get('curriculum') || student?.curriculum || '',
-        grade: fd.get('grade') || student?.grade || '',
-        gpa: fd.get('gpa') || student?.gpa || '',
-        classRank: fd.get('classRank') || student?.classRank || '',
-        graduationYear: fd.get('graduationYear') || student?.graduationYear || '',
-        satTotal: fd.get('satTotal') || student?.satTotal || '',
-        actScore: fd.get('actScore') || student?.actScore || '',
-        engTest: fd.get('engTest') || student?.engTest || '',
-        engScore: fd.get('engScore') || student?.engScore || '',
-        major1: fd.get('major1') || student?.major1 || '',
-        major2: fd.get('major2') || student?.major2 || '',
+        school: formValues.school.trim(),
+        dob: formValues.dob,
+        gender: formValues.gender,
+        cityCountry: formValues.cityCountry.trim(),
+        passportStatus: formValues.passportStatus,
+        passportExpiry: formValues.passportExpiry,
+        curriculum: formValues.curriculum,
+        grade: formValues.grade.trim(),
+        gpa: formValues.gpa.trim(),
+        classRank: formValues.classRank.trim(),
+        graduationYear: formValues.graduationYear.trim(),
+        satTotal: formValues.satTotal.trim(),
+        satRw: formValues.satRw.trim(),
+        satMath: formValues.satMath.trim(),
+        actScore: formValues.actScore.trim(),
+        engTest: formValues.engTest,
+        engScore: formValues.engScore.trim(),
+        major1: formValues.major1.trim(),
+        major2: formValues.major2.trim(),
         extracurriculars: activities,
         activities: student?.activities || []
       };
-      updateStudent(updated);
+      await Promise.resolve(updateStudent(updated));
+      setIsDirty(false);
       setIsSaving(false);
-      setSaveMessage('Profile saved successfully!');
-      setTimeout(() => setSaveMessage(''), 3000);
+      setSaveMessage('Profile saved & synced across devices!');
+      setTimeout(() => setSaveMessage(''), 3500);
     }} className="max-w-5xl mx-auto space-y-8 pb-12">
       {/* Progress & Gamification */}
       <Card className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white border-none shadow-md">
@@ -363,31 +458,32 @@ export default function StudentProfile() {
 
       <Section title="1. Basic Personal & Contact Information" description="Your primary identity and contact channels.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Input label="Full Name" name="name" placeholder="John Doe" defaultValue={student?.name || ''} />
-          <Input label="Date of Birth" name="dob" type="date" defaultValue={student?.dob || ''} />
-          <Select label="Gender" name="gender" options={["Male", "Female", "Non-Binary", "Prefer not to say"]} defaultValue={student?.gender || ''} />
-          <Select label="Nationality / Citizenship" name="countries" options={["USA", "India", "UK", "Canada", "Australia", "Singapore", "Other"]} defaultValue={student?.countries?.[0] || ''} />
+          <Input label="Full Name" name="name" placeholder="John Doe" value={formValues.name} onChange={(e: any) => updateField('name', e.target.value)} />
+          <Input label="Date of Birth" name="dob" type="date" value={formValues.dob} onChange={(e: any) => updateField('dob', e.target.value)} />
+          <Select label="Gender" name="gender" options={["Male", "Female", "Non-Binary", "Prefer not to say"]} value={formValues.gender} onChange={(e: any) => updateField('gender', e.target.value)} />
+          <Select label="Nationality / Citizenship" name="nationality" options={["USA", "India", "UK", "Canada", "Australia", "Singapore", "Other"]} value={formValues.nationality} onChange={(e: any) => updateField('nationality', e.target.value)} />
           <div>
             <Label>City of Residence (Auto-Prompt)</Label>
             <input 
               list="indian-cities-list" 
               name="cityCountry" 
               placeholder="Type city name (e.g. Mumbai, Delhi, Bengaluru)..." 
-              defaultValue={student?.cityCountry || ''} 
+              value={formValues.cityCountry}
+              onChange={e => updateField('cityCountry', e.target.value)}
               className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"
             />
             <datalist id="indian-cities-list">
               {INDIAN_CITIES.map(c => <option key={c} value={c} />)}
             </datalist>
           </div>
-          <Input label="Email Address" name="email" type="email" placeholder="student@example.com" defaultValue={student?.email || ''} />
-          <Input label="Phone Number" name="phone" type="tel" placeholder="+1 234 567 8900" defaultValue={(student?.phone || '').split('|')[0].trim()} />
+          <Input label="Email Address" name="email" type="email" placeholder="student@example.com" value={formValues.email} onChange={(e: any) => updateField('email', e.target.value)} />
+          <Input label="Phone Number" name="phone" type="tel" placeholder="+1 234 567 8900" value={formValues.phone} onChange={(e: any) => updateField('phone', e.target.value)} />
         </div>
         <div className="pt-4 border-t border-slate-100">
           <h4 className="text-sm font-bold text-slate-900 mb-4">Passport Details</h4>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Select label="Passport Status" name="passportStatus" options={["Valid Passport", "Applied / In Process", "Do Not Have"]} defaultValue={student?.passportStatus || ''} />
-            <Input label="Expiry Date" name="passportExpiry" type="date" defaultValue={student?.passportExpiry || ''} />
+            <Select label="Passport Status" name="passportStatus" options={["Valid Passport", "Applied / In Process", "Do Not Have"]} value={formValues.passportStatus} onChange={(e: any) => updateField('passportStatus', e.target.value)} />
+            <Input label="Expiry Date" name="passportExpiry" type="date" value={formValues.passportExpiry} onChange={(e: any) => updateField('passportExpiry', e.target.value)} />
             <FileUpload label="Upload Passport Copy" />
           </div>
         </div>
@@ -395,23 +491,23 @@ export default function StudentProfile() {
 
       <Section title="2. Academic Profile & High School Information" description="Your educational history, GPA, curriculum, and class standing.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <Input label="High School Name" name="school" placeholder="e.g. Lincoln High School" defaultValue={student?.school || ''} />
-          <Select label="Curriculum" name="curriculum" options={["US High School (AP)", "International Baccalaureate (IB)", "CBSE / ICSE", "A-Levels", "Other"]} defaultValue={student?.curriculum || ''} />
-          <Input label="Current Grade / Class" name="grade" placeholder="e.g. 12th Grade (Senior Year)" defaultValue={student?.grade || ''} />
-          <Input label="GPA / Percentage" name="gpa" placeholder="e.g. 3.92 Unweighted / 4.3 Weighted" defaultValue={student?.gpa || ''} />
-          <Input label="Class Rank (If applicable)" name="classRank" placeholder="e.g. Top 5% / 15 out of 320" defaultValue={student?.classRank || ''} />
-          <Input label="Expected Graduation Year" name="graduationYear" placeholder="e.g. 2026" defaultValue={student?.graduationYear || ''} />
+          <Input label="High School Name" name="school" placeholder="e.g. Lincoln High School" value={formValues.school} onChange={(e: any) => updateField('school', e.target.value)} />
+          <Select label="Curriculum" name="curriculum" options={["US High School (AP)", "International Baccalaureate (IB)", "CBSE / ICSE", "A-Levels", "Other"]} value={formValues.curriculum} onChange={(e: any) => updateField('curriculum', e.target.value)} />
+          <Input label="Current Grade / Class" name="grade" placeholder="e.g. 12th Grade (Senior Year)" value={formValues.grade} onChange={(e: any) => updateField('grade', e.target.value)} />
+          <Input label="GPA / Percentage" name="gpa" placeholder="e.g. 3.92 Unweighted / 4.3 Weighted" value={formValues.gpa} onChange={(e: any) => updateField('gpa', e.target.value)} />
+          <Input label="Class Rank (If applicable)" name="classRank" placeholder="e.g. Top 5% / 15 out of 320" value={formValues.classRank} onChange={(e: any) => updateField('classRank', e.target.value)} />
+          <Input label="Expected Graduation Year" name="graduationYear" placeholder="e.g. 2026" value={formValues.graduationYear} onChange={(e: any) => updateField('graduationYear', e.target.value)} />
         </div>
       </Section>
 
       <Section title="3. Standardized Test Scores" description="Your official or target SAT, ACT, and English Proficiency scores.">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Input label="SAT Total Score" name="satTotal" placeholder="e.g. 1520" defaultValue={student?.satTotal || student?.academicScores?.find((s: any) => s.type === 'SAT')?.score || ''} />
-          <Input label="SAT Reading & Writing" name="satRw" placeholder="e.g. 750" defaultValue="" />
-          <Input label="SAT Math" name="satMath" placeholder="e.g. 770" defaultValue="" />
-          <Input label="ACT Score (If taken)" name="actScore" placeholder="e.g. 34" defaultValue={student?.actScore || ''} />
-          <Select label="English Proficiency Test" name="engTest" options={["TOEFL", "IELTS", "Duolingo", "Waived"]} defaultValue={student?.engTest || ''} />
-          <Input label="English Test Score" name="engScore" placeholder="e.g. 112 / 120" defaultValue={student?.engScore || ''} />
+          <Input label="SAT Total Score" name="satTotal" placeholder="e.g. 1520" value={formValues.satTotal} onChange={(e: any) => updateField('satTotal', e.target.value)} />
+          <Input label="SAT Reading & Writing" name="satRw" placeholder="e.g. 750" value={formValues.satRw} onChange={(e: any) => updateField('satRw', e.target.value)} />
+          <Input label="SAT Math" name="satMath" placeholder="e.g. 770" value={formValues.satMath} onChange={(e: any) => updateField('satMath', e.target.value)} />
+          <Input label="ACT Score (If taken)" name="actScore" placeholder="e.g. 34" value={formValues.actScore} onChange={(e: any) => updateField('actScore', e.target.value)} />
+          <Select label="English Proficiency Test" name="engTest" options={["TOEFL", "IELTS", "Duolingo", "Waived"]} value={formValues.engTest} onChange={(e: any) => updateField('engTest', e.target.value)} />
+          <Input label="English Test Score" name="engScore" placeholder="e.g. 112 / 120" value={formValues.engScore} onChange={(e: any) => updateField('engScore', e.target.value)} />
         </div>
       </Section>
 
@@ -421,7 +517,7 @@ export default function StudentProfile() {
             <Label>Target Intake Term</Label>
             <select 
               value={intakeTerm}
-              onChange={e => setIntakeTerm(e.target.value)}
+              onChange={e => { setIsDirty(true); setIntakeTerm(e.target.value); }}
               className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"
             >
               {intakeTerms.map(term => <option key={term} value={term}>{term}</option>)}
@@ -432,7 +528,7 @@ export default function StudentProfile() {
             <Label>Target Intake Year (Next 8 Years)</Label>
             <select 
               value={intakeYear}
-              onChange={e => setIntakeYear(e.target.value)}
+              onChange={e => { setIsDirty(true); setIntakeYear(e.target.value); }}
               className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"
             >
               {intakeYears.map(yr => <option key={yr} value={yr}>{yr}</option>)}
@@ -445,7 +541,8 @@ export default function StudentProfile() {
               list="world-countries-list" 
               name="primaryCountry" 
               placeholder="Type country name (e.g. United States, United Kingdom)..." 
-              defaultValue={student?.countries?.[0] || ''} 
+              value={formValues.primaryCountry}
+              onChange={e => updateField('primaryCountry', e.target.value)}
               className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"
             />
             <datalist id="world-countries-list">
@@ -459,13 +556,14 @@ export default function StudentProfile() {
               type="text"
               name="otherCountries"
               placeholder="e.g. Germany, Japan, Ireland..." 
-              defaultValue={student?.otherCountries || ''} 
+              value={formValues.otherCountries}
+              onChange={e => updateField('otherCountries', e.target.value)}
               className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"
             />
           </div>
 
-          <Input label="Intended Major 1" name="major1" placeholder="e.g. Computer Science & AI" defaultValue={student?.major1 || ''} />
-          <Input label="Intended Major 2" name="major2" placeholder="e.g. Applied Mathematics" defaultValue={student?.major2 || ''} />
+          <Input label="Intended Major 1" name="major1" placeholder="e.g. Computer Science & AI" value={formValues.major1} onChange={(e: any) => updateField('major1', e.target.value)} />
+          <Input label="Intended Major 2" name="major2" placeholder="e.g. Applied Mathematics" value={formValues.major2} onChange={(e: any) => updateField('major2', e.target.value)} />
         </div>
       </Section>
 
@@ -854,7 +952,21 @@ export default function StudentProfile() {
 
       <div className="flex justify-end gap-4 mt-8 items-center">
         {saveMessage && <span className="text-emerald-600 font-semibold">{saveMessage}</span>}
-        <Button variant="outline" size="lg" type="button">Discard Changes</Button>
+        <Button
+          variant="outline"
+          size="lg"
+          type="button"
+          onClick={() => {
+            setIsDirty(false);
+            setFormValues(buildFormStateFromStudent(student));
+            const parts = (student?.intake || '').split(' ');
+            if (parts[0] && intakeTerms.includes(parts[0])) setIntakeTerm(parts[0]);
+            if (parts[1]) setIntakeYear(parts[1]);
+            setActivities(getCleanProfileActivities(student));
+          }}
+        >
+          Discard Changes
+        </Button>
         <Button size="lg" className="bg-blue-600 hover:bg-blue-700 text-white px-8" type="submit" disabled={isSaving}>
           {isSaving ? 'Saving...' : 'Save Profile'}
         </Button>

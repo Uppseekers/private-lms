@@ -31,9 +31,9 @@ import {
   buildDefaultLaunchpadChapters,
   buildDefaultCertQuestions
 } from '@/data/launchpadData';
-import { collection, doc, setDoc, updateDoc, deleteDoc, onSnapshot, query, where, getDocs } from 'firebase/firestore';
+import { collection, doc, setDoc, updateDoc, deleteDoc, query, where, getDocs } from 'firebase/firestore';
 import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
-import { db, auth, googleAuthProvider, OperationType, buildFirestoreErrorInfo, handleFirestoreError, testFirestoreConnection } from '@/lib/firebase';
+import { db, auth, googleAuthProvider, OperationType, handleFirestoreError, testFirestoreConnection } from '@/lib/firebase';
 import { normalizeTask, normalizeActivity } from '@/lib/taskActivityUtils';
 import { safeLocalStorageSet, safeLocalStorageGet, sanitizeStudentsForLocalStorage } from '@/lib/storage';
 
@@ -1553,141 +1553,137 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     return initialStaff;
   });
   
+  const mergePermissionsWithDefaults = (parsed: any): Record<string, PermissionCategory[]> => {
+    const merged: Record<string, PermissionCategory[]> = JSON.parse(JSON.stringify(defaultPermissionsMatrix));
+    if (parsed && typeof parsed === 'object') {
+      for (const role of Object.keys(merged)) {
+        const parsedCategories = parsed[role];
+        if (Array.isArray(parsedCategories)) {
+          const templateCats = JSON.parse(JSON.stringify(defaultPermissionsMatrix[role])) as PermissionCategory[];
+          const updatedCats = templateCats.map(tCat => {
+            const foundCat = parsedCategories.find((c: any) => c.id === tCat.id);
+            if (!foundCat) {
+              if (tCat.id === 'tab_visibility') {
+                const findSavedItem = (catId: string, itemId: string) => {
+                  const cat = parsedCategories.find((c: any) => c.id === catId);
+                  return cat?.items?.find((i: any) => i.id === itemId);
+                };
+                const derivedItems = tCat.items.map(tItem => {
+                  if (tItem.id === 'tab_settings') return { ...tItem, enabled: role === 'SYSTEM_ADMIN' };
+                  if (tItem.id === 'tab_batches') {
+                    const it = findSavedItem('batch', 'view_past');
+                    return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
+                  }
+                  if (tItem.id === 'tab_scheduler') {
+                    const it = findSavedItem('schedule', 'create_class');
+                    return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
+                  }
+                  if (tItem.id === 'tab_vault') {
+                    const it = findSavedItem('vault', 'view_vault');
+                    return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
+                  }
+                  if (tItem.id === 'tab_evaluator') {
+                    const it = findSavedItem('tasks', 'assign_tasks');
+                    return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
+                  }
+                  if (tItem.id === 'tab_users') {
+                    const it = findSavedItem('profile', 'view_roster');
+                    return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
+                  }
+                  if (tItem.id === 'tab_reports') {
+                    const it = findSavedItem('reports', 'view_meeting_reports');
+                    return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
+                  }
+                  if (tItem.id === 'tab_universities') {
+                    const it = findSavedItem('shortlist', 'add_uni');
+                    return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
+                  }
+                  if (tItem.id === 'tab_launchpad') {
+                    const tabIt = findSavedItem('launchpad', 'launchpad_student_tab_access');
+                    const editIt = findSavedItem('launchpad', 'launchpad_edit_curriculum_access');
+                    if (tabIt || editIt) {
+                      return { ...tItem, enabled: Boolean(tabIt?.enabled || editIt?.enabled) };
+                    }
+                  }
+                  return tItem;
+                });
+                return { ...tCat, items: derivedItems };
+              }
+              return tCat;
+            }
+            const updatedItems = tCat.items.map(tItem => {
+              const foundItem = foundCat.items?.find((i: any) => i.id === tItem.id);
+              if (foundItem) {
+                return { ...tItem, enabled: foundItem.enabled, scope: foundItem.scope };
+              }
+              return tItem;
+            });
+            return { ...tCat, items: updatedItems };
+          });
+          merged[role] = updatedCats;
+        }
+      }
+    }
+
+    for (const [roleName, catList] of Object.entries(merged)) {
+      if (roleName !== 'SYSTEM_ADMIN') {
+        const adminCat = catList.find(c => c.id === 'admin');
+        if (adminCat) {
+          adminCat.items.forEach(item => {
+            item.enabled = false;
+            if (item.scope) item.scope = null;
+          });
+        }
+        const tabVisCat = catList.find(c => c.id === 'tab_visibility');
+        const settingsTab = tabVisCat?.items.find(i => i.id === 'tab_settings');
+        if (settingsTab) {
+          settingsTab.enabled = false;
+        }
+      } else {
+        const tabVisCat = catList.find(c => c.id === 'tab_visibility');
+        const settingsTab = tabVisCat?.items.find(i => i.id === 'tab_settings');
+        if (settingsTab) {
+          settingsTab.enabled = true;
+        }
+      }
+      if (['RESEARCH_GUIDE', 'SAT_MATH_FACULTY', 'SAT_VERBAL_FACULTY', 'UNIVERSITY_MENTOR'].includes(roleName)) {
+        const reportsCat = catList.find(c => c.id === 'reports');
+        if (reportsCat) {
+          reportsCat.items.forEach(item => {
+            item.enabled = false;
+            item.scope = null;
+          });
+        }
+      }
+    }
+
+    if (merged['CATEGORY_MANAGER'] && Array.isArray(merged['CATEGORY_MANAGER'])) {
+      merged['CATEGORY_MANAGER'].forEach(cat => {
+        if (cat && cat.id !== 'admin' && cat.id !== 'tab_visibility' && Array.isArray(cat.items)) {
+          cat.items.forEach(item => {
+            if (item) {
+              item.enabled = true;
+              if (item.id === 'launchpad_edit_curriculum_access') {
+                item.scope = 'Enabled';
+              } else if (item.scope) {
+                item.scope = 'Global Scope';
+              }
+            }
+          });
+        }
+      });
+    }
+
+    return merged;
+  };
+
   const [permissionsMatrixState, setPermissionsMatrixState] = useState<Record<string, PermissionCategory[]>>(() => {
     const saved = localStorage.getItem('uppseekers_permissions_v2');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        const merged = { ...defaultPermissionsMatrix };
-        if (parsed && typeof parsed === 'object') {
-          for (const role of Object.keys(merged)) {
-            const parsedCategories = parsed[role];
-            if (Array.isArray(parsedCategories)) {
-              // Merge categories so newly added categories (like reports) exist
-              const templateCats = JSON.parse(JSON.stringify(defaultPermissionsMatrix[role])) as PermissionCategory[];
-              const updatedCats = templateCats.map(tCat => {
-                const foundCat = parsedCategories.find((c: any) => c.id === tCat.id);
-                if (!foundCat) {
-                  if (tCat.id === 'tab_visibility') {
-                    // Derive initial tab visibility from previously saved permission categories
-                    const findSavedItem = (catId: string, itemId: string) => {
-                      const cat = parsedCategories.find((c: any) => c.id === catId);
-                      return cat?.items?.find((i: any) => i.id === itemId);
-                    };
-                    const derivedItems = tCat.items.map(tItem => {
-                      if (tItem.id === 'tab_settings') return { ...tItem, enabled: role === 'SYSTEM_ADMIN' };
-                      if (tItem.id === 'tab_batches') {
-                        const it = findSavedItem('batch', 'view_past');
-                        return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
-                      }
-                      if (tItem.id === 'tab_scheduler') {
-                        const it = findSavedItem('schedule', 'create_class');
-                        return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
-                      }
-                      if (tItem.id === 'tab_vault') {
-                        const it = findSavedItem('vault', 'view_vault');
-                        return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
-                      }
-                      if (tItem.id === 'tab_evaluator') {
-                        const it = findSavedItem('tasks', 'assign_tasks');
-                        return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
-                      }
-                      if (tItem.id === 'tab_users') {
-                        const it = findSavedItem('profile', 'view_roster');
-                        return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
-                      }
-                      if (tItem.id === 'tab_reports') {
-                        const it = findSavedItem('reports', 'view_meeting_reports');
-                        return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
-                      }
-                      if (tItem.id === 'tab_universities') {
-                        const it = findSavedItem('shortlist', 'add_uni');
-                        return it ? { ...tItem, enabled: Boolean(it.enabled) } : tItem;
-                      }
-                      if (tItem.id === 'tab_launchpad') {
-                        const tabIt = findSavedItem('launchpad', 'launchpad_student_tab_access');
-                        const editIt = findSavedItem('launchpad', 'launchpad_edit_curriculum_access');
-                        if (tabIt || editIt) {
-                          return { ...tItem, enabled: Boolean(tabIt?.enabled || editIt?.enabled) };
-                        }
-                      }
-                      return tItem;
-                    });
-                    return { ...tCat, items: derivedItems };
-                  }
-                  return tCat;
-                }
-                const updatedItems = tCat.items.map(tItem => {
-                  const foundItem = foundCat.items?.find((i: any) => i.id === tItem.id);
-                  if (foundItem) {
-                    return { ...tItem, enabled: foundItem.enabled, scope: foundItem.scope };
-                  }
-                  return tItem;
-                });
-                return { ...tCat, items: updatedItems };
-              });
-              merged[role] = updatedCats;
-            }
-          }
-        }
-        
-        // STRICT SECURITY ENFORCEMENT:
-        // Keep Admin Settings & System Controls strictly with SYSTEM_ADMIN only!
-        // No other role (including CATEGORY_MANAGER, OPERATIONS_LEAD, DEVELOPER, etc.) can have admin category enabled.
-        for (const [roleName, catList] of Object.entries(merged)) {
-          if (roleName !== 'SYSTEM_ADMIN') {
-            const adminCat = catList.find(c => c.id === 'admin');
-            if (adminCat) {
-              adminCat.items.forEach(item => {
-                item.enabled = false;
-                if (item.scope) item.scope = null;
-              });
-            }
-            const tabVisCat = catList.find(c => c.id === 'tab_visibility');
-            const settingsTab = tabVisCat?.items.find(i => i.id === 'tab_settings');
-            if (settingsTab) {
-              settingsTab.enabled = false;
-            }
-          } else {
-            const tabVisCat = catList.find(c => c.id === 'tab_visibility');
-            const settingsTab = tabVisCat?.items.find(i => i.id === 'tab_settings');
-            if (settingsTab) {
-              settingsTab.enabled = true;
-            }
-          }
-          if (['RESEARCH_GUIDE', 'SAT_MATH_FACULTY', 'SAT_VERBAL_FACULTY', 'UNIVERSITY_MENTOR'].includes(roleName)) {
-            const reportsCat = catList.find(c => c.id === 'reports');
-            if (reportsCat) {
-              reportsCat.items.forEach(item => {
-                item.enabled = false;
-                item.scope = null;
-              });
-            }
-          }
-        }
-
-        // For CATEGORY_MANAGER, ensure global scope on academic & operational modules (preserving explicit tab_visibility toggles)
-        if (merged['CATEGORY_MANAGER'] && Array.isArray(merged['CATEGORY_MANAGER'])) {
-          merged['CATEGORY_MANAGER'].forEach(cat => {
-            if (cat && cat.id !== 'admin' && cat.id !== 'tab_visibility' && Array.isArray(cat.items)) {
-              cat.items.forEach(item => {
-                if (item) {
-                  item.enabled = true;
-                  if (item.id === 'launchpad_edit_curriculum_access') {
-                    item.scope = 'Enabled';
-                  } else if (item.scope) {
-                    item.scope = 'Global Scope';
-                  }
-                }
-              });
-            }
-          });
-        }
-
-        try {
-          localStorage.setItem('uppseekers_permissions_v2', JSON.stringify(merged));
-        } catch (e) {}
-
+        const merged = mergePermissionsWithDefaults(parsed);
+        safeLocalStorageSet('uppseekers_permissions_v2', merged);
         return merged;
       } catch(e) {}
     }
@@ -2104,210 +2100,27 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     checkAuth();
   }, []);
 
-  // Attach Firestore real-time listeners ONLY when Firebase Auth is ready and user is authenticated & verified
+  // Cloud SQL (/api/data & /api/launchpad/state) is the single authoritative source of truth across all devices.
+  // Only verify Firestore connectivity if a verified Firebase session exists, without letting partial Firestore docs overwrite Cloud SQL state.
   useEffect(() => {
     if (!isFirebaseAuthReady || !firebaseUser || !firebaseUser.emailVerified) {
       return;
     }
-
     testFirestoreConnection();
-
-    const fbEmail = (firebaseUser.email || '').trim().toLowerCase();
-    const isFbAdmin = fbEmail === 'uppseekers@gmail.com';
-    const unsubs: (() => void)[] = [];
-
-    const handleListenerError = (err: any, path: string) => {
-      const info = buildFirestoreErrorInfo(err, OperationType.LIST, path);
-      console.error('Firestore Error: ', JSON.stringify(info));
-      if (err?.code === 'permission-denied' || String(err?.message || '').toLowerCase().includes('permission')) {
-        setFirestoreStatus('permission-denied');
-      } else {
-        setFirestoreStatus('error');
-      }
-    };
-
-    // 1. Listen for Students from Firestore (scoped by email for non-admins)
-    const studentsSource = isFbAdmin
-      ? collection(db, 'students')
-      : query(collection(db, 'students'), where('email', '==', fbEmail));
-
-    unsubs.push(
-      onSnapshot(
-        studentsSource,
-        async (snapshot) => {
-          setFirestoreStatus('connected');
-          if (!snapshot.empty) {
-            const loaded: Student[] = [];
-            snapshot.forEach((docSnap) => {
-              const s = docSnap.data() as Student;
-              if (!s.id) s.id = docSnap.id;
-              if (!s.intake) s.intake = 'Fall 2026';
-              if (!s.tasks) s.tasks = [];
-              if (!s.activities) s.activities = [];
-              if (!s.documents) s.documents = [];
-              if (!s.shortlist) s.shortlist = [];
-              if (!s.countries) s.countries = [];
-              if (!s.operationalLogs || s.operationalLogs.length === 0) {
-                s.operationalLogs = getDefaultOperationalLogsForStudent(s.id, s.name, s.counselor);
-              }
-              if (s.phone && typeof s.phone === 'string' && s.phone.includes('|')) {
-                s.phone = s.phone.split('|')[0].trim();
-              }
-              if (s.tasks) {
-                s.tasks = s.tasks.map((t) => normalizeTask(t, { studentId: s.id, studentName: s.name }));
-              }
-              if (s.activities && s.activities.length > 0) {
-                s.activities = s.activities.map((a) => normalizeActivity(a, { studentId: s.id, studentName: s.name }));
-              }
-              loaded.push(s);
-            });
-            setStudentsState((prev) => {
-              if (isFbAdmin) return loaded;
-              const merged = [...prev];
-              for (const item of loaded) {
-                const idx = merged.findIndex((p) => p.id === item.id);
-                if (idx >= 0) merged[idx] = item;
-                else merged.push(item);
-              }
-              return merged;
-            });
-            if (isFbAdmin) {
-              safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(loaded));
-            }
-          }
-        },
-        (err) => {
-          handleListenerError(err, 'students');
-        }
-      )
-    );
-
-    // 2. Listen for Staff from Firestore
-    const staffSource = isFbAdmin
-      ? collection(db, 'staff')
-      : query(collection(db, 'staff'), where('email', '==', fbEmail));
-
-    unsubs.push(
-      onSnapshot(
-        staffSource,
-        (snapshot) => {
-          if (!snapshot.empty) {
-            const loaded: StaffMember[] = [];
-            snapshot.forEach((docSnap) => loaded.push(docSnap.data() as StaffMember));
-            if (isFbAdmin) {
-              setStaffState(loaded);
-              safeLocalStorageSet('uppseekers_staff_v2', loaded);
-            }
-          }
-        },
-        (err) => {
-          handleListenerError(err, 'staff');
-        }
-      )
-    );
-
-    // 3. Listen for Events (admins get all; non-admins get events where they are participants)
-    const eventsSource = isFbAdmin
-      ? collection(db, 'events')
-      : query(collection(db, 'events'), where('participantEmails', 'array-contains', fbEmail));
-
-    unsubs.push(
-      onSnapshot(
-        eventsSource,
-        (snapshot) => {
-          if (!snapshot.empty && isFbAdmin) {
-            const loaded: EventItem[] = [];
-            snapshot.forEach((docSnap) => loaded.push(docSnap.data() as EventItem));
-            setEventsState(loaded);
-            safeLocalStorageSet('uppseekers_events_v2', loaded);
-          }
-        },
-        (err) => {
-          handleListenerError(err, 'events');
-        }
-      )
-    );
-
-    if (isFbAdmin) {
-      // 4. Listen for Batches from Firestore (Admin only)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'batches'),
-          (snapshot) => {
-            if (!snapshot.empty) {
-              const loaded: Batch[] = [];
-              snapshot.forEach((docSnap) => loaded.push(docSnap.data() as Batch));
-              setBatchesState(loaded);
-              safeLocalStorageSet('uppseekers_batches_v2', loaded);
-            }
-          },
-          (err) => {
-            handleListenerError(err, 'batches');
-          }
-        )
-      );
-
-      // 5. Listen for Launchpad state from Firestore (Admin only)
-      unsubs.push(
-        onSnapshot(
-          collection(db, 'launchpad'),
-          (snapshot) => {
-            if (!snapshot.empty) {
-              snapshot.forEach((docSnap) => {
-                const data = docSnap.data();
-                if (docSnap.id === 'permissions' && Array.isArray(data.items)) {
-                  setLaunchpadPermissionsState(data.items);
-                  safeLocalStorageSet('uppseekers_launchpad_perms_v1', data.items);
-                } else if (docSnap.id === 'subjects' && Array.isArray(data.items) && data.items.length > 0) {
-                  const mergedSubjects = mergeLaunchpadSubjectsWithDefaults(data.items);
-                  setLaunchpadSubjectsState(mergedSubjects);
-                  safeLocalStorageSet('uppseekers_launchpad_subjects_v1', mergedSubjects);
-                } else if (docSnap.id === 'chapters' && Array.isArray(data.items) && data.items.length > 0) {
-                  const mergedChapters = mergeLaunchpadChaptersWithDefaults(data.items);
-                  setLaunchpadChaptersState(mergedChapters);
-                  safeLocalStorageSet('uppseekers_launchpad_chapters_v1', mergedChapters);
-                } else if (docSnap.id === 'certQuestions' && Array.isArray(data.items) && data.items.length > 0) {
-                  const mergedQs = mergeLaunchpadCertQuestionsWithDefaults(data.items);
-                  setLaunchpadCertQuestionsState(mergedQs);
-                  safeLocalStorageSet('uppseekers_launchpad_cert_qs_v1', mergedQs);
-                } else if (docSnap.id === 'enrollments' && Array.isArray(data.items)) {
-                  setLaunchpadEnrollmentsState(data.items);
-                  safeLocalStorageSet('uppseekers_launchpad_enrollments_v1', data.items);
-                } else if (docSnap.id === 'releases' && Array.isArray(data.items)) {
-                  setLaunchpadSubjectReleasesState(data.items);
-                  safeLocalStorageSet('uppseekers_launchpad_releases_v1', data.items);
-                } else if (docSnap.id === 'progress' && Array.isArray(data.items)) {
-                  setLaunchpadProgressState(data.items);
-                  safeLocalStorageSet('uppseekers_launchpad_progress_v1', data.items);
-                } else if (docSnap.id === 'certifications' && Array.isArray(data.items)) {
-                  setLaunchpadCertificationsState(data.items);
-                  safeLocalStorageSet('uppseekers_launchpad_certs_v1', data.items);
-                } else if (docSnap.id === 'evaluations' && Array.isArray(data.items)) {
-                  setLaunchpadEvaluationsState(data.items);
-                  safeLocalStorageSet('uppseekers_launchpad_evals_v1', data.items);
-                } else if (docSnap.id === 'notifications' && Array.isArray(data.items)) {
-                  setAppNotificationsState(data.items);
-                  safeLocalStorageSet('uppseekers_notifications_v1', data.items);
-                }
-              });
-            }
-          },
-          (err) => {
-            handleListenerError(err, 'launchpad');
-          }
-        )
-      );
-    }
-
-    return () => {
-      unsubs.forEach((unsub) => unsub());
-    };
+    setFirestoreStatus('connected');
   }, [isFirebaseAuthReady, firebaseUser]);
 
   const setStudents = (newStudents: Student[]) => {
+    const token = localStorage.getItem('auth_token') || 'custom_user';
     const deleted = students.filter(prev => !newStudents.some(n => n.id === prev.id));
     deleted.forEach(d => {
-      if (d.id) void deleteDocFromFirestore('students', d.id);
+      if (d.id) {
+        void deleteDocFromFirestore('students', d.id);
+        fetch(`/api/students/${encodeURIComponent(d.id)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        }).catch(console.error);
+      }
     });
     setStudentsState(newStudents);
     safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(newStudents));
@@ -2316,12 +2129,11 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         void syncDocToFirestore('students', s.id, s);
       }
     });
-    const token = localStorage.getItem('auth_token');
     fetch('/api/students', {
       method: 'POST',
       headers: { 
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token || ''}`
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify(newStudents)
     }).catch(console.error);
@@ -2401,16 +2213,27 @@ function calculateReadiness(student: Student): number {
     updatedStudent.readiness = calculateReadiness(updatedStudent);
 
     setStudentsState(prev => {
-      const exists = prev.some(s => s.id === updatedStudent.id || s.email === updatedStudent.email);
+      const targetEmail = (updatedStudent.email || '').trim().toLowerCase();
+      const exists = prev.some(
+        s => s.id === updatedStudent.id || (targetEmail && (s.email || '').trim().toLowerCase() === targetEmail)
+      );
       const newStudents = exists 
-        ? prev.map(s => (s.id === updatedStudent.id || s.email === updatedStudent.email) ? updatedStudent : s)
+        ? prev.map(s =>
+            s.id === updatedStudent.id || (targetEmail && (s.email || '').trim().toLowerCase() === targetEmail)
+              ? updatedStudent
+              : s
+          )
         : [...prev, updatedStudent];
       safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(newStudents));
       return newStudents;
     });
 
     setCurrentUser(prev => {
-      if (prev && (prev.id === updatedStudent.id || prev.email === updatedStudent.email)) {
+      if (
+        prev &&
+        (prev.id === updatedStudent.id ||
+          (prev.email && updatedStudent.email && prev.email.trim().toLowerCase() === updatedStudent.email.trim().toLowerCase()))
+      ) {
         return { ...prev, ...updatedStudent };
       }
       return prev;
@@ -2421,19 +2244,30 @@ function calculateReadiness(student: Student): number {
     }
 
     const token = localStorage.getItem('auth_token') || 'custom_user';
-    fetch('/api/student', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-      body: JSON.stringify(updatedStudent)
-    }).catch(console.error);
+    try {
+      await fetch('/api/student', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(updatedStudent)
+      });
+    } catch (err) {
+      console.error('Failed to sync student profile to server:', err);
+    }
   };
 
   const getStudent = (id: string) => students.find(s => s.id === id);
 
   const setStaff = (newStaff: StaffMember[]) => {
+    const token = localStorage.getItem('auth_token') || 'custom_user';
     const deleted = staff.filter(prev => !newStaff.some(n => n.id === prev.id));
     deleted.forEach(d => {
-      if (d.id) void deleteDocFromFirestore('staff', d.id);
+      if (d.id) {
+        void deleteDocFromFirestore('staff', d.id);
+        fetch(`/api/staff/${encodeURIComponent(d.id)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        }).catch(console.error);
+      }
     });
     setStaffState(newStaff);
     safeLocalStorageSet('uppseekers_staff_v2', newStaff);
@@ -2442,7 +2276,6 @@ function calculateReadiness(student: Student): number {
         void syncDocToFirestore('staff', s.id, s);
       }
     });
-    const token = localStorage.getItem('auth_token') || 'custom_user';
     fetch('/api/staff', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -2453,6 +2286,12 @@ function calculateReadiness(student: Student): number {
   const setPermissionsMatrix = (matrix: Record<string, PermissionCategory[]>) => {
     setPermissionsMatrixState(matrix);
     safeLocalStorageSet('uppseekers_permissions_v2', matrix);
+    const token = localStorage.getItem('auth_token') || 'custom_user';
+    fetch('/api/settings/permissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ permissionsMatrix: matrix })
+    }).catch(console.error);
   };
 
   const [events, setEventsState] = useState<EventItem[]>(() => {
@@ -3438,22 +3277,88 @@ function calculateReadiness(student: Student): number {
 
       if (response.ok) {
         const data = await response.json();
-        if (data.students && data.students.length > 0) {
-          setStudentsState(data.students);
-          localStorage.setItem('uppseekers_students_v2', JSON.stringify(data.students));
+        let hydratedStudents: Student[] = [];
+        let hydratedStaff: StaffMember[] = [];
+
+        if (Array.isArray(data.students) && data.students.length > 0) {
+          hydratedStudents = data.students.map((raw: any) => {
+            const s = { ...raw } as Student;
+            if (!s.intake) s.intake = 'Fall 2026';
+            if (!Array.isArray(s.tasks)) s.tasks = [];
+            if (!Array.isArray(s.activities)) s.activities = [];
+            if (!Array.isArray(s.documents)) s.documents = [];
+            if (!Array.isArray(s.shortlist)) s.shortlist = [];
+            if (!Array.isArray(s.countries)) s.countries = ['USA'];
+            if (!s.operationalLogs || s.operationalLogs.length === 0) {
+              s.operationalLogs = getDefaultOperationalLogsForStudent(s.id, s.name, s.counselor);
+            }
+            if (s.phone && typeof s.phone === 'string' && s.phone.includes('|')) {
+              s.phone = s.phone.split('|')[0].trim();
+            }
+            s.tasks = s.tasks.map((t) => normalizeTask(t, { studentId: s.id, studentName: s.name }));
+            s.activities = s.activities.map((a) => normalizeActivity(a, { studentId: s.id, studentName: s.name }));
+            return s;
+          });
+          setStudentsState(hydratedStudents);
+          safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(hydratedStudents));
         }
-        if (data.staff && data.staff.length > 0) {
-          setStaffState(data.staff);
-          localStorage.setItem('uppseekers_staff_v2', JSON.stringify(data.staff));
+
+        if (Array.isArray(data.staff) && data.staff.length > 0) {
+          hydratedStaff = data.staff;
+          setStaffState(hydratedStaff);
+          safeLocalStorageSet('uppseekers_staff_v2', hydratedStaff);
         }
-        if (data.batches && data.batches.length > 0) {
+
+        if (Array.isArray(data.batches) && data.batches.length > 0) {
           setBatchesState(data.batches);
-          localStorage.setItem('uppseekers_batches_v2', JSON.stringify(data.batches));
+          safeLocalStorageSet('uppseekers_batches_v2', data.batches);
         }
-        if (data.events && data.events.length > 0) {
+
+        if (Array.isArray(data.events) && data.events.length > 0) {
           setEventsState(data.events);
-          localStorage.setItem('uppseekers_events_v2', JSON.stringify(data.events));
+          safeLocalStorageSet('uppseekers_events_v2', data.events);
         }
+
+        if (data.permissionsMatrix && typeof data.permissionsMatrix === 'object') {
+          const mergedPerms = mergePermissionsWithDefaults(data.permissionsMatrix);
+          setPermissionsMatrixState(mergedPerms);
+          safeLocalStorageSet('uppseekers_permissions_v2', mergedPerms);
+        }
+
+        // Sync active currentUser session with fresh server profile/role data
+        setCurrentUser(prev => {
+          if (!prev) return prev;
+          const prevEmail = (prev.email || '').trim().toLowerCase();
+          const prevId = (prev.id || '').trim();
+          const isPrevStudent = (prev.role || '').toUpperCase() === 'STUDENT';
+
+          if (isPrevStudent && hydratedStudents.length > 0) {
+            const matchedStu = hydratedStudents.find(
+              s =>
+                (prevId && s.id === prevId) ||
+                (prevEmail && (s.email || '').trim().toLowerCase() === prevEmail)
+            );
+            if (matchedStu) {
+              return {
+                ...prev,
+                ...matchedStu,
+                role: 'STUDENT',
+                status: 'Active',
+              } as any;
+            }
+          } else if (!isPrevStudent && hydratedStaff.length > 0) {
+            const matchedStaff = hydratedStaff.find(
+              st =>
+                (prevId && (st.id === prevId || (prevId === '1' && st.id === 'admin-1') || (prevId === 'admin-1' && st.id === '1'))) ||
+                (prevEmail && (st.email || '').trim().toLowerCase() === prevEmail)
+            );
+            if (matchedStaff) {
+              return { ...prev, ...matchedStaff };
+            }
+          }
+          return prev;
+        });
+
         return data;
       }
     } catch (e) {

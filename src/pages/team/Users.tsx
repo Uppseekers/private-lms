@@ -36,12 +36,19 @@ export default function TeamUsers() {
   const [userForPasswordChange, setUserForPasswordChange] = useState<TargetUserForPassword | null>(null);
 
   const handleSaveUserPassword = async (userId: string, userType: 'student' | 'staff', newPassword: string) => {
+    const cleanPwd = newPassword.trim();
+    let targetEmail = userForPasswordChange?.email || '';
+    let targetName = userForPasswordChange?.name || '';
+    let targetRole = userForPasswordChange?.role || '';
+
     if (userType === 'student') {
       const targetStu = students.find(s => s.id === userId);
       if (targetStu) {
+        targetEmail = targetStu.email || targetEmail;
+        targetName = targetStu.name || targetName;
         const updatedStudent: Student = {
           ...targetStu,
-          password: newPassword,
+          password: cleanPwd,
           activities: [
             {
               id: 'act_' + Date.now(),
@@ -52,21 +59,27 @@ export default function TeamUsers() {
             ...(targetStu.activities || [])
           ]
         };
-        updateStudent(updatedStudent);
+        void updateStudent(updatedStudent);
         if (selectedStudent?.id === userId) {
           setSelectedStudent(updatedStudent);
         }
       }
     } else {
+      const targetStf = staff.find(s => s.id === userId);
+      if (targetStf) {
+        targetEmail = targetStf.email || targetEmail;
+        targetName = targetStf.name || targetName;
+        targetRole = targetStf.role || targetRole;
+      }
       const updatedStaff = staff.map(s => {
         if (s.id === userId) {
-          return { ...s, password: newPassword };
+          return { ...s, password: cleanPwd };
         }
         return s;
       });
       setStaff(updatedStaff);
       if (selectedStaffMember?.id === userId) {
-        setSelectedStaffMember({ ...selectedStaffMember, password: newPassword });
+        setSelectedStaffMember({ ...selectedStaffMember, password: cleanPwd });
       }
     }
 
@@ -80,7 +93,10 @@ export default function TeamUsers() {
         },
         body: JSON.stringify({
           userId,
-          newPassword,
+          email: targetEmail,
+          name: targetName,
+          role: targetRole,
+          newPassword: cleanPwd,
           userType
         })
       });
@@ -144,7 +160,7 @@ export default function TeamUsers() {
   };
 
   const handleUpdateStudent = (updatedStudent: Student) => {
-    setStudents(students.map(s => s.id === updatedStudent.id ? updatedStudent : s));
+    void updateStudent(updatedStudent);
     setSelectedStudent(updatedStudent);
   };
 
@@ -691,6 +707,14 @@ export default function TeamUsers() {
             </div>
             <AddStaffForm onClose={() => setIsAddStaffModalOpen(false)} onAdd={(newStaff) => {
               setStaff([...staff, newStaff]);
+              fetch('/api/staff/create', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${localStorage.getItem('auth_token') || 'custom_user'}`
+                },
+                body: JSON.stringify(newStaff)
+              }).catch(console.error);
               setIsAddStaffModalOpen(false);
             }} />
           </div>
@@ -2251,9 +2275,10 @@ function StudentDetailDrawer({
             currentPassword: student.password || 'Student@123'
           }}
           onSavePassword={async (userId, type, newPassword) => {
+            const cleanPwd = newPassword.trim();
             const updatedStudent: Student = {
               ...student,
-              password: newPassword,
+              password: cleanPwd,
               activities: [
                 {
                   id: 'act_' + Date.now(),
@@ -2270,7 +2295,13 @@ function StudentDetailDrawer({
               await fetch('/api/admin/change-password', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ userId, newPassword, userType: 'student' })
+                body: JSON.stringify({
+                  userId,
+                  email: student.email,
+                  name: student.name,
+                  newPassword: cleanPwd,
+                  userType: 'student'
+                })
               });
             } catch (e) {
               console.warn('Backend password sync error:', e);
@@ -4599,9 +4630,10 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
             currentPassword: student.password || 'Student@123'
           }}
           onSavePassword={async (userId, type, newPassword) => {
+            const cleanPwd = newPassword.trim();
             const updatedStudent: Student = {
               ...student,
-              password: newPassword,
+              password: cleanPwd,
               activities: [
                 {
                   id: 'act_' + Date.now(),
@@ -4618,7 +4650,13 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
               await fetch('/api/admin/change-password', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ userId, newPassword, userType: 'student' })
+                body: JSON.stringify({
+                  userId,
+                  email: student.email,
+                  name: student.name,
+                  newPassword: cleanPwd,
+                  userType: 'student'
+                })
               });
             } catch (e) {
               console.warn('Backend password sync error:', e);
@@ -5045,9 +5083,10 @@ function StaffDetailDrawer({
             currentPassword: staffMember.password || 'Staff@123'
           }}
           onSavePassword={async (userId, type, newPassword) => {
+            const cleanPwd = newPassword.trim();
             const updatedStaff = staff.map(s => {
               if (s.id === userId) {
-                return { ...s, password: newPassword };
+                return { ...s, password: cleanPwd };
               }
               return s;
             });
@@ -5057,7 +5096,14 @@ function StaffDetailDrawer({
               await fetch('/api/admin/change-password', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-                body: JSON.stringify({ userId, newPassword, userType: 'staff' })
+                body: JSON.stringify({
+                  userId,
+                  email: staffMember.email,
+                  name: staffMember.name,
+                  role: staffMember.role,
+                  newPassword: cleanPwd,
+                  userType: 'staff'
+                })
               });
             } catch (e) {
               console.warn('Backend password sync error:', e);

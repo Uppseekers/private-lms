@@ -53,6 +53,7 @@ import {
   SubjectIllustration,
   LAUNCHPAD_ICON_OPTIONS,
 } from '@/components/launchpad/SubjectIllustration';
+import { LaunchpadGamificationGuide } from '@/components/launchpad/LaunchpadGamificationGuide';
 import {
   getStaffLaunchpadPermissions,
   isStudentAssignedToStaff,
@@ -1072,6 +1073,9 @@ export default function TeamLaunchpad() {
           )}
         </div>
       </div>
+
+      {/* Collapsible Gamification Reference Bar for Team */}
+      <LaunchpadGamificationGuide mode="team" />
 
       {/* ========================================================================= */}
       {/* MODE 1: STUDENT ENROLLMENT & RELEASES */}

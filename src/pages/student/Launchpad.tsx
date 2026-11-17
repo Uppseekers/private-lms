@@ -39,6 +39,7 @@ import {
 } from '@/data/launchpadData';
 import { SubjectIllustration } from '@/components/launchpad/SubjectIllustration';
 import { CertificateGenerator } from '@/components/launchpad/CertificateGenerator';
+import { LaunchpadGamificationGuide } from '@/components/launchpad/LaunchpadGamificationGuide';
 import { LaunchpadWeekProgress } from '@/types';
 
 function countWords(text: string): number {
@@ -1886,6 +1887,14 @@ export default function StudentLaunchpad() {
           <span>{certifiedCount} Certified</span>
         </div>
       </div>
+
+      {/* Crisp Gamification Guide & Live Rank Progress */}
+      <LaunchpadGamificationGuide
+        mode="student"
+        totalEarnedXP={totalEarnedXP}
+        certifiedCount={certifiedCount}
+        totalSubjects={visibleSubjects.length}
+      />
 
       {!isEnrolled && (
         <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs sm:text-sm text-slate-700 flex items-center gap-3">

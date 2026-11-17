@@ -26,6 +26,13 @@ export const studentsData = pgTable('students_data', {
   documents: jsonb('documents').$type<any[]>(),
   essays: jsonb('essays').$type<any[]>(),
   tasks: jsonb('tasks').$type<any[]>(),
+  profileJson: jsonb('profile_json').$type<Record<string, any>>(),
+});
+
+export const portalSettings = pgTable('portal_settings', {
+  key: text('key').primaryKey(),
+  valueJson: jsonb('value_json').$type<Record<string, any>>(),
+  updatedAt: timestamp('updated_at').defaultNow(),
 });
 
 export const staffData = pgTable('staff_data', {
