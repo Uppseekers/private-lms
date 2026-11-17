@@ -1,4 +1,10 @@
-import { StaffMember, Student } from '@/types';
+import {
+  StaffMember,
+  Student,
+  LaunchpadAccessScope,
+  LaunchpadCurriculumEditScope,
+  LaunchpadTeamPermission
+} from '@/types';
 
 /**
  * Checks if the current staff member has administrative or oversight privileges.
@@ -11,11 +17,7 @@ export function isUserAdmin(currentUser?: StaffMember | null): boolean {
   return (
     roleUpper === 'SYSTEM_ADMIN' ||
     roleUpper === 'ADMIN' ||
-    roleUpper === 'OPERATIONS_LEAD' ||
-    roleUpper === 'DEVELOPER' ||
     roleUpper === 'SUPER_ADMIN' ||
-    roleUpper === 'CATEGORY_MANAGER' ||
-    roleUpper.includes('CATEGORY') ||
     emailLower === 'uppseekers@gmail.com'
   );
 }
@@ -443,5 +445,288 @@ export function canStaffAccessEvent(
 
   return false;
 }
+
+/**
+ * Checks if the staff member is a Counselor (Admissions Counselor, Head Counselor, Lead Counselor).
+ */
+export function isStaffCounselor(currentUser?: StaffMember | null): boolean {
+  if (!currentUser) return false;
+  const roleUpper = (currentUser.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  return (
+    roleUpper === 'COUNSELOR' ||
+    roleUpper === 'HEAD_COUNSELOR' ||
+    roleUpper === 'LEAD_COUNSELOR' ||
+    roleUpper === 'COLLEGE_COUNSELOR' ||
+    roleUpper.includes('COUNSELOR')
+  );
+}
+
+/**
+ * Checks if the staff member is a Research Mentor, SAT Educator, or other Faculty/Mentor.
+ */
+export function isStaffMentorOrFaculty(currentUser?: StaffMember | null): boolean {
+  if (!currentUser) return false;
+  // If user is Admin, they are not restricted faculty
+  if (isUserAdmin(currentUser)) return false;
+  const roleUpper = (currentUser.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  return (
+    roleUpper === 'RESEARCH_GUIDE' ||
+    roleUpper === 'RESEARCH_MENTOR' ||
+    roleUpper === 'RESEARCH_FACULTY' ||
+    roleUpper === 'SAT_VERBAL_FACULTY' ||
+    roleUpper === 'SAT_MATH_FACULTY' ||
+    roleUpper === 'SAT_FACULTY' ||
+    roleUpper === 'FACULTY' ||
+    roleUpper === 'UNIVERSITY_MENTOR' ||
+    roleUpper === 'MENTOR' ||
+    roleUpper === 'EDUCATOR' ||
+    roleUpper.includes('FACULTY') ||
+    roleUpper.includes('MENTOR') ||
+    roleUpper.includes('GUIDE')
+  );
+}
+
+/**
+ * Checks if a specific task was authored or assigned by the current staff member.
+ */
+export function isTaskAssignedByStaff(
+  task: any,
+  currentUser?: StaffMember | null
+): boolean {
+  if (!currentUser || !task) return false;
+  const staffName = (currentUser.name || '').trim().toLowerCase();
+  const staffEmail = (currentUser.email || '').trim().toLowerCase();
+  const staffId = (currentUser.id || '').trim().toLowerCase();
+
+  const assignedBy = (task.assignedBy || '').trim().toLowerCase();
+  const assignedById = ((task as any).assignedById || (task as any).authorId || '').trim().toLowerCase();
+  const assignedByEmail = ((task as any).assignedByEmail || (task as any).authorEmail || '').trim().toLowerCase();
+
+  if (staffId && assignedById && assignedById === staffId) return true;
+  if (staffEmail && assignedByEmail && assignedByEmail === staffEmail) return true;
+
+  if (assignedBy) {
+    if (assignedBy === staffName || assignedBy === staffEmail || assignedBy === staffId) return true;
+    if (staffName && staffName.length > 2 && (assignedBy.startsWith(staffName) || assignedBy.includes(staffName))) return true;
+    if (staffEmail && assignedBy.includes(staffEmail)) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Strictly verifies whether a task is visible to a staff member:
+ * - Admin: full access to all tasks
+ * - Counselor: access for their assigned students only
+ * - Research Mentor / SAT Educators / Faculty: ONLY tasks assigned by them
+ */
+export function isTaskVisibleToStaff(
+  task: any,
+  student: Student,
+  currentUser?: StaffMember | null,
+  permissionsMatrix?: Record<string, any[]>
+): boolean {
+  if (!currentUser || !task) return false;
+  if (isUserAdmin(currentUser)) return true;
+
+  // Research Mentor, SAT Educators, Faculty: ONLY see tasks assigned by them
+  if (isStaffMentorOrFaculty(currentUser)) {
+    return isTaskAssignedByStaff(task, currentUser);
+  }
+
+  // Counselor: access for their assigned students only
+  if (isStaffCounselor(currentUser)) {
+    return isStudentAssignedToStaff(student, currentUser, permissionsMatrix);
+  }
+
+  // Other staff (Category Manager / Operations): check student assignment
+  return isStudentAssignedToStaff(student, currentUser, permissionsMatrix);
+}
+
+/**
+ * Validates whether a staff member has access to the Reports & Analytics tab:
+ * Requirements:
+ * - Research Mentor, SAT Educators, Faculty, Mentors: NO access at all!
+ * - Counselor: Access granted for assigned students only (if enabled in permissions).
+ * - Admin: Full access.
+ */
+export function canStaffAccessReports(
+  currentUser?: StaffMember | null,
+  permissionsMatrix?: Record<string, any[]>
+): boolean {
+  if (!currentUser) return false;
+  if (isUserAdmin(currentUser)) return true;
+
+  const roleUpper = (currentUser.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+
+  let matrixSource = permissionsMatrix;
+  if (!matrixSource && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const saved = localStorage.getItem('uppseekers_permissions_v2');
+      if (saved) matrixSource = JSON.parse(saved);
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  const roleCats = matrixSource ? (matrixSource[currentUser.role] || matrixSource[roleUpper]) : undefined;
+
+  // Check explicit 1-to-1 tab visibility setting first
+  if (roleCats && Array.isArray(roleCats)) {
+    const tabVisCat = roleCats.find((c: any) => c.id === 'tab_visibility');
+    const tabReportsItem = tabVisCat?.items?.find((i: any) => i.id === 'tab_reports');
+    if (tabReportsItem !== undefined) {
+      return Boolean(tabReportsItem.enabled);
+    }
+  }
+
+  // Research Mentor and SAT Educators should NOT have access to reports by default
+  if (isStaffMentorOrFaculty(currentUser)) {
+    return false;
+  }
+
+  // Check permissions matrix reports category
+  if (roleCats && Array.isArray(roleCats)) {
+    const reportsCat = roleCats.find((c: any) => c.id === 'reports');
+    if (reportsCat && reportsCat.items) {
+      const viewReportsItem = reportsCat.items.find((i: any) => i.id === 'view_meeting_reports' || i.id === 'view_activity_audit');
+      if (viewReportsItem) {
+        return Boolean(viewReportsItem.enabled);
+      }
+    }
+  }
+
+  // Counselors default to having assigned student reports access
+  if (isStaffCounselor(currentUser)) {
+    return true;
+  }
+
+  return false;
+}
+
+export interface ResolvedLaunchpadPermissions {
+  studentTabAccess: LaunchpadAccessScope;
+  reviewExerciseAccess: LaunchpadAccessScope;
+  editCurriculumAccess: LaunchpadCurriculumEditScope;
+}
+
+function mapMatrixScopeToAccessScope(enabled: boolean, scope?: string | null): LaunchpadAccessScope {
+  if (!enabled) return 'none';
+  const s = (scope || '').toLowerCase();
+  if (s.includes('none')) return 'none';
+  if (s.includes('global')) return 'global';
+  if (s.includes('read')) return 'read_only';
+  if (s.includes('assign')) return 'assigned';
+  return 'assigned';
+}
+
+function mapMatrixScopeToEditScope(enabled: boolean, scope?: string | null): LaunchpadCurriculumEditScope {
+  if (!enabled) return 'none';
+  const s = (scope || '').toLowerCase();
+  if (s.includes('none')) return 'none';
+  if (s.includes('read')) return 'read_only';
+  return 'enabled';
+}
+
+/**
+ * Resolves a staff member's 3 granular Launchpad permissions from:
+ * 1. SYSTEM_ADMIN override (always full access)
+ * 2. Unified Access & Permissions matrix (`launchpad` category) for the user's role
+ * 3. Per-user explicit overrides in `launchpadPermissions`
+ * 4. Role defaults
+ */
+export function getStaffLaunchpadPermissions(
+  currentUser?: StaffMember | null,
+  launchpadPermissions?: LaunchpadTeamPermission[],
+  permissionsMatrix?: Record<string, any[]>
+): ResolvedLaunchpadPermissions {
+  if (!currentUser) {
+    return { studentTabAccess: 'none', reviewExerciseAccess: 'none', editCurriculumAccess: 'none' };
+  }
+  if (isUserAdmin(currentUser)) {
+    return { studentTabAccess: 'global', reviewExerciseAccess: 'global', editCurriculumAccess: 'enabled' };
+  }
+
+  const roleUpper = (currentUser.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+
+  // Role defaults
+  let studentTabAccess: LaunchpadAccessScope = 'none';
+  let reviewExerciseAccess: LaunchpadAccessScope = 'none';
+  let editCurriculumAccess: LaunchpadCurriculumEditScope = 'none';
+
+  if (roleUpper === 'CATEGORY_MANAGER' || roleUpper === 'OPERATIONS_LEAD' || roleUpper === 'HEAD_COUNSELOR') {
+    studentTabAccess = 'global';
+    reviewExerciseAccess = 'global';
+    editCurriculumAccess = 'enabled';
+  } else if (isStaffCounselor(currentUser)) {
+    studentTabAccess = 'assigned';
+    reviewExerciseAccess = 'assigned';
+    editCurriculumAccess = 'none';
+  }
+
+  // Check unified permissions matrix (state first, then localStorage fallback)
+  let matrixSource = permissionsMatrix;
+  if (!matrixSource && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const saved = localStorage.getItem('uppseekers_permissions_v2');
+      if (saved) matrixSource = JSON.parse(saved);
+    } catch {
+      // Ignore parse errors
+    }
+  }
+
+  if (matrixSource) {
+    const roleCats = matrixSource[currentUser.role] || matrixSource[roleUpper];
+    const tabVisCat = Array.isArray(roleCats) ? roleCats.find((c: any) => c.id === 'tab_visibility') : null;
+    if (tabVisCat && Array.isArray(tabVisCat.items)) {
+      const lpVisItem = tabVisCat.items.find((i: any) => i.id === 'tab_launchpad');
+      if (lpVisItem && lpVisItem.enabled === false) {
+        return { studentTabAccess: 'none', reviewExerciseAccess: 'none', editCurriculumAccess: 'none' };
+      }
+    }
+    const lpCat = Array.isArray(roleCats) ? roleCats.find((c: any) => c.id === 'launchpad') : null;
+    if (lpCat && Array.isArray(lpCat.items)) {
+      const tabItem = lpCat.items.find((i: any) => i.id === 'launchpad_student_tab_access');
+      const revItem = lpCat.items.find((i: any) => i.id === 'launchpad_review_exercise_access');
+      const editItem = lpCat.items.find((i: any) => i.id === 'launchpad_edit_curriculum_access');
+      if (tabItem) studentTabAccess = mapMatrixScopeToAccessScope(Boolean(tabItem.enabled), tabItem.scope);
+      if (revItem) reviewExerciseAccess = mapMatrixScopeToAccessScope(Boolean(revItem.enabled), revItem.scope);
+      if (editItem) editCurriculumAccess = mapMatrixScopeToEditScope(Boolean(editItem.enabled), editItem.scope);
+    }
+  }
+
+  // Per-user explicit record in launchpadPermissions (if present)
+  const explicit = launchpadPermissions?.find(
+    (p) => p.userId === currentUser.id || (currentUser.email && p.userId.toLowerCase() === currentUser.email.toLowerCase())
+  );
+  if (explicit) {
+    if (explicit.launchpadStudentTabAccess) {
+      studentTabAccess = explicit.launchpadStudentTabAccess;
+    } else if (explicit.accessScope) {
+      studentTabAccess = explicit.accessScope;
+    }
+    if (explicit.launchpadReviewExerciseAccess) {
+      reviewExerciseAccess = explicit.launchpadReviewExerciseAccess;
+    }
+    if (explicit.launchpadEditCurriculumAccess) {
+      editCurriculumAccess = explicit.launchpadEditCurriculumAccess;
+    }
+  }
+
+  return { studentTabAccess, reviewExerciseAccess, editCurriculumAccess };
+}
+
+/**
+ * Backwards-compatible wrapper returning student-tab Launchpad access scope.
+ */
+export function getStaffLaunchpadScope(
+  currentUser?: StaffMember | null,
+  launchpadPermissions?: LaunchpadTeamPermission[],
+  permissionsMatrix?: Record<string, any[]>
+): LaunchpadAccessScope {
+  return getStaffLaunchpadPermissions(currentUser, launchpadPermissions, permissionsMatrix).studentTabAccess;
+}
+
+
 
 

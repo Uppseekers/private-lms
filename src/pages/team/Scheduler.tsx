@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import { 
   Plus, Search, Users, Video, Edit, Trash2, X, RefreshCw, 
   FileText, Link as LinkIcon, CheckCircle2, Star, MessageSquare, ClipboardList, Paperclip,
-  Repeat, Calendar, CalendarDays, ChevronDown, ChevronUp, Layers, Clock, Sparkles, AlertCircle
+  Repeat, Calendar, CalendarDays, ChevronDown, ChevronUp, Layers, Clock, Sparkles, AlertCircle,
+  Copy, Check, ExternalLink, Unplug, Mail
 } from 'lucide-react';
 import { useDatabase, EventItem } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
@@ -56,6 +57,14 @@ export default function TeamScheduler() {
 
   // Form State
   const todayStr = new Date().toISOString().split('T')[0];
+  const defaultTimezone = (() => {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'America/New_York';
+    } catch {
+      return 'America/New_York';
+    }
+  })();
+
   const [formData, setFormData] = useState({
     stream: 'Counselling (1-on-1)',
     title: '',
@@ -64,7 +73,9 @@ export default function TeamScheduler() {
     endDate: addMonthsToDateString(todayStr, 2),
     selectedDays: [1, 3, 5] as number[], // Mon, Wed, Fri
     startTime: '18:00',
-    endTime: '19:30',
+    endTime: '19:00',
+    durationMinutes: 60,
+    timezone: defaultTimezone,
     location: 'https://meet.google.com',
     notes: '',
     assignments: '',
@@ -75,6 +86,188 @@ export default function TeamScheduler() {
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [horizonFilter, setHorizonFilter] = useState<'all' | 'upcoming' | 'past'>('all');
+
+  // Zoho Meeting Integration State
+  const [zohoStatus, setZohoStatus] = useState<{
+    loading: boolean;
+    configured: boolean;
+    connected: boolean;
+    zohoEmail?: string;
+    zohoDisplayName?: string;
+    redirectUri?: string;
+  }>({ loading: true, configured: true, connected: false });
+  const [videoMode, setVideoMode] = useState<'zoho' | 'manual'>('manual');
+  const [isConnectingZoho, setIsConnectingZoho] = useState(false);
+  const [isCreatingZohoMeeting, setIsCreatingZohoMeeting] = useState(false);
+  const [zohoBanner, setZohoBanner] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
+
+  const getStaffAuthHeaders = (): Record<string, string> => {
+    const email = (currentUser?.email || '').trim();
+    const uid = String(currentUser?.id || '1');
+    const token = email ? `custom_${uid}_${email}` : (localStorage.getItem('auth_token') || 'custom_user');
+    return {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      ...(email ? { 'x-staff-email': email } : {}),
+      ...(currentUser?.name ? { 'x-staff-name': currentUser.name } : {}),
+    };
+  };
+
+  const fetchZohoStatus = async () => {
+    try {
+      setZohoStatus(prev => ({ ...prev, loading: true }));
+      const res = await fetch('/api/zoho/status', {
+        method: 'GET',
+        headers: getStaffAuthHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      setZohoStatus({
+        loading: false,
+        configured: data.configured !== false,
+        connected: Boolean(data.connected),
+        zohoEmail: data.zohoEmail || '',
+        zohoDisplayName: data.zohoDisplayName || '',
+        redirectUri: data.redirectUri || '',
+      });
+    } catch {
+      setZohoStatus(prev => ({ ...prev, loading: false, connected: false }));
+    }
+  };
+
+  useEffect(() => {
+    fetchZohoStatus();
+  }, [currentUser?.id, currentUser?.email]);
+
+  useEffect(() => {
+    const handleOAuthMessage = (event: MessageEvent) => {
+      const originAllowed =
+        event.origin === window.location.origin ||
+        event.origin.endsWith('.run.app') ||
+        event.origin.startsWith('http://localhost') ||
+        event.origin.startsWith('https://localhost');
+      if (!originAllowed || !event.data || typeof event.data !== 'object') return;
+
+      if (event.data.type === 'ZOHO_OAUTH_SUCCESS') {
+        setIsConnectingZoho(false);
+        setModalError(null);
+        setZohoBanner({
+          type: 'success',
+          message: `Connected Zoho Meeting account (${event.data.zohoEmail || event.data.zohoDisplayName || 'Verified'}).`,
+        });
+        fetchZohoStatus();
+        setVideoMode('zoho');
+      } else if (event.data.type === 'ZOHO_OAUTH_ERROR') {
+        setIsConnectingZoho(false);
+        const msg = event.data.error || 'Zoho authorization did not complete.';
+        setZohoBanner({ type: 'error', message: msg });
+        if (isModalOpen) setModalError(msg);
+      }
+    };
+    window.addEventListener('message', handleOAuthMessage);
+    return () => window.removeEventListener('message', handleOAuthMessage);
+  }, [isModalOpen, currentUser?.id, currentUser?.email]);
+
+  const handleConnectZoho = async () => {
+    setZohoBanner(null);
+    setModalError(null);
+    setIsConnectingZoho(true);
+    try {
+      const res = await fetch('/api/zoho/auth/url', {
+        method: 'GET',
+        headers: getStaffAuthHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.redirectUri) {
+        setZohoStatus(prev => ({ ...prev, redirectUri: data.redirectUri }));
+      }
+      if (!res.ok || !data.url) {
+        const errMsg = data.error || 'Unable to start Zoho OAuth flow.';
+        setZohoStatus(prev => ({ ...prev, configured: data.configured !== false, redirectUri: data.redirectUri || prev.redirectUri }));
+        setZohoBanner({ type: 'error', message: errMsg });
+        if (isModalOpen) setModalError(errMsg);
+        setIsConnectingZoho(false);
+        return;
+      }
+
+      const width = 620;
+      const height = 720;
+      const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+      const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+      const popup = window.open(
+        data.url,
+        'zoho_oauth_popup',
+        `width=${width},height=${height},left=${left},top=${top},resizable=yes,scrollbars=yes`
+      );
+      if (!popup || popup.closed) {
+        const msg = 'Popup blocked by browser. Please allow popups for this site and click Connect Zoho Meeting again.';
+        setZohoBanner({ type: 'error', message: msg });
+        if (isModalOpen) setModalError(msg);
+        setIsConnectingZoho(false);
+        return;
+      }
+
+      const pollTimer = window.setInterval(() => {
+        if (popup.closed) {
+          window.clearInterval(pollTimer);
+          setIsConnectingZoho(false);
+        }
+      }, 500);
+    } catch (err: any) {
+      const msg = err?.message || 'Network error while connecting Zoho Meeting.';
+      setZohoBanner({ type: 'error', message: msg });
+      if (isModalOpen) setModalError(msg);
+      setIsConnectingZoho(false);
+    }
+  };
+
+  const handleDisconnectZoho = async () => {
+    try {
+      await fetch('/api/zoho/connection', {
+        method: 'DELETE',
+        headers: getStaffAuthHeaders(),
+      });
+      setZohoStatus(prev => ({ ...prev, connected: false, zohoEmail: '', zohoDisplayName: '' }));
+      if (videoMode === 'zoho') setVideoMode('manual');
+      setZohoBanner({ type: 'info', message: 'Disconnected your Zoho Meeting account.' });
+    } catch {
+      setZohoBanner({ type: 'error', message: 'Failed to disconnect Zoho Meeting account.' });
+    }
+  };
+
+  const computeDurationMinutes = (start: string, end: string): number => {
+    const [sh, sm] = (start || '18:00').split(':').map(Number);
+    const [eh, em] = (end || '19:00').split(':').map(Number);
+    if (!Number.isFinite(sh) || !Number.isFinite(sm) || !Number.isFinite(eh) || !Number.isFinite(em)) {
+      return 60;
+    }
+    let diff = (eh * 60 + em) - (sh * 60 + sm);
+    if (diff <= 0) diff += 24 * 60;
+    return Math.max(15, Math.min(720, diff));
+  };
+
+  const computeEndTimeFromDuration = (start: string, mins: number): string => {
+    const [sh, sm] = (start || '18:00').split(':').map(Number);
+    if (!Number.isFinite(sh) || !Number.isFinite(sm)) return '19:00';
+    const total = (sh * 60 + sm + mins) % (24 * 60);
+    const hh = String(Math.floor(total / 60)).padStart(2, '0');
+    const mm = String(total % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  const TIMEZONE_OPTIONS = Array.from(new Set([
+    defaultTimezone,
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Los_Angeles',
+    'Europe/London',
+    'Asia/Dubai',
+    'Asia/Kolkata',
+    'Asia/Singapore',
+    'UTC',
+  ]));
 
   const isEventInPast = (e: any): boolean => {
     if (e.status === 'Completed') return true;
@@ -123,6 +316,7 @@ export default function TeamScheduler() {
 
   const handleOpenModal = (preselectedBatchId?: string) => {
     setEditingEventId(null);
+    setModalError(null);
     const today = new Date().toISOString().split('T')[0];
     const targetBatch = preselectedBatchId ? batches.find(b => b.id === preselectedBatchId) : null;
 
@@ -134,12 +328,15 @@ export default function TeamScheduler() {
       endDate: addMonthsToDateString(today, 2),
       selectedDays: [1, 3, 5],
       startTime: '18:00',
-      endTime: '19:30',
+      endTime: '19:00',
+      durationMinutes: 60,
+      timezone: defaultTimezone,
       location: targetBatch?.meetingLink || 'https://meet.google.com',
       notes: '',
       assignments: '',
       titleNumbering: true,
     });
+    setVideoMode(zohoStatus.connected ? 'zoho' : 'manual');
     setShowAllPreviewDates(false);
 
     if (preselectedBatchId) {
@@ -164,8 +361,11 @@ export default function TeamScheduler() {
 
   const handleEditEvent = (evt: any) => {
     setEditingEventId(evt.id);
+    setModalError(null);
     const isRec = !!(evt.isRecurring || evt.seriesId);
     setScheduleMode(isRec ? 'recurring' : 'single');
+    const parsedStart = (evt.time || '18:00').split(' - ')[0] || '18:00';
+    const parsedEnd = (evt.time || '19:00').split(' - ')[1] || computeEndTimeFromDuration(parsedStart, 60);
     setFormData({
       stream: evt.stream || 'Counselling (1-on-1)',
       title: evt.title || '',
@@ -173,13 +373,16 @@ export default function TeamScheduler() {
       startDate: evt.date || evt.day || new Date().toISOString().split('T')[0],
       endDate: addMonthsToDateString(evt.date || evt.day || new Date().toISOString().split('T')[0], 2),
       selectedDays: [1, 3, 5],
-      startTime: (evt.time || '18:00').split(' - ')[0] || '18:00',
-      endTime: (evt.time || '19:30').split(' - ')[1] || '19:30',
+      startTime: parsedStart,
+      endTime: parsedEnd,
+      durationMinutes: computeDurationMinutes(parsedStart, parsedEnd),
+      timezone: defaultTimezone,
       location: evt.location || evt.link || '',
       notes: evt.notes || '',
       assignments: evt.assignments || '',
       titleNumbering: true,
     });
+    setVideoMode(evt.videoProvider === 'zoho' && !evt.location ? 'zoho' : 'manual');
     setShowAllPreviewDates(false);
     if (evt.batch) {
       setAudienceType('batch');
@@ -194,6 +397,7 @@ export default function TeamScheduler() {
   const handleCloseModal = () => {
     setIsModalOpen(false);
     setEditingEventId(null);
+    setModalError(null);
   };
 
   const handleDeleteClick = (evt: any) => {
@@ -234,34 +438,81 @@ export default function TeamScheduler() {
     setEventToDelete(null);
   };
 
-  const handlePublish = () => {
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  const resolveSelectedParticipants = () => {
+    if (audienceType === 'individual') {
+      const targetStudent = students.find(s => s.id === selectedStudentId);
+      const email = (targetStudent?.email || '').trim().toLowerCase();
+      return {
+        emails: emailRegex.test(email) ? [email] : [],
+        missingNames: targetStudent && !emailRegex.test(email) ? [targetStudent.name] : [],
+        totalStudents: targetStudent ? 1 : 0,
+      };
+    }
+    const targetBatch = batches.find(b => b.id === selectedBatchId);
+    const enrolledIds = targetBatch?.students || [];
+    const emails: string[] = [];
+    const missingNames: string[] = [];
+    enrolledIds.forEach(entry => {
+      const matched = students.find(
+        s => s.id === entry || s.email?.toLowerCase() === String(entry).toLowerCase() || s.name?.toLowerCase() === String(entry).toLowerCase()
+      );
+      const candidateEmail = (matched?.email || (emailRegex.test(String(entry)) ? String(entry) : '')).trim().toLowerCase();
+      if (emailRegex.test(candidateEmail)) {
+        if (!emails.includes(candidateEmail)) emails.push(candidateEmail);
+      } else if (matched?.name) {
+        missingNames.push(matched.name);
+      }
+    });
+    return {
+      emails,
+      missingNames,
+      totalStudents: enrolledIds.length,
+    };
+  };
+
+  const participantResolution = resolveSelectedParticipants();
+
+  const handlePublish = async () => {
+    setModalError(null);
+
     if (!formData.title.trim()) {
-      alert("Please enter a session title.");
+      setModalError("Please enter a session title.");
       return;
     }
 
     if (scheduleMode === 'single') {
       if (!formData.date || !formData.startTime) {
-        alert("Please specify Date and Start Time.");
+        setModalError("Please specify Date and Start Time.");
         return;
       }
     } else {
       if (!formData.startDate || !formData.endDate || formData.selectedDays.length === 0) {
-        alert("Please specify From Date, To Date, and at least one Day of the Week.");
+        setModalError("Please specify From Date, To Date, and at least one Day of the Week.");
         return;
       }
     }
 
     if (audienceType === 'individual') {
       if (!selectedStudentId) {
-        alert("Please select the student who will attend this session.");
+        setModalError("Please select the student who will attend this session.");
         return;
       }
     } else {
       if (!selectedBatchId) {
-        alert("Please select the batch cohort for this session.");
+        setModalError("Please select the batch cohort for this session.");
         return;
       }
+    }
+
+    const occurrences = scheduleMode === 'recurring'
+      ? generateRecurringDates(formData.startDate, formData.endDate, formData.selectedDays)
+      : [formData.date];
+
+    if (scheduleMode === 'recurring' && occurrences.length === 0) {
+      setModalError("No meeting dates fell within the selected date range and days of the week. Please check that From Date is before To Date and at least one selected day matches.");
+      return;
     }
 
     const targetStudent = students.find(s => s.id === selectedStudentId);
@@ -270,8 +521,56 @@ export default function TeamScheduler() {
       ? (targetBatch?.name || 'Batch Cohort') 
       : (targetStudent ? targetStudent.name : '');
 
-    const durationStr = formData.endTime ? `${formData.startTime} - ${formData.endTime}` : '1 hr';
-    const locationLink = formData.location.trim() || 'https://meet.google.com';
+    const durationMinutes = formData.durationMinutes || computeDurationMinutes(formData.startTime, formData.endTime);
+    const durationStr = formData.endTime
+      ? `${formData.startTime} - ${formData.endTime} (${durationMinutes} min)`
+      : `${durationMinutes} min`;
+
+    let locationLink = formData.location.trim() || 'https://meet.google.com';
+    let hostStartLink: string | undefined;
+    let zohoMeetingKey: string | undefined;
+    let videoProvider: 'zoho' | 'manual' = 'manual';
+    let invitedParticipantEmails: string[] | undefined;
+
+    // Provision Automated Zoho Meeting (1 meeting for single OR entire recurring series)
+    if (videoMode === 'zoho') {
+      if (!zohoStatus.connected) {
+        setModalError("Connect your Zoho Meeting account first, or switch to Manual Video Link.");
+        return;
+      }
+      setIsCreatingZohoMeeting(true);
+      try {
+        const res = await fetch('/api/zoho/meetings', {
+          method: 'POST',
+          headers: getStaffAuthHeaders(),
+          body: JSON.stringify({
+            topic: formData.title.trim(),
+            agenda: formData.notes.trim(),
+            startDate: occurrences[0],
+            startTime: formData.startTime,
+            durationMinutes,
+            timezone: formData.timezone || defaultTimezone,
+            participantEmails: participantResolution.emails,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.joinLink) {
+          setModalError(data.error || 'Could not create Zoho Meeting. Check your connection or switch to Manual Video Link.');
+          setIsCreatingZohoMeeting(false);
+          return;
+        }
+        locationLink = data.joinLink;
+        hostStartLink = data.startLink || data.joinLink;
+        zohoMeetingKey = data.meetingKey || undefined;
+        videoProvider = 'zoho';
+        invitedParticipantEmails = Array.isArray(data.participantEmails) ? data.participantEmails : participantResolution.emails;
+      } catch (err: any) {
+        setModalError(err?.message || 'Network error while creating Zoho Meeting.');
+        setIsCreatingZohoMeeting(false);
+        return;
+      }
+      setIsCreatingZohoMeeting(false);
+    }
 
     // 1. EDIT EXISTING EVENT
     if (editingEventId) {
@@ -290,7 +589,11 @@ export default function TeamScheduler() {
             assignments: formData.assignments,
             batch: audienceType === 'batch' ? selectedBatchId : undefined,
             studentId: audienceType === 'individual' ? selectedStudentId : undefined,
-            students: studentLabel
+            students: studentLabel,
+            videoProvider: videoProvider === 'zoho' ? 'zoho' : (e.videoProvider || 'manual'),
+            zohoMeetingKey: zohoMeetingKey || e.zohoMeetingKey,
+            hostStartLink: hostStartLink || e.hostStartLink,
+            participantEmails: invitedParticipantEmails || e.participantEmails,
           };
         }
         return e;
@@ -301,12 +604,6 @@ export default function TeamScheduler() {
 
     // 2. RECURRING SERIES CREATION (Date Range & Days of Week)
     if (scheduleMode === 'recurring') {
-      const occurrences = generateRecurringDates(formData.startDate, formData.endDate, formData.selectedDays);
-      if (occurrences.length === 0) {
-        alert("No meeting dates fell within the selected date range and days of the week. Please check that From Date is before To Date and day of week matches.");
-        return;
-      }
-
       const seriesId = 'SERIES-' + Date.now();
       const recurrenceSummary = formatScheduleSummary(formData.selectedDays, formData.startTime, formData.endTime);
 
@@ -326,7 +623,7 @@ export default function TeamScheduler() {
           batch: audienceType === 'batch' ? selectedBatchId : undefined,
           students: studentLabel,
           studentId: audienceType === 'individual' ? selectedStudentId : undefined,
-          location: locationLink, // The SAME persistent meeting link across all instances
+          location: locationLink, // Single persistent meeting join link across all instances
           notes: formData.notes,
           assignments: formData.assignments,
           host: currentUser.name || 'Staff Mentor',
@@ -336,6 +633,10 @@ export default function TeamScheduler() {
           sessionNumber: idx + 1,
           totalSessionsInSeries: occurrences.length,
           recurrenceRule: recurrenceSummary,
+          videoProvider,
+          zohoMeetingKey,
+          hostStartLink,
+          participantEmails: invitedParticipantEmails,
           moms: [],
           ratings: [],
           resources: [],
@@ -360,7 +661,10 @@ export default function TeamScheduler() {
           status: 'Upcoming' as const,
           meetingLink: locationLink, // SAME meeting link
           joinedStudentIds: [],
-          seriesId
+          seriesId,
+          videoProvider,
+          zohoMeetingKey,
+          hostStartLink,
         }));
 
         const updatedBatch = {
@@ -383,7 +687,7 @@ export default function TeamScheduler() {
           role: currentUser.role || 'MENTOR',
           studentId: targetStudent.id,
           activityType: 'Meeting Scheduled',
-          description: `Scheduled recurring series (${occurrences.length} sessions) "${formData.title}" from ${formData.startDate} to ${formData.endDate} (${recurrenceSummary})`,
+          description: `Scheduled recurring ${videoProvider === 'zoho' ? 'Zoho Meeting ' : ''}series (${occurrences.length} sessions) "${formData.title}" from ${formData.startDate} to ${formData.endDate} (${recurrenceSummary})`,
           link: locationLink
         };
         updateStudent({
@@ -411,6 +715,10 @@ export default function TeamScheduler() {
         assignments: formData.assignments,
         host: currentUser.name || 'Staff Mentor',
         status: 'Scheduled' as const,
+        videoProvider,
+        zohoMeetingKey,
+        hostStartLink,
+        participantEmails: invitedParticipantEmails,
         moms: [],
         ratings: [],
         resources: [],
@@ -430,7 +738,10 @@ export default function TeamScheduler() {
           time: formData.startTime + (formData.endTime ? ` - ${formData.endTime}` : ''),
           status: 'Upcoming' as const,
           meetingLink: locationLink,
-          joinedStudentIds: []
+          joinedStudentIds: [],
+          videoProvider,
+          zohoMeetingKey,
+          hostStartLink,
         };
         const updatedBatch = {
           ...targetBatch,
@@ -449,7 +760,7 @@ export default function TeamScheduler() {
           role: currentUser.role || 'MENTOR',
           studentId: targetStudent.id,
           activityType: 'Meeting Scheduled',
-          description: `Scheduled meeting "${formData.title}" on ${formData.date} at ${formData.startTime}`,
+          description: `Scheduled ${videoProvider === 'zoho' ? 'Zoho Meeting ' : ''}meeting "${formData.title}" on ${formData.date} at ${formData.startTime}`,
           link: locationLink
         };
         updateStudent({
@@ -459,6 +770,12 @@ export default function TeamScheduler() {
       }
     }
 
+    if (videoProvider === 'zoho') {
+      setZohoBanner({
+        type: 'success',
+        message: `Zoho Meeting created for "${formData.title}" (${invitedParticipantEmails?.length || 0} participant email${invitedParticipantEmails?.length === 1 ? '' : 's'} invited).`,
+      });
+    }
     handleCloseModal();
   };
 
@@ -656,12 +973,88 @@ export default function TeamScheduler() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-4">
         <div>
           <h2 className="text-xl font-bold text-slate-900 tracking-tight">Class Scheduler</h2>
-          <p className="text-xs text-slate-500 mt-0.5">Role-based student visibility, session notes, ratings, and follow-up assignments.</p>
+          <p className="text-xs text-slate-500 mt-0.5">Role-based student visibility, Zoho Meeting automation, session notes, and follow-up assignments.</p>
         </div>
-        <Button onClick={() => handleOpenModal()} className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4 py-2 rounded-lg font-semibold shadow-sm">
-          <Plus className="w-4 h-4 mr-1.5" /> Schedule Class
-        </Button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          {zohoStatus.loading ? (
+            <span className="text-xs text-slate-400 px-2">Checking Zoho...</span>
+          ) : zohoStatus.connected ? (
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50/70 text-xs">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
+              <span className="font-semibold text-emerald-900 truncate max-w-[200px]" title={zohoStatus.zohoEmail || 'Connected'}>
+                Zoho: {zohoStatus.zohoEmail || zohoStatus.zohoDisplayName || 'Connected'}
+              </span>
+              <button
+                type="button"
+                onClick={handleDisconnectZoho}
+                title="Disconnect Zoho Meeting account"
+                className="text-slate-500 hover:text-red-600 transition-colors pl-1 border-l border-emerald-200 flex items-center gap-1 font-medium"
+              >
+                <Unplug className="w-3.5 h-3.5" />
+                <span>Disconnect</span>
+              </button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleConnectZoho}
+              disabled={isConnectingZoho}
+              className="text-xs border-slate-300 bg-white hover:bg-slate-50 text-slate-800 font-semibold h-9 px-3"
+            >
+              {isConnectingZoho ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  Connecting Zoho...
+                </>
+              ) : (
+                <>
+                  <Video className="w-3.5 h-3.5 mr-1.5 text-blue-600" />
+                  Connect Zoho Meeting
+                </>
+              )}
+            </Button>
+          )}
+          <Button onClick={() => handleOpenModal()} className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4 py-2 rounded-lg font-semibold shadow-sm h-9">
+            <Plus className="w-4 h-4 mr-1.5" /> Schedule Class
+          </Button>
+        </div>
       </div>
+
+      {/* ZOHO STATUS / CALLBACK BANNER */}
+      {zohoBanner && (
+        <div
+          className={cn(
+            "rounded-xl border px-4 py-3 text-xs flex items-start justify-between gap-3",
+            zohoBanner.type === 'success'
+              ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+              : zohoBanner.type === 'error'
+              ? "bg-red-50 border-red-200 text-red-900"
+              : "bg-slate-50 border-slate-200 text-slate-700"
+          )}
+        >
+          <div className="space-y-1">
+            <p className="font-semibold">{zohoBanner.message}</p>
+            {zohoBanner.type === 'error' && zohoStatus.redirectUri && (
+              <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                <p className="text-[11px] opacity-85 font-mono break-all">
+                  Redirect Callback URL: {zohoStatus.redirectUri}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => navigator.clipboard?.writeText(zohoStatus.redirectUri || '').catch(() => {})}
+                  className="px-2 py-0.5 rounded bg-white/80 border border-red-200 text-[10px] font-semibold hover:bg-white"
+                >
+                  Copy URI
+                </button>
+              </div>
+            )}
+          </div>
+          <button onClick={() => setZohoBanner(null)} className="opacity-60 hover:opacity-100 p-0.5">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
       {/* CREATE / EDIT MODAL */}
       {isModalOpen && (
@@ -820,34 +1213,85 @@ export default function TeamScheduler() {
               {/* Date & Times Configuration */}
               {scheduleMode === 'single' ? (
                 /* SINGLE SESSION DATE INPUTS */
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50/70 p-3.5 rounded-xl border border-slate-200/70">
-                   <div>
+                <div className="space-y-3 bg-slate-50/70 p-3.5 rounded-xl border border-slate-200/70">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
                       <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Date *</label>
                       <input 
                         type="date" 
                         value={formData.date}
                         onChange={(e) => setFormData({...formData, date: e.target.value})}
-                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium tabular-nums" 
                       />
-                   </div>
-                   <div>
+                    </div>
+                    <div>
                       <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Start Time *</label>
                       <input 
                         type="time" 
                         value={formData.startTime}
-                        onChange={(e) => setFormData({...formData, startTime: e.target.value})}
-                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                        onChange={(e) => {
+                          const nextStart = e.target.value;
+                          const nextEnd = computeEndTimeFromDuration(nextStart, formData.durationMinutes || 60);
+                          setFormData({ ...formData, startTime: nextStart, endTime: nextEnd });
+                        }}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium tabular-nums" 
                       />
-                   </div>
-                   <div>
+                    </div>
+                    <div>
                       <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">End Time</label>
                       <input 
                         type="time" 
                         value={formData.endTime}
-                        onChange={(e) => setFormData({...formData, endTime: e.target.value})}
-                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                        onChange={(e) => {
+                          const nextEnd = e.target.value;
+                          setFormData({
+                            ...formData,
+                            endTime: nextEnd,
+                            durationMinutes: computeDurationMinutes(formData.startTime, nextEnd),
+                          });
+                        }}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-2 text-xs font-medium tabular-nums" 
                       />
-                   </div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Duration</label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {[30, 45, 60, 90, 120].map(mins => (
+                          <button
+                            key={mins}
+                            type="button"
+                            onClick={() => setFormData(p => ({
+                              ...p,
+                              durationMinutes: mins,
+                              endTime: computeEndTimeFromDuration(p.startTime, mins),
+                            }))}
+                            className={cn(
+                              "px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors tabular-nums",
+                              formData.durationMinutes === mins
+                                ? "bg-slate-900 text-white border-slate-900"
+                                : "bg-white text-slate-600 border-slate-200 hover:bg-slate-100"
+                            )}
+                          >
+                            {mins}m
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1 block">Timezone</label>
+                      <select
+                        value={formData.timezone}
+                        onChange={(e) => setFormData({ ...formData, timezone: e.target.value })}
+                        className="w-full bg-white border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-800"
+                      >
+                        {TIMEZONE_OPTIONS.map(tz => (
+                          <option key={tz} value={tz}>{tz}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 /* RECURRING DATE RANGE & DAYS OF WEEK CONFIGURATION */
@@ -962,15 +1406,19 @@ export default function TeamScheduler() {
                     </div>
                   </div>
 
-                  {/* Time Range */}
-                  <div className="grid grid-cols-2 gap-3">
+                  {/* Time Range & Duration */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="text-[11px] font-bold text-indigo-950 uppercase tracking-wider mb-1 block">Class Start Time *</label>
                       <input 
                         type="time" 
                         value={formData.startTime}
-                        onChange={(e) => setFormData({...formData, startTime: e.target.value})}
-                        className="w-full bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                        onChange={(e) => {
+                          const nextStart = e.target.value;
+                          const nextEnd = computeEndTimeFromDuration(nextStart, formData.durationMinutes || 60);
+                          setFormData({ ...formData, startTime: nextStart, endTime: nextEnd });
+                        }}
+                        className="w-full bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-xs font-medium tabular-nums" 
                       />
                     </div>
                     <div>
@@ -978,10 +1426,52 @@ export default function TeamScheduler() {
                       <input 
                         type="time" 
                         value={formData.endTime}
-                        onChange={(e) => setFormData({...formData, endTime: e.target.value})}
-                        className="w-full bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-xs font-medium" 
+                        onChange={(e) => {
+                          const nextEnd = e.target.value;
+                          setFormData({
+                            ...formData,
+                            endTime: nextEnd,
+                            durationMinutes: computeDurationMinutes(formData.startTime, nextEnd),
+                          });
+                        }}
+                        className="w-full bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-xs font-medium tabular-nums" 
                       />
                     </div>
+                    <div>
+                      <label className="text-[11px] font-bold text-indigo-950 uppercase tracking-wider mb-1 block">Timezone</label>
+                      <select
+                        value={formData.timezone}
+                        onChange={(e) => setFormData({ ...formData, timezone: e.target.value })}
+                        className="w-full bg-white border border-indigo-200 rounded-lg px-2.5 py-2 text-xs font-medium text-slate-800"
+                      >
+                        {TIMEZONE_OPTIONS.map(tz => (
+                          <option key={tz} value={tz}>{tz}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[10px] font-bold text-indigo-900 uppercase tracking-wider mr-1">Duration:</span>
+                    {[30, 45, 60, 90, 120].map(mins => (
+                      <button
+                        key={mins}
+                        type="button"
+                        onClick={() => setFormData(p => ({
+                          ...p,
+                          durationMinutes: mins,
+                          endTime: computeEndTimeFromDuration(p.startTime, mins),
+                        }))}
+                        className={cn(
+                          "px-2.5 py-0.5 rounded text-[10px] font-bold border transition-colors tabular-nums",
+                          formData.durationMinutes === mins
+                            ? "bg-indigo-600 text-white border-indigo-600"
+                            : "bg-white text-slate-600 border-indigo-200 hover:bg-indigo-50"
+                        )}
+                      >
+                        {mins}m
+                      </button>
+                    ))}
                   </div>
 
                   {/* Numbering Option */}
@@ -1057,29 +1547,124 @@ export default function TeamScheduler() {
                 </div>
               )}
 
-              {/* Location Link (Persistent across all sessions) */}
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
-                    Google Meet / Zoom URL (Persistent Link)
+              {/* Video Conferencing Mode (Auto-create Zoho Meeting vs Manual Link) */}
+              <div className="space-y-3 rounded-xl border border-slate-200 p-3.5 bg-slate-50/50">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider">
+                    Video Conferencing
                   </label>
-                  <span className="text-[10px] text-indigo-600 font-medium">Same meeting for all sessions</span>
+                  <div className="flex bg-slate-200/70 p-0.5 rounded-lg">
+                    <button
+                      type="button"
+                      onClick={() => { setVideoMode('zoho'); setModalError(null); }}
+                      className={cn(
+                        "px-2.5 py-1 rounded-md text-[11px] font-bold transition-all flex items-center gap-1",
+                        videoMode === 'zoho' ? "bg-white text-blue-700 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                      )}
+                    >
+                      <Video className="w-3 h-3" /> Auto-create Zoho Meeting
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setVideoMode('manual'); setModalError(null); }}
+                      className={cn(
+                        "px-2.5 py-1 rounded-md text-[11px] font-bold transition-all",
+                        videoMode === 'manual' ? "bg-white text-slate-900 shadow-xs" : "text-slate-600 hover:text-slate-900"
+                      )}
+                    >
+                      Manual Video Link
+                    </button>
+                  </div>
                 </div>
-                <input 
-                  type="text" 
-                  value={formData.location}
-                  onChange={(e) => setFormData({...formData, location: e.target.value})}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800" 
-                  placeholder="https://meet.google.com/..."
-                />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  Students and mentors will join using this exact meeting link for every session in this series.
-                </p>
+
+                {videoMode === 'zoho' ? (
+                  <div className="space-y-2.5">
+                    {zohoStatus.connected ? (
+                      <div className="bg-white border border-slate-200 rounded-lg p-3 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                          <span className="font-semibold text-slate-800 flex items-center gap-1.5">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            Host Zoho Account: <span className="font-bold">{zohoStatus.zohoEmail || zohoStatus.zohoDisplayName}</span>
+                          </span>
+                          <span className="text-slate-500 tabular-nums">
+                            {formData.durationMinutes || 60} min • {formData.timezone}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-600">
+                          {scheduleMode === 'recurring'
+                            ? 'One persistent Zoho Meeting will be created automatically and applied across every session in this recurring series.'
+                            : 'A dedicated Zoho Meeting room will be created automatically with your selected date, time, duration, and agenda.'}
+                        </p>
+
+                        {/* Participant Emails Preview */}
+                        <div className="pt-2 border-t border-slate-100 space-y-1">
+                          <div className="flex items-center justify-between text-[11px]">
+                            <span className="font-semibold text-slate-700 flex items-center gap-1.5">
+                              <Mail className="w-3.5 h-3.5 text-blue-600" />
+                              Zoho Participant Invites ({participantResolution.emails.length})
+                            </span>
+                            {participantResolution.missingNames.length > 0 && (
+                              <span className="text-amber-700 font-medium">
+                                {participantResolution.missingNames.length} missing email
+                              </span>
+                            )}
+                          </div>
+                          {participantResolution.emails.length > 0 ? (
+                            <p className="text-[11px] text-slate-500 font-mono break-all">
+                              {participantResolution.emails.join(', ')}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-amber-700">
+                              No valid student email found for the selected target. Meeting will still be created without email invites.
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div className="space-y-0.5">
+                          <p className="font-bold text-amber-950 text-xs">Your Zoho Meeting account is not connected</p>
+                          <p className="text-[11px] text-amber-800">
+                            Connect your Zoho account once to auto-create Zoho Meetings, or switch to Manual Video Link.
+                          </p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={handleConnectZoho}
+                          disabled={isConnectingZoho}
+                          className="bg-slate-900 hover:bg-slate-800 text-white text-xs shrink-0 h-8 px-3"
+                        >
+                          {isConnectingZoho ? 'Connecting...' : 'Connect Zoho Now'}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-[11px] font-bold text-slate-600 uppercase tracking-wider block">
+                        Google Meet / Zoom URL (Persistent Link)
+                      </label>
+                      <span className="text-[10px] text-indigo-600 font-medium">Same meeting for all sessions</span>
+                    </div>
+                    <input 
+                      type="text" 
+                      value={formData.location}
+                      onChange={(e) => setFormData({...formData, location: e.target.value})}
+                      className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-medium text-slate-800" 
+                      placeholder="https://meet.google.com/..."
+                    />
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Students and mentors will join using this exact meeting link for every session in this series.
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* Pre-Read Notes */}
               <div>
-                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pre-Read Agenda / Notes for Students</label>
+                <label className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 block">Pre-Read Agenda / Notes for Students (Synced to Zoho Agenda)</label>
                 <textarea 
                   rows={2} 
                   value={formData.notes}
@@ -1088,12 +1673,24 @@ export default function TeamScheduler() {
                   placeholder="Items students should review prior to call..."
                 ></textarea>
               </div>
+
+              {modalError && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                  <span>{modalError}</span>
+                </div>
+              )}
             </div>
             
             <div className="px-6 py-3 border-t border-slate-100 flex justify-end gap-2 bg-slate-50 shrink-0">
-              <Button variant="ghost" size="sm" onClick={handleCloseModal} className="text-xs">Cancel</Button>
-              <Button size="sm" className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4" onClick={handlePublish}>
-                {editingEventId ? 'Save Changes' : (scheduleMode === 'recurring' ? 'Create Recurring Series' : 'Schedule Session')}
+              <Button variant="ghost" size="sm" onClick={handleCloseModal} disabled={isCreatingZohoMeeting} className="text-xs">Cancel</Button>
+              <Button size="sm" disabled={isCreatingZohoMeeting} className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-4" onClick={handlePublish}>
+                {isCreatingZohoMeeting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    Creating Zoho Meeting...
+                  </>
+                ) : editingEventId ? 'Save Changes' : (scheduleMode === 'recurring' ? 'Create Recurring Series' : 'Schedule Session')}
               </Button>
             </div>
           </div>
@@ -1185,6 +1782,14 @@ export default function TeamScheduler() {
                     <strong>Student / Target:</strong> {evt.students}
                   </span>
                   <span>• <strong>Host:</strong> {evt.host || 'Staff'}</span>
+                  {evt.videoProvider === 'zoho' && (
+                    <span className="text-blue-700 font-semibold flex items-center gap-1">
+                      • <Video className="w-3.5 h-3.5" /> Zoho Meeting
+                      {Array.isArray(evt.participantEmails) && evt.participantEmails.length > 0 && (
+                        <span className="text-slate-500 font-normal">({evt.participantEmails.length} invited)</span>
+                      )}
+                    </span>
+                  )}
                 </div>
 
                 {/* MOM / Resource Summary if attached */}
@@ -1220,19 +1825,43 @@ export default function TeamScheduler() {
                   <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 text-slate-500 border border-slate-200 flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" /> Call Ended
                   </span>
-                ) : (
-                  <Button 
-                    size="sm"
-                    onClick={() => {
-                      const link = evt.location || evt.link;
-                      if (link) window.open(link.startsWith('http') ? link : `https://${link}`, '_blank');
-                      else alert('No video meeting link specified.');
-                    }}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs h-8 px-3 font-medium"
-                  >
-                    <Video className="w-3.5 h-3.5 mr-1" /> Join Call
-                  </Button>
-                )}
+                ) : (() => {
+                  const rawHostOrJoin = evt.hostStartLink || evt.location || evt.link;
+                  const joinHref = evt.location || evt.link;
+                  const normalizedHref = rawHostOrJoin
+                    ? (rawHostOrJoin.startsWith('http') ? rawHostOrJoin : `https://${rawHostOrJoin}`)
+                    : '';
+                  return normalizedHref ? (
+                    <div className="flex items-center gap-1.5">
+                      <a
+                        href={normalizedHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center justify-center rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs h-8 px-3 font-medium transition-colors"
+                      >
+                        <Video className="w-3.5 h-3.5 mr-1.5" />
+                        {evt.hostStartLink ? 'Host Zoho Call' : 'Join Call'}
+                      </a>
+                      {joinHref && (
+                        <button
+                          type="button"
+                          title="Copy participant join link"
+                          onClick={() => {
+                            const fullJoin = joinHref.startsWith('http') ? joinHref : `https://${joinHref}`;
+                            navigator.clipboard?.writeText(fullJoin).catch(() => {});
+                            setCopiedEventId(evt.id);
+                            window.setTimeout(() => setCopiedEventId(prev => (prev === evt.id ? null : prev)), 2000);
+                          }}
+                          className="h-8 px-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 text-xs flex items-center gap-1"
+                        >
+                          {copiedEventId === evt.id ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-slate-400 px-2">No link</span>
+                  );
+                })()}
 
                 <Button 
                   variant="outline" 
@@ -1555,9 +2184,14 @@ export default function TeamScheduler() {
                             {r.description && <p className="text-[11px] text-slate-600 mt-0.5">{r.description}</p>}
                             <p className="text-[10px] text-slate-400 mt-1">Shared by {r.addedBy} on {r.addedAt}</p>
                           </div>
-                          <Button size="sm" variant="outline" className="text-xs h-7" onClick={() => window.open(r.url, '_blank')}>
+                          <a
+                            href={r.url.startsWith('http') ? r.url : `https://${r.url}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white hover:bg-slate-50 px-3 text-xs font-medium h-7 text-slate-700"
+                          >
                             Open Link
-                          </Button>
+                          </a>
                         </div>
                       ))
                     ) : (

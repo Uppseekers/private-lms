@@ -16,6 +16,7 @@ export interface Activity {
   studentId?: string;
   studentName?: string;
   link?: string;
+  details?: string;
 }
 
 export interface ShortlistUniversity {
@@ -70,6 +71,7 @@ export type TaskCategory =
   | 'Post Meeting Action'
   | 'Essays & Applications'
   | 'Document Upload'
+  | 'Launchpad'
   | 'Other';
 
 export interface TaskAttachment {
@@ -98,6 +100,14 @@ export interface Task {
   assignedBatch?: string;
   studentId?: string;
   studentName?: string;
+  submittedAt?: string;
+  submissionLink?: string;
+  launchpadMeta?: {
+    subjectId: string;
+    subjectTitle: string;
+    weekNumber: number;
+    chapterTitle: string;
+  };
   createdAt?: string;
   updatedAt?: string;
 }
@@ -191,6 +201,10 @@ export interface EventItem {
   ratings?: SessionRating[];
   resources?: MeetingResourceLink[];
   tasks?: MeetingTask[];
+  videoProvider?: 'zoho' | 'manual' | 'custom' | 'zoho_meeting';
+  zohoMeetingKey?: string;
+  hostStartLink?: string;
+  participantEmails?: string[];
 }
 
 export interface MeetingMOM {
@@ -267,6 +281,40 @@ export interface Student {
   essays: Essay[];
   password?: string;
   credentials?: PortalCredential[];
+  conversations?: ConversationMessage[];
+}
+
+export interface ConversationMessage {
+  id: string;
+  conversationId?: string;
+  studentId?: string;
+  studentName?: string;
+  senderId?: string;
+  senderName: string;
+  senderRole?: string;
+  direction?: 'inbound' | 'outbound' | 'note';
+  channel?: 'WhatsApp' | 'Email' | 'Audio Call' | 'Zoom Call' | 'Portal' | string;
+  text: string;
+  timestamp: string;
+  read?: boolean;
+  attachments?: { name: string; url?: string }[];
+}
+
+export interface Conversation {
+  id: string;
+  studentId: string;
+  studentName: string;
+  studentEmail?: string;
+  studentPhone?: string;
+  counselor?: string;
+  channel: 'WhatsApp' | 'Email' | 'Audio Call' | 'Zoom Call' | 'Portal' | string;
+  subject?: string;
+  lastMessage: string;
+  lastMessageAt: string;
+  unreadCount?: number;
+  status?: 'Open' | 'Resolved' | 'Follow-up' | string;
+  messages: ConversationMessage[];
+  updatedAt?: string;
 }
 
 export enum Role {
@@ -288,6 +336,9 @@ export interface BatchClassSession {
   joinedStudentIds: string[]; // student IDs who joined/attended
   absentStudentIds?: string[]; // student IDs who were absent / not joined
   seriesId?: string;
+  videoProvider?: 'zoho' | 'manual' | 'custom' | 'zoho_meeting';
+  zohoMeetingKey?: string;
+  hostStartLink?: string;
 }
 
 export interface Batch {
@@ -317,4 +368,102 @@ export interface StaffMember {
   students: string;
   status: 'Active' | 'Suspended';
   password?: string;
+}
+
+export type LaunchpadAccessScope = 'none' | 'assigned' | 'global' | 'read_only';
+export type LaunchpadCurriculumEditScope = 'none' | 'read_only' | 'enabled';
+
+export interface LaunchpadTeamPermission {
+  userId: string;
+  accessScope: LaunchpadAccessScope;
+  launchpadStudentTabAccess?: LaunchpadAccessScope;
+  launchpadReviewExerciseAccess?: LaunchpadAccessScope;
+  launchpadEditCurriculumAccess?: LaunchpadCurriculumEditScope;
+  updatedBy?: string;
+  updatedAt?: string;
+}
+
+export interface LaunchpadEnrollment {
+  studentId: string;
+  assignedBy?: string;
+  assignedAt?: string;
+}
+
+export interface LaunchpadSubjectRelease {
+  id: string;
+  studentId: string;
+  subjectId: string;
+  isUnlocked: boolean;
+  unlockedBy?: string;
+  unlockedAt?: string;
+}
+
+export interface LaunchpadWeekProgress {
+  id: string;
+  studentId: string;
+  subjectId: string;
+  weekNumber: number;
+  lectureCompleted: boolean;
+  readingCompleted: boolean;
+  exerciseSubmissionJson: {
+    fields?: Record<string, string>;
+    checklist?: Record<string, boolean>;
+    attachmentUrl?: string;
+    attachmentName?: string;
+    submittedAt?: string;
+  } | null;
+  exerciseCompleted: boolean;
+  evaluationStatus?: 'Submitted' | 'Approved' | 'Needs Revision' | 'Reviewed' | null;
+  evaluatorFeedback?: string | null;
+  evaluatedBy?: string | null;
+  evaluatedAt?: string | null;
+  updatedAt?: string;
+}
+
+export interface LaunchpadCertification {
+  id: string;
+  studentId: string;
+  subjectId: string;
+  testScore: number;
+  passed: boolean;
+  certificateCode: string;
+  issuedAt: string;
+}
+
+export interface LaunchpadAssignmentEvaluation {
+  id: string;
+  sourceType: 'LAUNCHPAD';
+  studentId: string;
+  studentName: string;
+  subjectId: string;
+  subjectTitle: string;
+  weekNumber: number;
+  chapterTitle: string;
+  taskId: string;
+  submissionJson: {
+    fields?: Record<string, string>;
+    fieldLabels?: Record<string, string>;
+    checklist?: Record<string, boolean>;
+    attachmentUrl?: string;
+    attachmentName?: string;
+    submittedAt?: string;
+  } | null;
+  status: 'Submitted' | 'Approved' | 'Needs Revision' | 'Reviewed';
+  feedback: string | null;
+  evaluatedBy: string | null;
+  submittedAt: string;
+  evaluatedAt: string | null;
+}
+
+export interface AppNotification {
+  id: string;
+  recipientType: 'student' | 'staff';
+  recipientId: string;
+  title: string;
+  message: string;
+  category?: string;
+  link?: string;
+  metadataJson?: Record<string, any>;
+  isRead: boolean;
+  createdAt: string;
 }

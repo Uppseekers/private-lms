@@ -196,7 +196,22 @@ export function safeLocalStorageGet<T>(key: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return fallback;
-    return JSON.parse(raw) as T;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(fallback) && !Array.isArray(parsed)) {
+      return fallback;
+    }
+    if (
+      fallback !== null &&
+      typeof fallback === 'object' &&
+      !Array.isArray(fallback) &&
+      (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed))
+    ) {
+      return fallback;
+    }
+    if (parsed === null || parsed === undefined) {
+      return fallback;
+    }
+    return parsed as T;
   } catch (err) {
     console.warn(`[SafeStorage] Failed to read/parse key "${key}" from localStorage:`, err);
     return fallback;

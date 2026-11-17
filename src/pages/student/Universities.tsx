@@ -57,7 +57,7 @@ const mockRequiredDocs: RequiredDoc[] = [
 
 export default function StudentUniversities() {
   const { currentUser, students, updateStudent } = useDatabase();
-  const student = students.find(s => s.id === currentUser.id || s.email === currentUser.email) || (currentUser as any);
+  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0] || (currentUser as any);
   const rawShortlist = student?.shortlist || [];
 
   const [expandedUniId, setExpandedUniId] = useState<string | null>(null);

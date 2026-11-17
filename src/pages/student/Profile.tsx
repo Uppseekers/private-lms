@@ -75,7 +75,7 @@ export default function StudentProfile() {
   const student = students.find(s => 
     (currentUser?.id && s.id === currentUser.id) || 
     (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
-  ) || (currentUser as any);
+  ) || students[0] || (currentUser as any);
 
   // Look up staff details for assigned mentors
   const counselorStaff = staff.find(st => 

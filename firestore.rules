@@ -2,7 +2,216 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && request.auth.token.email == 'uppseekers@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isValidAdmin(data) {
+      return data.keys().hasAll(['uid', 'email', 'role'])
+        && data.keys().hasOnly(['uid', 'email', 'role'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.role is string && data.role.size() >= 1 && data.role.size() <= 40;
+    }
+
+    function isValidStudent(data) {
+      return data.keys().hasAll(['id', 'name', 'email'])
+        && data.keys().hasOnly([
+          'id', 'name', 'email', 'phone', 'intake', 'school', 'counselor',
+          'researchMentor', 'satMathMentor', 'satVerbalMentor', 'universityMentor',
+          'readiness', 'countries', 'password', 'activities', 'operationalLogs',
+          'shortlist', 'documents', 'essays', 'tasks', 'extracurriculars',
+          'academicScores', 'targetDegree', 'targetCountry', 'uid', 'role', 'status'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 60))
+        && (!('intake' in data) || (data.intake is string && data.intake.size() <= 60))
+        && (!('school' in data) || (data.school is string && data.school.size() <= 200))
+        && (!('counselor' in data) || (data.counselor is string && data.counselor.size() <= 160))
+        && (!('readiness' in data) || data.readiness is number)
+        && (!('countries' in data) || (data.countries is list && data.countries.size() <= 20));
+    }
+
+    function isValidStaff(data) {
+      return data.keys().hasAll(['id', 'name', 'email'])
+        && data.keys().hasOnly(['id', 'name', 'email', 'role', 'students', 'status', 'password', 'uid'])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('role' in data) || (data.role is string && data.role.size() <= 60))
+        && (!('status' in data) || (data.status is string && data.status.size() <= 40))
+        && (!('students' in data) || (data.students is string && data.students.size() <= 120));
+    }
+
+    function isValidBatch(data) {
+      return data.keys().hasAll(['id', 'name'])
+        && data.keys().hasOnly([
+          'id', 'name', 'type', 'subject', 'mentors', 'meetingLink', 'status',
+          'capacity', 'students', 'totalSessions', 'completedSessions',
+          'scheduleDayTime', 'description', 'sessions', 'parentBatchId'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
+        && (!('type' in data) || (data.type is string && data.type.size() <= 60))
+        && (!('mentors' in data) || (data.mentors is list && data.mentors.size() <= 50))
+        && (!('students' in data) || (data.students is list && data.students.size() <= 500));
+    }
+
+    function isValidEvent(data) {
+      return data.keys().hasAll(['id', 'title'])
+        && data.keys().hasOnly([
+          'id', 'day', 'time', 'duration', 'stream', 'title', 'batch', 'students',
+          'studentId', 'location', 'notes', 'assignments', 'host', 'status',
+          'moms', 'ratings', 'resources', 'tasks', 'date', 'isRecurring',
+          'seriesId', 'sessionNumber', 'totalSessionsInSeries', 'recurrenceRule',
+          'videoProvider', 'zohoMeetingKey', 'hostStartLink', 'participantEmails',
+          'type', 'category', 'attendees', 'link'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128 && data.id.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && (!('participantEmails' in data) || (data.participantEmails is list && data.participantEmails.size() <= 200));
+    }
+
+    function isValidLaunchpadDoc(data) {
+      return data.keys().hasAll(['items', 'updatedAt'])
+        && data.keys().hasOnly(['items', 'updatedAt'])
+        && data.items is list && data.items.size() <= 2000
+        && data.updatedAt is string && data.updatedAt.size() <= 64;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['id', 'recipientId', 'title'])
+        && data.keys().hasOnly([
+          'id', 'recipientType', 'recipientId', 'title', 'message',
+          'category', 'link', 'metadataJson', 'isRead', 'createdAt'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.recipientId is string && data.recipientId.size() >= 1 && data.recipientId.size() <= 128
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200;
+    }
+
+    function isValidEvaluation(data) {
+      return data.keys().hasAll(['id', 'studentId', 'subjectId'])
+        && data.keys().hasOnly([
+          'id', 'sourceType', 'studentId', 'studentName', 'subjectId', 'subjectTitle',
+          'weekNumber', 'chapterTitle', 'taskId', 'submissionJson', 'status',
+          'feedback', 'evaluatedBy', 'submittedAt', 'evaluatedAt'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128
+        && data.subjectId is string && data.subjectId.size() >= 1 && data.subjectId.size() <= 128;
+    }
+
+    match /test/{docId} {
+      allow get: if isVerified() && isValidId(docId);
+      allow list, write: if false;
+    }
+
+    match /admins/{adminId} {
+      allow get: if isVerified() && isValidId(adminId) && request.auth.uid == adminId;
+      allow list: if isBootstrappedAdmin();
+      allow create, update: if isBootstrappedAdmin() && isValidId(adminId) && isValidAdmin(incoming());
+      allow delete: if isBootstrappedAdmin() && isValidId(adminId);
+    }
+
+    match /students/{studentId} {
+      allow get: if isVerified() && isValidId(studentId) && (
+        isAdmin() || ('email' in existing() && existing().email == request.auth.token.email)
+      );
+      allow list: if isBootstrappedAdmin() || (isVerified() && 'email' in existing() && existing().email == request.auth.token.email);
+      allow create: if isAdmin() && isValidId(studentId) && isValidStudent(incoming()) && incoming().id == studentId;
+      allow update: if isVerified() && isValidId(studentId) && isValidStudent(incoming()) && (
+        isAdmin() ||
+        ('email' in existing() && existing().email == request.auth.token.email &&
+          incoming().id == existing().id &&
+          incoming().email == existing().email &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['password', 'tasks', 'essays', 'documents', 'activities']))
+      );
+      allow delete: if isAdmin() && isValidId(studentId);
+    }
+
+    match /staff/{staffId} {
+      allow get: if isVerified() && isValidId(staffId) && (
+        isAdmin() || ('email' in existing() && existing().email == request.auth.token.email)
+      );
+      allow list: if isBootstrappedAdmin() || (isVerified() && 'email' in existing() && existing().email == request.auth.token.email);
+      allow create: if isAdmin() && isValidId(staffId) && isValidStaff(incoming()) && incoming().id == staffId;
+      allow update: if isVerified() && isValidId(staffId) && isValidStaff(incoming()) && (
+        isAdmin() ||
+        ('email' in existing() && existing().email == request.auth.token.email &&
+          incoming().id == existing().id &&
+          incoming().email == existing().email &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['password']))
+      );
+      allow delete: if isAdmin() && isValidId(staffId);
+    }
+
+    match /batches/{batchId} {
+      allow get: if isVerified() && isValidId(batchId) && (
+        isAdmin() || ('mentors' in existing() && existing().mentors is list && request.auth.token.email in existing().mentors)
+      );
+      allow list: if isBootstrappedAdmin();
+      allow create, update: if isAdmin() && isValidId(batchId) && isValidBatch(incoming()) && incoming().id == batchId;
+      allow delete: if isAdmin() && isValidId(batchId);
+    }
+
+    match /events/{eventId} {
+      allow get: if isVerified() && isValidId(eventId) && (
+        isAdmin() || ('participantEmails' in existing() && existing().participantEmails is list && request.auth.token.email in existing().participantEmails)
+      );
+      allow list: if isBootstrappedAdmin() || (isVerified() && 'participantEmails' in existing() && existing().participantEmails is list && request.auth.token.email in existing().participantEmails);
+      allow create, update: if isAdmin() && isValidId(eventId) && isValidEvent(incoming()) && incoming().id == eventId;
+      allow delete: if isAdmin() && isValidId(eventId);
+    }
+
+    match /launchpad/{docId} {
+      allow get: if isAdmin() && isValidId(docId);
+      allow list: if isBootstrappedAdmin();
+      allow create, update: if isAdmin() && isValidId(docId) && isValidLaunchpadDoc(incoming());
+      allow delete: if isAdmin() && isValidId(docId);
+    }
+
+    match /notifications/{notifId} {
+      allow get: if isVerified() && isValidId(notifId) && (isAdmin() || existing().recipientId == request.auth.uid);
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().recipientId == request.auth.uid);
+      allow create, update: if isAdmin() && isValidId(notifId) && isValidNotification(incoming());
+      allow delete: if isAdmin() && isValidId(notifId);
+    }
+
+    match /assignment_evaluations/{evalId} {
+      allow get: if isVerified() && isValidId(evalId) && (isAdmin() || existing().studentId == request.auth.uid);
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().studentId == request.auth.uid);
+      allow create, update: if isAdmin() && isValidId(evalId) && isValidEvaluation(incoming());
+      allow delete: if isAdmin() && isValidId(evalId);
     }
   }
 }

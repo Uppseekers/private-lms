@@ -51,6 +51,21 @@
         "type": { "type": "string" }
       },
       "required": ["id", "title"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Student conversation thread across WhatsApp, email, call, and portal channels",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "studentId": { "type": "string" },
+        "studentName": { "type": "string" },
+        "channel": { "type": "string" },
+        "lastMessage": { "type": "string" },
+        "lastMessageAt": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["id", "studentId", "studentName"]
     }
   },
   "firestore": {
@@ -69,6 +84,10 @@
     "/events/{eventId}": {
       "schema": { "$ref": "#/entities/Event" },
       "description": "Collection of scheduled events and meetings"
+    },
+    "/conversations/{conversationId}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Collection of live student conversations and message threads"
     }
   }
 }

@@ -107,7 +107,7 @@ export function isCounselorAssignedEssay(essay: Essay | null | undefined): boole
 
 export default function StudentEssays() {
   const { currentUser, students, updateStudent } = useDatabase();
-  const student = students.find(s => s.id === currentUser.id || s.email === currentUser.email) || (currentUser as any);
+  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0] || (currentUser as any);
   const essays = student?.essays || [];
   const [selectedEssay, setSelectedEssay] = useState<Essay | null>(null);
   const [isProofreaderOpen, setIsProofreaderOpen] = useState(false);

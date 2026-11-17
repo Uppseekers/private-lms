@@ -30,7 +30,7 @@ export default function StudentSchedule() {
   const student = students.find(s => 
     (currentUser?.id && s.id === currentUser.id) || 
     (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
-  ) || (currentUser as any);
+  ) || students[0] || (currentUser as any);
 
   const [view, setView] = useState<'list' | 'calendar'>('list');
   const [horizon, setHorizon] = useState<'upcoming' | 'past' | 'canceled'>('upcoming');

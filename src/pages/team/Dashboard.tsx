@@ -16,7 +16,7 @@ import {
 } from 'recharts';
 import { useDatabase } from '@/context/DatabaseContext';
 import { normalizeTaskStage, normalizeTaskCategory } from '@/lib/taskActivityUtils';
-import { getScopedStudentsForStaff, canStaffAccessAllStudents, canStaffAccessEvent } from '@/lib/staffPermissions';
+import { getScopedStudentsForStaff, canStaffAccessAllStudents, canStaffAccessEvent, isTaskVisibleToStaff, isStaffMentorOrFaculty } from '@/lib/staffPermissions';
 import { 
   Users, BookOpen, CheckSquare, Clock, Filter, Search, 
   CheckCircle2, AlertCircle, ArrowUpRight, Calendar, UserCheck, 
@@ -297,6 +297,7 @@ export default function TeamDashboard() {
     // From Student profile tasks
     scopedStudents.forEach(student => {
       (student.tasks || []).forEach((t: any) => {
+        if (!isTaskVisibleToStaff(t, student, currentUser)) return;
         taskList.push({
           id: t.id || Math.random().toString(),
           title: t.name || t.title || 'Untitled Task',
@@ -320,7 +321,9 @@ export default function TeamDashboard() {
         const studentObj = students.find(s => s.id === mt.assignedToStudentId);
         const targetStudentId = mt.assignedToStudentId || studentObj?.id;
 
-        // If counselor is restricted, only include meeting tasks if student is in scopedStudents or counselor is host
+        // Scope validation
+        if (!isTaskVisibleToStaff(mt, studentObj || ({} as any), currentUser)) return;
+
         if (!canAccessAll) {
           const isTargetScoped = targetStudentId && scopedIds.has(targetStudentId);
           const isHost = evt.host === currentUser?.name;

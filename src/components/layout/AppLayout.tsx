@@ -27,28 +27,34 @@ import {
   AlertCircle,
   Sparkles,
   BookOpen,
-  KeyRound
+  KeyRound,
+  ShieldAlert,
+  Compass,
+  Lock
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getScopedStudentsForStaff } from '@/lib/staffPermissions';
+import { getScopedStudentsForStaff, isUserAdmin, canStaffAccessReports, getStaffLaunchpadPermissions } from '@/lib/staffPermissions';
 import { Role } from '@/types';
 import { useDatabase } from '@/context/DatabaseContext';
 import { GoogleSheetsSyncModal } from '@/components/GoogleSheetsSyncModal';
 import ChangeUserPasswordModal from '@/components/ChangeUserPasswordModal';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '@/lib/firebase';
+import { doc, updateDoc } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase';
 import NotificationDetailsModal, { NotificationDetailData } from '@/components/NotificationDetailsModal';
 
 interface SidebarItem {
   name: string;
   href: string;
   icon: React.ElementType;
+  tabKey?: string;
   permissionKey?: string;
   categoryKey?: string;
+  adminOnly?: boolean;
 }
 
 const studentNavigation: SidebarItem[] = [
   { name: 'Dashboard', href: '/student/dashboard', icon: LayoutDashboard },
+  { name: 'Launchpad', href: '/student/launchpad', icon: Compass },
   { name: 'Profile', href: '/student/profile', icon: User },
   { name: 'Competency Radar', href: '/student/competency-radar', icon: Target },
   { name: 'Universities', href: '/student/universities', icon: GraduationCap },
@@ -56,16 +62,20 @@ const studentNavigation: SidebarItem[] = [
   { name: 'Document Vault', href: '/student/vault', icon: FolderLock },
   { name: 'Essay Tool', href: '/student/essays', icon: PenTool },
   { name: 'Task Manager', href: '/student/tasks', icon: CheckSquare },
+  { name: 'Activity Log', href: '/student/activity-log', icon: Clock },
 ];
 
 const teamNavigation: SidebarItem[] = [
-  { name: 'Dashboard', href: '/team/dashboard', icon: LayoutDashboard },
-  { name: 'Batches & Cohorts', href: '/team/batches', icon: BookOpen, permissionKey: 'view_past', categoryKey: 'batch' },
-  { name: 'Class Scheduler', href: '/team/scheduler', icon: CalendarDays, permissionKey: 'create_class', categoryKey: 'schedule' },
-  { name: 'Document Center', href: '/team/vault', icon: FolderLock, permissionKey: 'view_vault', categoryKey: 'vault' },
-  { name: 'Assignment Evaluator', href: '/team/evaluator', icon: CheckSquare, permissionKey: 'assign_tasks', categoryKey: 'tasks' },
-  { name: 'Student Database', href: '/team/users', icon: Users, permissionKey: 'view_roster', categoryKey: 'profile' },
-  { name: 'Admin Settings', href: '/team/settings', icon: Shield, permissionKey: 'staff_onboard', categoryKey: 'admin' },
+  { name: 'Dashboard', href: '/team/dashboard', icon: LayoutDashboard, tabKey: 'tab_dashboard' },
+  { name: 'Launchpad', href: '/team/launchpad', icon: Compass, tabKey: 'tab_launchpad' },
+  { name: 'Batches & Cohorts', href: '/team/batches', icon: BookOpen, tabKey: 'tab_batches', permissionKey: 'view_past', categoryKey: 'batch' },
+  { name: 'Class Scheduler', href: '/team/scheduler', icon: CalendarDays, tabKey: 'tab_scheduler', permissionKey: 'create_class', categoryKey: 'schedule' },
+  { name: 'Document Center', href: '/team/vault', icon: FolderLock, tabKey: 'tab_vault', permissionKey: 'view_vault', categoryKey: 'vault' },
+  { name: 'Assignment Evaluator', href: '/team/evaluator', icon: CheckSquare, tabKey: 'tab_evaluator', permissionKey: 'assign_tasks', categoryKey: 'tasks' },
+  { name: 'Student Database', href: '/team/users', icon: Users, tabKey: 'tab_users', permissionKey: 'view_roster', categoryKey: 'profile' },
+  { name: 'Reports', href: '/team/reports', icon: FileSpreadsheet, tabKey: 'tab_reports', permissionKey: 'view_meeting_reports', categoryKey: 'reports' },
+  { name: 'Universities', href: '/team/universities', icon: GraduationCap, tabKey: 'tab_universities', permissionKey: 'add_uni', categoryKey: 'shortlist' },
+  { name: 'Admin Settings', href: '/team/settings', icon: Shield, tabKey: 'tab_settings', permissionKey: 'staff_onboard', categoryKey: 'admin', adminOnly: true },
 ];
 
 export default function AppLayout() {
@@ -76,6 +86,7 @@ export default function AppLayout() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [isSheetsModalOpen, setIsSheetsModalOpen] = useState(false);
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
+  const [showAllStudentNotifs, setShowAllStudentNotifs] = useState(false);
   const [readNotifIds, setReadNotifIds] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem('uppseekers_read_notifications') || '[]');
@@ -88,8 +99,10 @@ export default function AppLayout() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const notifDropdownRef = useRef<HTMLDivElement>(null);
 
-  const { currentUser, permissionsMatrix, staff, students, batches, events, setCurrentUser, setIsAuthenticated, setStaff, setStudents } = useDatabase();
+  const { currentUser, permissionsMatrix, launchpadPermissions, launchpadEnrollments, appNotifications, staff, students, batches, events, setCurrentUser, setIsAuthenticated, setStaff, setStudents, firestoreStatus, signInWithGoogle, signOutAll } = useDatabase();
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [googleSyncing, setGoogleSyncing] = useState(false);
+  const [googleSyncError, setGoogleSyncError] = useState<string | null>(null);
 
   const handleSaveCurrentUserPassword = async (userId: string, userType: 'student' | 'staff', newPassword: string) => {
     // 1. Immediately update local state
@@ -99,18 +112,22 @@ export default function AppLayout() {
     if (userType === 'staff') {
       const updatedStaff = staff.map(s => s.id === userId ? { ...s, password: newPassword } : s);
       setStaff(updatedStaff);
-      try {
-        await setDoc(doc(db, 'staff', userId), JSON.parse(JSON.stringify({ ...currentUser, password: newPassword })), { merge: true });
-      } catch (err) {
-        console.warn('Firestore password update warning:', err);
+      if (auth.currentUser?.emailVerified) {
+        try {
+          await updateDoc(doc(db, 'staff', userId), { password: newPassword });
+        } catch (err) {
+          console.warn('Firestore password update warning:', err);
+        }
       }
     } else {
       const updatedStudents = students.map(s => s.id === userId ? { ...s, password: newPassword } : s);
       setStudents(updatedStudents);
-      try {
-        await setDoc(doc(db, 'students', userId), JSON.parse(JSON.stringify({ ...currentUser, password: newPassword })), { merge: true });
-      } catch (err) {
-        console.warn('Firestore password update warning:', err);
+      if (auth.currentUser?.emailVerified) {
+        try {
+          await updateDoc(doc(db, 'students', userId), { password: newPassword });
+        } catch (err) {
+          console.warn('Firestore password update warning:', err);
+        }
       }
     }
 
@@ -181,21 +198,47 @@ export default function AppLayout() {
 
   const userInitials = getUserInitials(accountName);
   
+  const isAdmin = isUserAdmin(currentUser);
+  const teamLaunchpadPerms = getStaffLaunchpadPermissions(currentUser, launchpadPermissions, permissionsMatrix);
   let navigation = isTeam ? teamNavigation : studentNavigation;
   
-  if (isTeam && permissionsMatrix && currentUser) {
-    const rolePerms = permissionsMatrix[currentUser.role];
-    if (rolePerms) {
-      navigation = teamNavigation.filter(item => {
-        if (!item.permissionKey || !item.categoryKey) return true; // Keep items without specific permission mapping (e.g., Dashboard)
+  if (isTeam && currentUser) {
+    const roleUpper = (currentUser.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    const rolePerms = permissionsMatrix ? (permissionsMatrix[currentUser.role] || permissionsMatrix[roleUpper]) : undefined;
+    const tabVisCategory = rolePerms?.find(c => c.id === 'tab_visibility');
+    navigation = teamNavigation.filter(item => {
+      // Admin Settings is strictly restricted to System Admins only
+      if (item.adminOnly && !isAdmin) {
+        return false;
+      }
+      // 1-to-1 Sidebar Tab Visibility toggle takes direct precedence when configured
+      if (tabVisCategory && item.tabKey) {
+        const tabVisItem = tabVisCategory.items.find(i => i.id === item.tabKey);
+        if (tabVisItem !== undefined) {
+          return Boolean(tabVisItem.enabled);
+        }
+      }
+      // Launchpad tab: visible if user has either student tab access or curriculum edit access
+      if (item.href === '/team/launchpad') {
+        return teamLaunchpadPerms.studentTabAccess !== 'none' || teamLaunchpadPerms.editCurriculumAccess !== 'none';
+      }
+      // Reports tab: strictly restricted (Research Mentors and SAT Educators have no access by default)
+      if (item.href === '/team/reports') {
+        if (!canStaffAccessReports(currentUser, permissionsMatrix)) {
+          return false;
+        }
+      }
+      if (!item.permissionKey || !item.categoryKey) return true; // Keep items without specific permission mapping (e.g., Dashboard)
+      if (rolePerms) {
         const category = rolePerms.find(c => c.id === item.categoryKey);
         if (category) {
           const perm = category.items.find(i => i.id === item.permissionKey);
-          return perm && perm.enabled;
+          return Boolean(perm && perm.enabled);
         }
         return false;
-      });
-    }
+      }
+      return true;
+    });
   }
 
   // Cmd+K / Ctrl+K shortcut to open Supersearch
@@ -215,12 +258,15 @@ export default function AppLayout() {
   }, []);
 
   const currentStudent = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0];
+  const isStudentLaunchpadEnrolled = Boolean(
+    currentStudent && Array.isArray(launchpadEnrollments) && launchpadEnrollments.some(e => e.studentId === currentStudent.id)
+  );
 
   // Supersearch filtering across entity types
   const query = globalSearch.toLowerCase().trim();
 
   const matchingPages = query 
-    ? [...studentNavigation, ...teamNavigation].filter((nav, idx, self) => 
+    ? navigation.filter((nav, idx, self) => 
         self.findIndex(n => n.href === nav.href) === idx &&
         (nav.name.toLowerCase().includes(query) || nav.href.toLowerCase().includes(query))
       )
@@ -270,6 +316,24 @@ export default function AppLayout() {
     }[] = [];
 
     if (!isTeam && currentStudent) {
+      // 0. LATEST REAL-TIME APP NOTIFICATIONS (newest first)
+      (appNotifications || [])
+        .filter(n => n.recipientType === 'student' && n.recipientId === currentStudent.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .forEach((n) => {
+          list.push({
+            id: `app-${n.id}`,
+            title: n.title,
+            message: n.message,
+            time: n.createdAt ? new Date(n.createdAt).toLocaleDateString() : 'Recent',
+            category: 'TASKS',
+            link: n.link || '/student/launchpad',
+            type: 'info',
+            isRead: n.isRead || readNotifIds.includes(`app-${n.id}`),
+            actionText: 'Open in Launchpad'
+          });
+        });
+
       // 1. APPLICATION DEADLINES & LESS DAYS IN APPLICATION
       (currentStudent.shortlist || []).forEach((uni: any, idx: number) => {
         if (uni.deadline) {
@@ -432,12 +496,18 @@ export default function AppLayout() {
     }
 
     return list;
-  }, [isTeam, currentStudent, students, currentUser, readNotifIds]);
+  }, [isTeam, currentStudent, students, currentUser, readNotifIds, appNotifications]);
 
   const filteredNotifications = notifications.filter(n => {
     if (notifFilter === 'ALL') return true;
     return n.category === notifFilter;
   });
+
+  const visibleNotifications = (!isTeam && !showAllStudentNotifs)
+    ? filteredNotifications.slice(0, 5)
+    : filteredNotifications;
+
+  const hasMoreStudentNotifs = !isTeam && filteredNotifications.length > 5;
 
   const unreadCount = notifications.filter(n => !n.isRead).length;
 
@@ -447,10 +517,21 @@ export default function AppLayout() {
     navigate(path);
   };
 
-  const handleLogout = () => { 
-    localStorage.removeItem('auth_token');
-    setIsAuthenticated(false);
+  const handleLogout = async () => { 
+    await signOutAll();
     navigate('/login');
+  };
+
+  const handleGoogleSync = async () => {
+    setGoogleSyncError(null);
+    setGoogleSyncing(true);
+    try {
+      await signInWithGoogle();
+    } catch (err: any) {
+      setGoogleSyncError(err?.message || 'Google sign-in failed.');
+    } finally {
+      setGoogleSyncing(false);
+    }
   };
 
   return (
@@ -471,19 +552,25 @@ export default function AppLayout() {
           <nav className="space-y-1 px-4">
             {navigation.map((item) => {
               const isActive = location.pathname.includes(item.href);
+              const isStudentLaunchpadLocked = !isTeam && item.href === '/student/launchpad' && !isStudentLaunchpadEnrolled;
               return (
                 <NavLink
                   key={item.name}
                   to={item.href}
                   className={cn(
-                    'group flex items-center gap-3 px-3 py-2.5 text-sm font-medium rounded-xl transition-colors',
+                    'group flex items-center justify-between gap-3 px-3 py-2.5 text-sm font-medium rounded-xl transition-colors',
                     isActive
                       ? 'bg-indigo-50 text-indigo-700 shadow-xs'
                       : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'
                   )}
                 >
-                  <item.icon className={cn("h-5 w-5 flex-shrink-0 transition-colors", isActive ? "text-indigo-600" : "text-slate-400 group-hover:text-slate-600")} aria-hidden="true" />
-                  {item.name}
+                  <span className="flex items-center gap-3 min-w-0">
+                    <item.icon className={cn("h-5 w-5 flex-shrink-0 transition-colors", isActive ? "text-indigo-600" : "text-slate-400 group-hover:text-slate-600")} aria-hidden="true" />
+                    <span className="truncate">{item.name}</span>
+                  </span>
+                  {isStudentLaunchpadLocked && (
+                    <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" aria-label="Locked" />
+                  )}
                 </NavLink>
               );
             })}
@@ -551,20 +638,26 @@ export default function AppLayout() {
               <nav className="space-y-1">
                 {navigation.map((item) => {
                   const isActive = location.pathname.includes(item.href);
+                  const isStudentLaunchpadLocked = !isTeam && item.href === '/student/launchpad' && !isStudentLaunchpadEnrolled;
                   return (
                     <NavLink
                       key={item.name}
                       to={item.href}
                       onClick={() => setIsMobileMenuOpen(false)}
                       className={cn(
-                        'group flex items-center gap-3 px-3.5 py-3 text-base font-semibold rounded-xl transition-colors',
+                        'group flex items-center justify-between gap-3 px-3.5 py-3 text-base font-semibold rounded-xl transition-colors',
                         isActive
                           ? 'bg-indigo-50 text-indigo-700 shadow-xs'
                           : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
                       )}
                     >
-                      <item.icon className={cn("h-5 w-5 flex-shrink-0 transition-colors", isActive ? "text-indigo-600" : "text-slate-400")} aria-hidden="true" />
-                      {item.name}
+                      <span className="flex items-center gap-3 min-w-0">
+                        <item.icon className={cn("h-5 w-5 flex-shrink-0 transition-colors", isActive ? "text-indigo-600" : "text-slate-400")} aria-hidden="true" />
+                        <span className="truncate">{item.name}</span>
+                      </span>
+                      {isStudentLaunchpadLocked && (
+                        <Lock className="w-4 h-4 text-slate-400 shrink-0" aria-label="Locked" />
+                      )}
                     </NavLink>
                   );
                 })}
@@ -662,7 +755,11 @@ export default function AppLayout() {
             {/* Notification Bell with Top Dropdown */}
             <div className="relative" ref={notifDropdownRef}>
               <button
-                onClick={() => setIsNotificationOpen(!isNotificationOpen)}
+                onClick={() => {
+                  const next = !isNotificationOpen;
+                  setIsNotificationOpen(next);
+                  if (!next) setShowAllStudentNotifs(false);
+                }}
                 title="Notifications: Tasks, Updates & Reviews"
                 className={cn(
                   "w-8 h-8 rounded-full flex items-center justify-center transition-all relative border shadow-2xs",
@@ -714,7 +811,10 @@ export default function AppLayout() {
                     ].map(tab => (
                       <button
                         key={tab.id}
-                        onClick={() => setNotifFilter(tab.id as any)}
+                        onClick={() => {
+                          setNotifFilter(tab.id as any);
+                          setShowAllStudentNotifs(false);
+                        }}
                         className={cn(
                           "px-2.5 py-1 rounded-lg font-medium transition-colors shrink-0",
                           notifFilter === tab.id
@@ -729,14 +829,14 @@ export default function AppLayout() {
 
                   {/* Notification List */}
                   <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
-                    {filteredNotifications.length === 0 ? (
+                    {visibleNotifications.length === 0 ? (
                       <div className="p-8 text-center text-slate-400">
                         <Bell className="w-6 h-6 mx-auto mb-2 text-slate-300" />
                         <p className="text-xs font-semibold">No notifications</p>
                         <p className="text-[10px] text-slate-400 mt-0.5">Assigned tasks and updates will appear here.</p>
                       </div>
                     ) : (
-                      filteredNotifications.map(n => (
+                      visibleNotifications.map(n => (
                         <div
                           key={n.id}
                           onClick={() => {
@@ -792,6 +892,19 @@ export default function AppLayout() {
                           </div>
                         </div>
                       ))
+                    )}
+                    {hasMoreStudentNotifs && (
+                      <div className="p-2.5 bg-slate-50/70 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setShowAllStudentNotifs(prev => !prev)}
+                          className="text-xs font-bold text-indigo-600 hover:text-indigo-800 hover:underline transition-colors cursor-pointer"
+                        >
+                          {showAllStudentNotifs
+                            ? 'Show latest 5'
+                            : `See more (${filteredNotifications.length - 5} more)`}
+                        </button>
+                      </div>
                     )}
                   </div>
 
@@ -1057,7 +1170,59 @@ export default function AppLayout() {
 
         {/* Content View Container */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 flex flex-col gap-6 sm:gap-8 bg-slate-50">
-          <Outlet />
+          {isTeam && firestoreStatus === 'permission-denied' && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs shrink-0">
+              <div className="flex items-start gap-2.5">
+                <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-xs sm:text-sm font-bold text-amber-950">
+                    Connect your Google account (uppseekers@gmail.com) to load live students & conversations
+                  </p>
+                  <p className="text-[11px] sm:text-xs text-amber-800">
+                    Live database access requires Firebase Google sign-in. Currently showing fallback local data.
+                  </p>
+                  {googleSyncError && (
+                    <p className="text-[11px] font-semibold text-red-700 mt-1">{googleSyncError}</p>
+                  )}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleGoogleSync}
+                disabled={googleSyncing}
+                className="px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-colors shrink-0 cursor-pointer disabled:opacity-60"
+              >
+                {googleSyncing ? 'Connecting Google...' : 'Connect Google (uppseekers@gmail.com)'}
+              </button>
+            </div>
+          )}
+          {isTeam &&
+          currentUser &&
+          teamNavigation.some(t => location.pathname === t.href || location.pathname.startsWith(`${t.href}/`)) &&
+          !navigation.some(t => location.pathname === t.href || location.pathname.startsWith(`${t.href}/`)) ? (
+            <div className="max-w-lg mx-auto my-auto bg-white border border-slate-200 rounded-2xl p-8 text-center shadow-sm space-y-4">
+              <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-500 flex items-center justify-center mx-auto">
+                <Lock className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-lg font-bold text-slate-900">Tab Hidden for Your Role</h2>
+                <p className="text-xs sm:text-sm text-slate-500">
+                  Visibility for this tab is currently turned off for <span className="font-semibold text-slate-700">{(currentUser.role || '').replace(/_/g, ' ')}</span> in Access & Permissions.
+                </p>
+              </div>
+              {navigation[0] && (
+                <button
+                  type="button"
+                  onClick={() => navigate(navigation[0].href)}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Go to {navigation[0].name}
+                </button>
+              )}
+            </div>
+          ) : (
+            <Outlet />
+          )}
         </div>
         
         {/* Bottom Status Bar */}

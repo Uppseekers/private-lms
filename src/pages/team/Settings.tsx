@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,19 +22,40 @@ import {
   CalendarDays,
   CreditCard,
   Download,
-  KeyRound
+  KeyRound,
+  LayoutDashboard,
+  Compass,
+  BookOpen,
+  FolderLock,
+  CheckSquare,
+  FileSpreadsheet,
+  GraduationCap,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDatabase, PermissionCategory } from '@/context/DatabaseContext';
 import { StaffMember } from '@/types';
 import { isUserAdmin } from '@/lib/staffPermissions';
 import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
+import ZohoSetupDiagnosticsPanel from '@/components/ZohoSetupDiagnosticsPanel';
 
 type TabType = 'staff' | 'permissions' | 'taxonomies' | 'communications' | 'calendar' | 'billing' | 'developer' | 'audit';
-type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | null;
+type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | 'Enabled' | 'None' | null;
 
 export default function TeamSettings() {
-  const { staff, setStaff, currentUser, setCurrentUser, students, setStudents, permissionsMatrix, setPermissionsMatrix, roles } = useDatabase();
+  const navigate = useNavigate();
+  const {
+    staff,
+    setStaff,
+    currentUser,
+    setCurrentUser,
+    students,
+    setStudents,
+    permissionsMatrix,
+    setPermissionsMatrix,
+    roles
+  } = useDatabase();
   const isAdmin = isUserAdmin(currentUser);
   const [activeTab, setActiveTab] = useState<TabType>('permissions');
   
@@ -323,6 +345,14 @@ export default function TeamSettings() {
   };
 
   const handleTogglePermission = (categoryId: string, itemId: string) => {
+    // Strictly prevent enabling Admin Settings & System Controls for non-admin roles
+    if (categoryId === 'admin' && selectedRoleForPerms !== 'SYSTEM_ADMIN') {
+      return;
+    }
+    if (categoryId === 'tab_visibility' && itemId === 'tab_settings') {
+      // Keep Admin Settings strictly tied to SYSTEM_ADMIN (always visible for SYSTEM_ADMIN, hidden for others)
+      return;
+    }
     const currentRolePerms = JSON.parse(JSON.stringify(permissionsMatrix[selectedRoleForPerms])) as PermissionCategory[];
     
     const category = currentRolePerms.find(c => c.id === categoryId);
@@ -330,12 +360,53 @@ export default function TeamSettings() {
       const item = category.items.find(i => i.id === itemId);
       if (item) {
         item.enabled = !item.enabled;
+        if (categoryId === 'launchpad') {
+          if (!item.enabled) {
+            item.scope = 'None';
+          } else if (item.id === 'launchpad_edit_curriculum_access') {
+            if (!item.scope || item.scope === 'None') item.scope = 'Enabled';
+          } else if (!item.scope || item.scope === 'None') {
+            item.scope = 'Assigned Scope';
+          }
+        }
+        // When toggling a 1-to-1 tab visibility button ON, ensure the underlying entry permission is enabled so the tab works immediately
+        if (categoryId === 'tab_visibility' && item.enabled) {
+          const ensureItemEnabled = (targetCatId: string, targetItemId: string, defaultScope?: Scope) => {
+            const targetCat = currentRolePerms.find(c => c.id === targetCatId);
+            const targetItem = targetCat?.items.find(i => i.id === targetItemId);
+            if (targetItem && !targetItem.enabled) {
+              targetItem.enabled = true;
+              if (defaultScope && (!targetItem.scope || targetItem.scope === 'None')) {
+                targetItem.scope = defaultScope;
+              }
+            }
+          };
+          if (itemId === 'tab_batches') ensureItemEnabled('batch', 'view_past');
+          if (itemId === 'tab_scheduler') ensureItemEnabled('schedule', 'create_class', 'Assigned Scope');
+          if (itemId === 'tab_vault') ensureItemEnabled('vault', 'view_vault', 'Assigned Scope');
+          if (itemId === 'tab_evaluator') ensureItemEnabled('tasks', 'assign_tasks', 'Assigned Scope');
+          if (itemId === 'tab_users') ensureItemEnabled('profile', 'view_roster', 'Assigned Scope');
+          if (itemId === 'tab_reports') ensureItemEnabled('reports', 'view_meeting_reports', 'Assigned Scope');
+          if (itemId === 'tab_universities') ensureItemEnabled('shortlist', 'add_uni', 'Assigned Scope');
+          if (itemId === 'tab_launchpad') {
+            const lpCat = currentRolePerms.find(c => c.id === 'launchpad');
+            const lpTab = lpCat?.items.find(i => i.id === 'launchpad_student_tab_access');
+            const lpEdit = lpCat?.items.find(i => i.id === 'launchpad_edit_curriculum_access');
+            if (lpTab && !lpTab.enabled && (!lpEdit || !lpEdit.enabled)) {
+              lpTab.enabled = true;
+              if (!lpTab.scope || lpTab.scope === 'None') lpTab.scope = 'Assigned Scope';
+            }
+          }
+        }
       }
     }
     setPermissionsMatrix({ ...permissionsMatrix, [selectedRoleForPerms]: currentRolePerms });
   };
 
   const handleChangeScope = (categoryId: string, itemId: string, newScope: Scope) => {
+    if (categoryId === 'admin' && selectedRoleForPerms !== 'SYSTEM_ADMIN') {
+      return;
+    }
     const currentRolePerms = JSON.parse(JSON.stringify(permissionsMatrix[selectedRoleForPerms])) as PermissionCategory[];
     
     const category = currentRolePerms.find(c => c.id === categoryId);
@@ -343,6 +414,9 @@ export default function TeamSettings() {
       const item = category.items.find(i => i.id === itemId);
       if (item) {
         item.scope = newScope;
+        if (categoryId === 'launchpad') {
+          item.enabled = newScope !== 'None';
+        }
       }
     }
     setPermissionsMatrix({ ...permissionsMatrix, [selectedRoleForPerms]: currentRolePerms });
@@ -351,16 +425,36 @@ export default function TeamSettings() {
   const [showSaveSuccess, setShowSaveSuccess] = useState(false);
 
   const savePermissions = () => {
-    // 1. Explicitly persist matrix to state and localStorage
-    setPermissionsMatrix({ ...permissionsMatrix });
+    // 1. Sanitize matrix: enforce that Admin Settings category remains strictly restricted to SYSTEM_ADMIN
+    const sanitizedMatrix = { ...permissionsMatrix };
+    for (const [roleName, catList] of Object.entries(sanitizedMatrix)) {
+      if (roleName !== 'SYSTEM_ADMIN') {
+        const adminCat = catList.find(c => c.id === 'admin');
+        if (adminCat) {
+          adminCat.items.forEach(item => {
+            item.enabled = false;
+            if (item.scope) item.scope = null;
+          });
+        }
+        const tabVisCat = catList.find(c => c.id === 'tab_visibility');
+        const settingsTab = tabVisCat?.items.find(i => i.id === 'tab_settings');
+        if (settingsTab) settingsTab.enabled = false;
+      } else {
+        const tabVisCat = catList.find(c => c.id === 'tab_visibility');
+        const settingsTab = tabVisCat?.items.find(i => i.id === 'tab_settings');
+        if (settingsTab) settingsTab.enabled = true;
+      }
+    }
+
+    setPermissionsMatrix(sanitizedMatrix);
     try {
-      localStorage.setItem('uppseekers_permissions_v2', JSON.stringify(permissionsMatrix));
+      localStorage.setItem('uppseekers_permissions_v2', JSON.stringify(sanitizedMatrix));
     } catch (e) {
       console.warn('Could not save permissions to localStorage:', e);
     }
 
     // 2. Check if selected role has global scope
-    const roleCategories = permissionsMatrix[selectedRoleForPerms] || [];
+    const roleCategories = sanitizedMatrix[selectedRoleForPerms] || [];
     const hasGlobalScope = roleCategories.some(cat => 
       cat.items.some(item => item.enabled && item.scope && item.scope.toLowerCase().includes('global'))
     );
@@ -404,6 +498,28 @@ export default function TeamSettings() {
   });
   
   const currentCategoryData = permissionsMatrix[selectedRoleForPerms] || [];
+
+  if (!isAdmin) {
+    return (
+      <div className="max-w-2xl mx-auto my-12 p-8 bg-white border border-rose-200 rounded-2xl shadow-sm text-center animate-in fade-in duration-300">
+        <div className="w-16 h-16 bg-rose-50 border border-rose-100 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600 shadow-inner">
+          <Shield className="w-8 h-8" />
+        </div>
+        <h2 className="text-xl font-bold text-slate-900 mb-2">Access Restricted: Administrator Only</h2>
+        <p className="text-sm text-slate-600 mb-3 leading-relaxed">
+          The Admin Settings Control Center is strictly restricted to System Administrators only. Non-admin roles (including Category Managers, Counselors, and Faculty) do not have authorization to access system configuration, developer APIs, or permission matrices.
+        </p>
+        <div className="inline-block bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-xs text-slate-600 mb-6">
+          Logged in as: <strong>{currentUser?.name || 'Staff Member'}</strong> • Role: <span className="font-semibold text-rose-600">{currentUser?.role}</span>
+        </div>
+        <div>
+          <Button onClick={() => navigate('/team/dashboard')} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-semibold">
+            Return to Dashboard
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500 max-w-7xl mx-auto w-full">
@@ -601,10 +717,198 @@ export default function TeamSettings() {
            </div>
 
            <div className="p-0 bg-white">
-             {currentCategoryData.map((category, index) => (
+             {/* One-to-One Sidebar Tab Visibility Controls */}
+             {(() => {
+               const tabVisCategory = currentCategoryData.find(c => c.id === 'tab_visibility');
+               const tabIconMap: Record<string, React.ElementType> = {
+                 tab_dashboard: LayoutDashboard,
+                 tab_launchpad: Compass,
+                 tab_batches: BookOpen,
+                 tab_scheduler: CalendarDays,
+                 tab_vault: FolderLock,
+                 tab_evaluator: CheckSquare,
+                 tab_users: Users,
+                 tab_reports: FileSpreadsheet,
+                 tab_universities: GraduationCap,
+                 tab_settings: Shield,
+               };
+               const tabLabelMap: Record<string, string> = {
+                 tab_dashboard: 'Dashboard',
+                 tab_launchpad: 'Launchpad',
+                 tab_batches: 'Batches & Cohorts',
+                 tab_scheduler: 'Class Scheduler',
+                 tab_vault: 'Document Center',
+                 tab_evaluator: 'Assignment Evaluator',
+                 tab_users: 'Student Database',
+                 tab_reports: 'Reports',
+                 tab_universities: 'Universities',
+                 tab_settings: 'Admin Settings',
+               };
+               const items = tabVisCategory?.items || [];
+               const visibleCount = items.filter(i => i.enabled).length;
+               return (
+                 <div className="border-b border-slate-200 bg-indigo-50/30">
+                   <div className="px-6 py-3.5 bg-indigo-50/70 border-b border-indigo-100 flex flex-wrap items-center justify-between gap-2">
+                     <div>
+                       <h4 className="text-xs font-bold text-indigo-950 tracking-wider uppercase flex items-center gap-2">
+                         <Eye className="w-4 h-4 text-indigo-600" />
+                         Sidebar Tab Visibility Controls (1-to-1 Tab Buttons)
+                       </h4>
+                       <p className="text-xs text-slate-600 mt-0.5">
+                         Click any tab button below to show or hide that sidebar tab for <span className="font-semibold text-indigo-700">{selectedRoleForPerms.replace(/_/g, ' ')}</span>.
+                       </p>
+                     </div>
+                     <span className="text-xs font-bold text-indigo-700 bg-white px-2.5 py-1 rounded-lg border border-indigo-200 shadow-2xs">
+                       {visibleCount} / {items.length} Tabs Visible
+                     </span>
+                   </div>
+                   <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+                     {items.map((tabItem) => {
+                       const TabIcon = tabIconMap[tabItem.id] || Shield;
+                       const tabTitle = tabLabelMap[tabItem.id] || tabItem.name;
+                       const isLockedSettings = tabItem.id === 'tab_settings';
+                       return (
+                         <button
+                           key={tabItem.id}
+                           type="button"
+                           disabled={isLockedSettings}
+                           onClick={() => handleTogglePermission('tab_visibility', tabItem.id)}
+                           className={cn(
+                             "flex items-center justify-between gap-2.5 p-3 rounded-xl border text-left transition-all",
+                             isLockedSettings && selectedRoleForPerms !== 'SYSTEM_ADMIN'
+                               ? "bg-rose-50/70 border-rose-200 text-rose-800 cursor-not-allowed opacity-85"
+                               : isLockedSettings && selectedRoleForPerms === 'SYSTEM_ADMIN'
+                               ? "bg-indigo-600 border-indigo-600 text-white cursor-default shadow-xs"
+                               : tabItem.enabled
+                               ? "bg-white border-indigo-300 text-slate-900 shadow-xs hover:border-indigo-500 hover:bg-indigo-50/40 cursor-pointer ring-1 ring-indigo-500/15"
+                               : "bg-slate-100/80 border-slate-200 text-slate-500 hover:bg-slate-200/60 hover:text-slate-700 cursor-pointer"
+                           )}
+                         >
+                           <div className="flex items-center gap-2.5 min-w-0">
+                             <div className={cn(
+                               "w-8 h-8 rounded-lg flex items-center justify-center shrink-0 transition-colors",
+                               isLockedSettings && selectedRoleForPerms === 'SYSTEM_ADMIN'
+                                 ? "bg-white/20 text-white"
+                                 : isLockedSettings
+                                 ? "bg-rose-100 text-rose-600"
+                                 : tabItem.enabled
+                                 ? "bg-indigo-100 text-indigo-700"
+                                 : "bg-slate-200 text-slate-400"
+                             )}>
+                               <TabIcon className="w-4 h-4" />
+                             </div>
+                             <div className="min-w-0">
+                               <p className="text-xs font-bold truncate">{tabTitle}</p>
+                               <p className={cn(
+                                 "text-[10px] font-semibold",
+                                 isLockedSettings && selectedRoleForPerms === 'SYSTEM_ADMIN'
+                                   ? "text-indigo-100"
+                                   : isLockedSettings
+                                   ? "text-rose-600"
+                                   : tabItem.enabled
+                                   ? "text-emerald-600"
+                                   : "text-slate-400"
+                               )}>
+                                 {isLockedSettings && selectedRoleForPerms !== 'SYSTEM_ADMIN'
+                                   ? 'Admin Only'
+                                   : isLockedSettings
+                                   ? 'Always Visible'
+                                   : tabItem.enabled
+                                   ? 'Visible'
+                                   : 'Hidden'}
+                               </p>
+                             </div>
+                           </div>
+                           <div className="shrink-0">
+                             {isLockedSettings ? (
+                               <Lock className={cn(
+                                 "w-4 h-4",
+                                 selectedRoleForPerms === 'SYSTEM_ADMIN' ? "text-white/90" : "text-rose-500"
+                               )} />
+                             ) : tabItem.enabled ? (
+                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 text-[10px] font-bold">
+                                 <Eye className="w-3 h-3" /> ON
+                               </span>
+                             ) : (
+                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-200 text-slate-600 text-[10px] font-bold">
+                                 <EyeOff className="w-3 h-3" /> OFF
+                               </span>
+                             )}
+                           </div>
+                         </button>
+                       );
+                     })}
+                   </div>
+                 </div>
+               );
+             })()}
+
+             {currentCategoryData.filter(category => category.id !== 'tab_visibility').map((category, index) => {
+               const categoryToTabMap: Record<string, { tabId: string; label: string }> = {
+                 profile: { tabId: 'tab_users', label: 'Student Database Tab' },
+                 schedule: { tabId: 'tab_scheduler', label: 'Class Scheduler Tab' },
+                 batch: { tabId: 'tab_batches', label: 'Batches & Cohorts Tab' },
+                 shortlist: { tabId: 'tab_universities', label: 'Universities Tab' },
+                 vault: { tabId: 'tab_vault', label: 'Document Center Tab' },
+                 tasks: { tabId: 'tab_evaluator', label: 'Assignment Evaluator Tab' },
+                 reports: { tabId: 'tab_reports', label: 'Reports Tab' },
+                 launchpad: { tabId: 'tab_launchpad', label: 'Launchpad Tab' },
+                 admin: { tabId: 'tab_settings', label: 'Admin Settings Tab' },
+               };
+               const mappedTab = categoryToTabMap[category.id];
+               const tabVisCat = currentCategoryData.find(c => c.id === 'tab_visibility');
+               const mappedTabItem = mappedTab ? tabVisCat?.items.find(i => i.id === mappedTab.tabId) : undefined;
+
+               return (
                 <div key={category.id} className={cn("border-b border-slate-100 last:border-0", index % 2 === 0 ? "bg-white" : "bg-slate-50/50")}>
-                  <div className="px-6 py-3 bg-slate-100/80 border-b border-slate-200">
+                  <div className="px-6 py-3 bg-slate-100/80 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
                     <h4 className="text-xs font-bold text-slate-800 tracking-wider">{category.title}</h4>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {category.id === 'admin' && selectedRoleForPerms !== 'SYSTEM_ADMIN' && (
+                        <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 px-2 py-0.5 rounded border border-rose-200 flex items-center gap-1 shadow-2xs">
+                          <Lock className="w-3 h-3 text-rose-600" /> Locked to System Admin Only
+                        </span>
+                      )}
+                      {category.id === 'reports' && (
+                        <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 flex items-center gap-1 shadow-2xs">
+                          Reports & Audit Engine
+                        </span>
+                      )}
+                      {category.id === 'shortlist' && (
+                        <span className="text-[11px] font-semibold text-sky-700 bg-sky-50 px-2 py-0.5 rounded border border-sky-200 flex items-center gap-1 shadow-2xs">
+                          Global Directory & Shortlisting
+                        </span>
+                      )}
+                      {category.id === 'launchpad' && (
+                        <span className="text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200 flex items-center gap-1 shadow-2xs">
+                          Unified Launchpad Controls
+                        </span>
+                      )}
+                      {mappedTab && mappedTabItem && category.id !== 'admin' && (
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePermission('tab_visibility', mappedTab.tabId)}
+                          className={cn(
+                            "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-all cursor-pointer shadow-2xs",
+                            mappedTabItem.enabled
+                              ? "bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100"
+                              : "bg-slate-200/80 text-slate-600 border-slate-300 hover:bg-slate-300/70"
+                          )}
+                        >
+                          {mappedTabItem.enabled ? (
+                            <>
+                              <Eye className="w-3.5 h-3.5" />
+                              {mappedTab.label}: Visible
+                            </>
+                          ) : (
+                            <>
+                              <EyeOff className="w-3.5 h-3.5" />
+                              {mappedTab.label}: Hidden
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div className="divide-y divide-slate-100">
                     {category.items.map((item) => (
@@ -616,21 +920,29 @@ export default function TeamSettings() {
                           {/* Toggle Switch */}
                           <div className="flex items-center gap-3">
                             <span className="text-xs font-bold uppercase text-slate-400 w-12 text-right">Toggle:</span>
-                            <button 
-                              onClick={() => handleTogglePermission(category.id, item.id)}
-                              className={cn(
-                                "w-11 h-6 rounded-full relative transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500", 
-                                item.enabled ? "bg-indigo-600" : "bg-slate-300"
-                              )}
-                            >
-                              <span className={cn(
-                                "absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform duration-200 shadow-sm", 
-                                item.enabled ? "translate-x-5" : ""
-                              )}></span>
-                            </button>
-                            <span className={cn("text-xs font-bold w-6", item.enabled ? "text-indigo-700" : "text-slate-500")}>
-                              {item.enabled ? 'ON' : 'OFF'}
-                            </span>
+                            {category.id === 'admin' && selectedRoleForPerms !== 'SYSTEM_ADMIN' ? (
+                              <div className="flex items-center gap-1.5 px-2.5 py-1 bg-rose-50 text-rose-700 rounded-md text-xs font-semibold border border-rose-200 shadow-2xs">
+                                <Lock className="w-3.5 h-3.5 text-rose-600" /> Admin Only
+                              </div>
+                            ) : (
+                              <>
+                                <button 
+                                  onClick={() => handleTogglePermission(category.id, item.id)}
+                                  className={cn(
+                                    "w-11 h-6 rounded-full relative transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500", 
+                                    item.enabled ? "bg-indigo-600" : "bg-slate-300"
+                                  )}
+                                >
+                                  <span className={cn(
+                                    "absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform duration-200 shadow-sm", 
+                                    item.enabled ? "translate-x-5" : ""
+                                  )}></span>
+                                </button>
+                                <span className={cn("text-xs font-bold w-6", item.enabled ? "text-indigo-700" : "text-slate-500")}>
+                                  {item.enabled ? 'ON' : 'OFF'}
+                                </span>
+                              </>
+                            )}
                           </div>
 
                           {/* Scope Selector */}
@@ -639,17 +951,34 @@ export default function TeamSettings() {
                               <>
                                 <span className="text-xs font-bold uppercase text-slate-400 w-12 text-right">Scope:</span>
                                 <select 
-                                  value={item.scope || ''}
+                                  value={item.scope || (category.id === 'launchpad' ? 'None' : '')}
                                   onChange={(e) => handleChangeScope(category.id, item.id, e.target.value as Scope)}
-                                  disabled={!item.enabled}
+                                  disabled={!item.enabled && category.id !== 'launchpad'}
                                   className={cn(
                                     "border rounded-lg px-2 py-1.5 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-indigo-500 flex-1",
-                                    !item.enabled ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed" : "bg-white border-slate-300 text-slate-700 shadow-sm cursor-pointer"
+                                    (!item.enabled && category.id !== 'launchpad') ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed" : "bg-white border-slate-300 text-slate-700 shadow-sm cursor-pointer"
                                   )}
                                 >
-                                  <option value="Global Scope">Global Scope</option>
-                                  <option value="Assigned Scope">Assigned Scope</option>
-                                  <option value="Read-Only Scope">Read-Only Scope</option>
+                                  {category.id === 'launchpad' && item.id === 'launchpad_edit_curriculum_access' ? (
+                                    <>
+                                      <option value="Enabled">Enabled</option>
+                                      <option value="Read-Only Scope">Read-Only Scope</option>
+                                      <option value="None">None</option>
+                                    </>
+                                  ) : category.id === 'launchpad' ? (
+                                    <>
+                                      <option value="Global Scope">Global Scope</option>
+                                      <option value="Assigned Scope">Assigned Scope</option>
+                                      <option value="Read-Only Scope">Read-Only Scope</option>
+                                      <option value="None">None</option>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <option value="Global Scope">Global Scope</option>
+                                      <option value="Assigned Scope">Assigned Scope</option>
+                                      <option value="Read-Only Scope">Read-Only Scope</option>
+                                    </>
+                                  )}
                                 </select>
                               </>
                             ) : (
@@ -661,9 +990,9 @@ export default function TeamSettings() {
                     ))}
                   </div>
                 </div>
-             ))}
+               );
+             })}
            </div>
-           
            <div className="p-6 bg-slate-50 border-t border-slate-200 flex justify-end items-center gap-3">
              {showSaveSuccess && (
                <span className="text-sm font-bold text-emerald-600 flex items-center animate-in fade-in zoom-in duration-300">
@@ -801,31 +1130,7 @@ export default function TeamSettings() {
 
       {activeTab === 'calendar' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-           <Card className="border-slate-200 shadow-sm">
-             <CardHeader className="bg-slate-50 border-b border-slate-200">
-               <CardTitle className="text-sm font-bold uppercase tracking-wider text-slate-900">Video Conferencing Defaults</CardTitle>
-             </CardHeader>
-             <CardContent className="p-6 space-y-4">
-               <div className="space-y-4">
-                 <div className="flex items-center justify-between p-3 border border-emerald-200 bg-emerald-50 rounded-lg">
-                   <div className="flex items-center gap-3">
-                     <div className="w-8 h-8 bg-emerald-100 text-emerald-700 rounded-full flex items-center justify-center">
-                       <CheckCircle2 className="w-4 h-4" />
-                     </div>
-                     <div>
-                       <div className="font-semibold text-sm text-emerald-900">Zoom Master Account</div>
-                       <div className="text-xs text-emerald-700">Auto-generating links enabled</div>
-                     </div>
-                   </div>
-                   <Button variant="ghost" size="sm" className="text-emerald-700 hover:bg-emerald-100"><Edit className="w-4 h-4" /></Button>
-                 </div>
-                 <div>
-                   <label className="text-xs font-bold text-slate-700 block mb-1">Global Default Meeting Link (Fallback)</label>
-                   <input type="url" defaultValue="https://zoom.us/j/uppseekers-default-room" className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500" />
-                 </div>
-               </div>
-             </CardContent>
-           </Card>
+           <ZohoSetupDiagnosticsPanel currentUser={currentUser} />
 
            <Card className="border-slate-200 shadow-sm">
              <CardHeader className="bg-slate-50 border-b border-slate-200">
@@ -943,7 +1248,7 @@ export default function TeamSettings() {
              <CardContent className="p-6 space-y-6">
                <div className="space-y-4">
                  {[
-                   { name: 'Zoom / Google Meet Integration', status: 'Connected', desc: 'Auto-generates meeting links for schedule' },
+                   { name: 'Zoho Meeting OAuth 2.0 (.com)', status: 'Managed', desc: 'Per-counselor OAuth & automated meeting provisioning configured under Calendar & Links' },
                    { name: 'SendGrid / WhatsApp API Engine', status: 'Connected', desc: 'Triggers email/SMS alerts for essay feedback' },
                    { name: 'AI Quality Assistant (OpenAI)', status: 'Connected', desc: 'Powers live essay grammar & tone check' }
                  ].map((api, idx) => (

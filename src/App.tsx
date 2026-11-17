@@ -17,9 +17,14 @@ import TeamSettings from './pages/team/Settings';
 import TeamVault from './pages/team/Vault';
 import Batches from './pages/team/Batches';
 import Evaluator from './pages/team/Evaluator';
+import TeamReports from './pages/team/Reports';
+import TeamUniversities from './pages/team/Universities';
 import StudentEssays from './pages/student/Essays';
 import StudentTasks from './pages/student/Tasks';
 import CompetencyRadar from './pages/student/CompetencyRadar';
+import StudentActivityLog from './pages/student/ActivityLog';
+import StudentLaunchpad from './pages/student/Launchpad';
+import TeamLaunchpad from './pages/team/Launchpad';
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { isAuthenticated } = useDatabase();
@@ -49,6 +54,9 @@ export default function App() {
             <Route path="essays" element={<StudentEssays />} />
             <Route path="tasks" element={<StudentTasks />} />
             <Route path="competency-radar" element={<CompetencyRadar />} />
+            <Route path="activity-log" element={<StudentActivityLog />} />
+            <Route path="activity" element={<Navigate to="activity-log" replace />} />
+            <Route path="launchpad" element={<StudentLaunchpad />} />
           </Route>
 
           {/* Team Routes */}
@@ -60,6 +68,10 @@ export default function App() {
             <Route path="evaluator" element={<Evaluator />} />
             <Route path="users" element={<TeamUsers />} />
             <Route path="batches" element={<Batches />} />
+            <Route path="reports" element={<TeamReports />} />
+            <Route path="report" element={<Navigate to="reports" replace />} />
+            <Route path="universities" element={<TeamUniversities />} />
+            <Route path="launchpad" element={<TeamLaunchpad />} />
             <Route path="settings" element={<TeamSettings />} />
           </Route>
 

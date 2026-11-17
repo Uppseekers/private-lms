@@ -29,6 +29,7 @@ import { useDatabase } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
 import { canStudentAccessEvent } from '@/lib/staffPermissions';
 import NotificationDetailsModal, { NotificationDetailData } from '@/components/NotificationDetailsModal';
+import StudentActivityLogSection from '@/components/student/StudentActivityLogSection';
 
 interface ActivityItem {
   id: string;
@@ -62,16 +63,17 @@ interface NotificationItem extends NotificationDetailData {
 }
 
 export default function StudentDashboard() {
-  const { currentUser, events, batches, students } = useDatabase();
+  const { currentUser, events, batches, students, appNotifications } = useDatabase();
   const [activityFilter, setActivityFilter] = useState<'ALL' | 'MEETING' | 'TASK' | 'ESSAY' | 'COUNSELOR_LOG'>('ALL');
   const [notificationFilter, setNotificationFilter] = useState<'ALL' | 'UNREAD' | 'URGENT'>('ALL');
+  const [showAllNotifications, setShowAllNotifications] = useState(false);
   const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
   const [selectedNotification, setSelectedNotification] = useState<NotificationDetailData | null>(null);
 
   const student = students.find(s => 
     (currentUser?.id && s.id === currentUser.id) || 
     (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
-  ) || (currentUser as any);
+  ) || students[0] || (currentUser as any);
   const tasks = student?.tasks || [];
   const shortlist = student?.shortlist || [];
   const essays = student?.essays || [];
@@ -268,6 +270,27 @@ export default function StudentDashboard() {
   // --- 4. GENERATE REAL-TIME NOTIFICATIONS ---
   const generatedNotifications: NotificationItem[] = useMemo(() => {
     const list: NotificationItem[] = [];
+
+    // 0. LATEST REAL-TIME APP NOTIFICATIONS (e.g., Launchpad unlocks & evaluations, newest first)
+    if (student?.id && Array.isArray(appNotifications)) {
+      [...appNotifications]
+        .filter((n) => n.recipientType === 'student' && n.recipientId === student.id)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .forEach((n) => {
+          list.push({
+            id: 'notif_app_' + n.id,
+            title: n.title,
+            message: n.message,
+            type: 'INFO',
+            category: n.category || 'LAUNCHPAD',
+            timestamp: n.createdAt ? new Date(n.createdAt).toLocaleDateString() : 'Recent',
+            read: Boolean(n.isRead) || readNotificationIds.includes('notif_app_' + n.id),
+            link: n.link || '/student/launchpad',
+            actionText: 'Open Details',
+            performedBy: student?.counselor || 'Mentorship Team',
+          });
+        });
+    }
 
     // Helper: Filter out ANY profile-related modification logs
     const isProfileChangeLog = (item: any) => {
@@ -499,13 +522,19 @@ export default function StudentDashboard() {
     });
 
     return list;
-  }, [tasks, operationalLogs, studentEvents, essays, documents, shortlist, studentBatches, readNotificationIds, now, student]);
+  }, [tasks, operationalLogs, studentEvents, essays, documents, shortlist, studentBatches, readNotificationIds, now, student, appNotifications]);
 
   const filteredNotifications = generatedNotifications.filter(n => {
     if (notificationFilter === 'UNREAD') return !n.read;
     if (notificationFilter === 'URGENT') return n.type === 'URGENT';
     return true;
   });
+
+  const visibleNotifications = showAllNotifications
+    ? filteredNotifications
+    : filteredNotifications.slice(0, 5);
+
+  const hasMoreNotifications = filteredNotifications.length > 5;
 
   const unreadCount = generatedNotifications.filter(n => !n.read).length;
 
@@ -594,7 +623,10 @@ export default function StudentDashboard() {
                 {(['ALL', 'UNREAD', 'URGENT'] as const).map(filter => (
                   <button
                     key={filter}
-                    onClick={() => setNotificationFilter(filter)}
+                    onClick={() => {
+                      setNotificationFilter(filter);
+                      setShowAllNotifications(false);
+                    }}
                     className={cn(
                       "px-3 py-1 text-xs font-bold rounded-lg transition-all",
                       notificationFilter === filter 
@@ -627,51 +659,69 @@ export default function StudentDashboard() {
               No notifications matching your filter.
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-              {filteredNotifications.map(n => (
-                <div 
-                  key={n.id} 
-                  onClick={() => handleOpenNotificationDetails(n)}
-                  className={cn(
-                    "p-3.5 rounded-2xl border transition-all cursor-pointer space-y-2 relative hover:shadow-md group text-left",
-                    n.read 
-                      ? "bg-slate-50/70 border-slate-200/80 opacity-85 hover:opacity-100" 
-                      : "bg-white border-indigo-200 shadow-2xs hover:border-indigo-400 ring-1 ring-indigo-500/10"
-                  )}
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className={cn(
-                      "font-bold text-[10px] uppercase px-2 py-0.5 rounded-full tracking-wider",
-                      n.category === 'DEADLINE' ? "bg-rose-100 text-rose-800 border border-rose-200" :
-                      n.category === 'BATCH' ? "bg-indigo-100 text-indigo-800 border border-indigo-200" :
-                      n.category === 'LECTURE' ? "bg-blue-100 text-blue-800 border border-blue-200" :
-                      n.category === 'UNIVERSITY' ? "bg-emerald-100 text-emerald-800 border border-emerald-200" :
-                      n.category === 'TASK' ? (n.type === 'URGENT' ? "bg-rose-100 text-rose-800 border border-rose-200" : "bg-amber-100 text-amber-800 border border-amber-200") :
-                      n.category === 'NOTE' ? "bg-purple-100 text-purple-800 border border-purple-200" :
-                      n.type === 'URGENT' ? "bg-rose-100 text-rose-800" :
-                      n.type === 'SUCCESS' ? "bg-emerald-100 text-emerald-800" :
-                      n.type === 'COUNSELOR' ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
-                    )}>
-                      {n.category === 'DEADLINE' ? 'Deadline Alert' :
-                       n.category === 'BATCH' ? 'Batch Enrolled' :
-                       n.category === 'LECTURE' ? 'Lecture Schedule' :
-                       n.category === 'UNIVERSITY' ? 'Shortlist' :
-                       n.category === 'TASK' ? (n.type === 'URGENT' ? 'Task Action' : 'Assigned Task') :
-                       n.category === 'NOTE' ? 'Guidance Note' : n.type}
-                    </span>
-                    <span className="text-[10px] text-slate-400 font-medium">{n.timestamp}</span>
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {visibleNotifications.map(n => (
+                  <div 
+                    key={n.id} 
+                    onClick={() => handleOpenNotificationDetails(n)}
+                    className={cn(
+                      "p-3.5 rounded-2xl border transition-all cursor-pointer space-y-2 relative hover:shadow-md group text-left",
+                      n.read 
+                        ? "bg-slate-50/70 border-slate-200/80 opacity-85 hover:opacity-100" 
+                        : "bg-white border-indigo-200 shadow-2xs hover:border-indigo-400 ring-1 ring-indigo-500/10"
+                    )}
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <span className={cn(
+                        "font-bold text-[10px] uppercase px-2 py-0.5 rounded-full tracking-wider",
+                        n.category === 'DEADLINE' ? "bg-rose-100 text-rose-800 border border-rose-200" :
+                        n.category === 'BATCH' ? "bg-indigo-100 text-indigo-800 border border-indigo-200" :
+                        n.category === 'LECTURE' ? "bg-blue-100 text-blue-800 border border-blue-200" :
+                        n.category === 'UNIVERSITY' ? "bg-emerald-100 text-emerald-800 border border-emerald-200" :
+                        n.category === 'TASK' ? (n.type === 'URGENT' ? "bg-rose-100 text-rose-800 border border-rose-200" : "bg-amber-100 text-amber-800 border border-amber-200") :
+                        n.category === 'NOTE' ? "bg-purple-100 text-purple-800 border border-purple-200" :
+                        n.type === 'URGENT' ? "bg-rose-100 text-rose-800" :
+                        n.type === 'SUCCESS' ? "bg-emerald-100 text-emerald-800" :
+                        n.type === 'COUNSELOR' ? "bg-purple-100 text-purple-800" : "bg-blue-100 text-blue-800"
+                      )}>
+                        {n.category === 'DEADLINE' ? 'Deadline Alert' :
+                         n.category === 'BATCH' ? 'Batch Enrolled' :
+                         n.category === 'LECTURE' ? 'Lecture Schedule' :
+                         n.category === 'UNIVERSITY' ? 'Shortlist' :
+                         n.category === 'TASK' ? (n.type === 'URGENT' ? 'Task Action' : 'Assigned Task') :
+                         n.category === 'NOTE' ? 'Guidance Note' : n.type}
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-medium">{n.timestamp}</span>
+                    </div>
+                    <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between gap-2 group-hover:text-indigo-600 transition-colors">
+                      <span className="truncate">{n.title}</span>
+                      {!n.read && <span className="w-2 h-2 rounded-full bg-indigo-600 shrink-0" />}
+                    </h4>
+                    <p className="text-xs text-slate-600 leading-snug line-clamp-2">{n.message}</p>
+                    <div className="pt-1.5 flex items-center justify-between text-[11px] text-indigo-600 font-bold border-t border-slate-100">
+                      <span className="flex items-center gap-1 group-hover:underline">Click to view all details</span>
+                      <span className="group-hover:translate-x-1 transition-transform">→</span>
+                    </div>
                   </div>
-                  <h4 className="text-xs font-bold text-slate-900 flex items-center justify-between gap-2 group-hover:text-indigo-600 transition-colors">
-                    <span className="truncate">{n.title}</span>
-                    {!n.read && <span className="w-2 h-2 rounded-full bg-indigo-600 shrink-0" />}
-                  </h4>
-                  <p className="text-xs text-slate-600 leading-snug line-clamp-2">{n.message}</p>
-                  <div className="pt-1.5 flex items-center justify-between text-[11px] text-indigo-600 font-bold border-t border-slate-100">
-                    <span className="flex items-center gap-1 group-hover:underline">Click to view all details</span>
-                    <span className="group-hover:translate-x-1 transition-transform">→</span>
-                  </div>
+                ))}
+              </div>
+
+              {hasMoreNotifications && (
+                <div className="flex justify-center pt-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowAllNotifications(prev => !prev)}
+                    className="text-xs font-bold text-indigo-700 border-indigo-200 bg-white hover:bg-indigo-50 rounded-xl px-4 h-9 cursor-pointer shadow-2xs"
+                  >
+                    {showAllNotifications
+                      ? 'Show latest 5 notifications'
+                      : `See more (${filteredNotifications.length - 5} more notifications)`}
+                  </Button>
                 </div>
-              ))}
+              )}
             </div>
           )}
         </CardContent>
@@ -780,88 +830,8 @@ export default function StudentDashboard() {
         </Card>
       </div>
 
-      {/* ACTIVITIES FEED STREAM (Full Width) */}
-      <Card className="border-slate-200 shadow-sm flex flex-col">
-        <CardHeader className="pb-3 border-b border-slate-100">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <Clock className="w-4 h-4 text-indigo-600" /> Student Activities & Counselor Updates
-              </CardTitle>
-              <CardDescription className="text-xs">
-                Real-time activity trail covering meetings, task stages, essay progress, document status, and counselor logs.
-              </CardDescription>
-            </div>
-
-            {/* Activity Filter Buttons */}
-            <div className="flex flex-wrap gap-1">
-              {(['ALL', 'MEETING', 'TASK', 'ESSAY', 'COUNSELOR_LOG'] as const).map(f => (
-                <button
-                  key={f}
-                  onClick={() => setActivityFilter(f)}
-                  className={cn(
-                    "px-2.5 py-1 text-[11px] font-bold rounded-lg transition-colors uppercase tracking-wider",
-                    activityFilter === f ? "bg-indigo-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  )}
-                >
-                  {f === 'COUNSELOR_LOG' ? 'Counselor' : f}
-                </button>
-              ))}
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardContent className="p-5 max-h-[550px] overflow-y-auto">
-          {filteredActivities.length === 0 ? (
-            <div className="text-center py-12 text-slate-400 text-xs italic">
-              No recorded activities found for this category.
-            </div>
-          ) : (
-            <div className="relative pl-6 space-y-5 border-l-2 border-indigo-100 ml-2">
-              {filteredActivities.map(act => (
-                <div key={act.id} className="relative group">
-                  {/* Icon indicator bullet */}
-                  <span className={cn(
-                    "absolute -left-[31px] w-3.5 h-3.5 rounded-full ring-4 ring-white flex items-center justify-center",
-                    act.category === 'MEETING' ? 'bg-blue-600' :
-                    act.category === 'TASK' ? 'bg-indigo-600' :
-                    act.category === 'ESSAY' ? 'bg-purple-600' :
-                    act.category === 'DOCUMENT' ? 'bg-emerald-600' : 'bg-amber-600'
-                  )} />
-
-                  <div className="bg-slate-50 hover:bg-white p-4 rounded-2xl border border-slate-200/80 shadow-sm transition-all space-y-1.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <span className={cn(
-                          "text-[10px] font-extrabold uppercase px-2 py-0.5 rounded tracking-wider",
-                          act.statusColor || "bg-slate-200 text-slate-800"
-                        )}>
-                          {act.category.replace('_', ' ')}
-                        </span>
-                        {act.statusBadge && (
-                          <span className="text-[10px] font-semibold bg-white border border-slate-200 px-2 py-0.5 rounded text-slate-700">
-                            {act.statusBadge}
-                          </span>
-                        )}
-                      </div>
-                      <span className="text-[11px] font-medium text-slate-400">{act.timestamp}</span>
-                    </div>
-
-                    <h4 className="text-xs font-bold text-slate-900">{act.title}</h4>
-                    <p className="text-xs text-slate-600 leading-relaxed">{act.description}</p>
-
-                    {act.performedBy && (
-                      <p className="text-[10px] text-slate-400 pt-1">
-                        Action by: <span className="font-semibold text-slate-600">{act.performedBy}</span>
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* ACTIVITIES & CHRONOLOGICAL UPDATES LOG */}
+      <StudentActivityLogSection student={student} batches={batches} />
 
       {/* Notification Details Modal */}
       <NotificationDetailsModal

@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useDatabase } from '@/context/DatabaseContext';
@@ -6,15 +7,20 @@ import {
   FileText, Search, Filter, CheckCircle2, AlertCircle, Clock, 
   MessageSquare, Edit3, Save, Lock, Unlock, ArrowRight, X, Sparkles, 
   GraduationCap, User, Check, RefreshCw, Send, Star, Layers, History,
-  CheckSquare, Paperclip, ExternalLink
+  CheckSquare, Paperclip, ExternalLink, Compass, Download
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { Student, Essay, EssayVersion, Task, TaskStage } from '@/types';
-import { getScopedStudentsForStaff } from '@/lib/staffPermissions';
+import { Student, Essay, EssayVersion, Task, TaskStage, LaunchpadAssignmentEvaluation } from '@/types';
+import {
+  getScopedStudentsForStaff,
+  isTaskVisibleToStaff,
+  getStaffLaunchpadPermissions,
+  isStudentAssignedToStaff,
+} from '@/lib/staffPermissions';
 
 interface ExtendedSubmission {
   id: string;
-  submissionType: 'ESSAY' | 'TASK';
+  submissionType: 'ESSAY' | 'TASK' | 'LAUNCHPAD';
   title: string;
   category: string;
   targetOrUni: string;
@@ -30,14 +36,24 @@ interface ExtendedSubmission {
   feedback?: string;
   rawEssay?: Essay;
   rawTask?: Task;
+  rawLaunchpadEval?: LaunchpadAssignmentEvaluation;
 }
 
 export default function Evaluator() {
-  const { students, updateStudent, currentUser, permissionsMatrix } = useDatabase();
+  const {
+    students,
+    updateStudent,
+    currentUser,
+    permissionsMatrix,
+    launchpadPermissions,
+    launchpadEvaluations,
+    evaluateLaunchpadSubmission,
+  } = useDatabase();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStudentFilter, setSelectedStudentFilter] = useState('ALL');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('ALL');
-  const [submissionTypeTab, setSubmissionTypeTab] = useState<'ALL' | 'ESSAY' | 'TASK'>('ALL');
+  const [submissionTypeTab, setSubmissionTypeTab] = useState<'ALL' | 'ESSAY' | 'TASK' | 'LAUNCHPAD'>('ALL');
   
   // Active Editor Modal State for Essays
   const [activeEssaySubmission, setActiveEssaySubmission] = useState<ExtendedSubmission | null>(null);
@@ -53,11 +69,52 @@ export default function Evaluator() {
   const [taskReviewStage, setTaskReviewStage] = useState<TaskStage>('SUBMITTED_FOR_REVIEW');
   const [taskFeedback, setTaskFeedback] = useState('');
 
+  // Active Launchpad Practical Exercise Evaluation Modal State
+  const [activeLaunchpadEval, setActiveLaunchpadEval] = useState<LaunchpadAssignmentEvaluation | null>(null);
+  const [launchpadEvalStatus, setLaunchpadEvalStatus] = useState<'Submitted' | 'Approved' | 'Needs Revision' | 'Reviewed'>('Approved');
+  const [launchpadEvalFeedback, setLaunchpadEvalFeedback] = useState('');
+
+  const { reviewExerciseAccess } = useMemo(
+    () => getStaffLaunchpadPermissions(currentUser, launchpadPermissions, permissionsMatrix),
+    [currentUser, launchpadPermissions, permissionsMatrix]
+  );
+  const isLaunchpadReadOnly = reviewExerciseAccess === 'read_only' || reviewExerciseAccess === 'none';
+
   // Scoped student list based on staff permissions
   const scopedStudents = getScopedStudentsForStaff(students, currentUser, permissionsMatrix);
 
-  // Flatten all submissions (essays + tasks) from scoped students
-  const allSubmissions: ExtendedSubmission[] = scopedStudents.flatMap(student => {
+  // Scoped Launchpad evaluations based on Launchpad Review permission
+  const scopedLaunchpadEvals = useMemo(() => {
+    if (reviewExerciseAccess === 'none') return [];
+    if (reviewExerciseAccess === 'global' || reviewExerciseAccess === 'read_only') {
+      return launchpadEvaluations;
+    }
+    return launchpadEvaluations.filter((ev) => {
+      const st = students.find((s) => s.id === ev.studentId);
+      return st ? isStudentAssignedToStaff(st, currentUser, permissionsMatrix) : false;
+    });
+  }, [launchpadEvaluations, reviewExerciseAccess, students, currentUser, permissionsMatrix]);
+
+  // Handle deep-link URL params (?tab=LAUNCHPAD&evalId=...)
+  useEffect(() => {
+    const tabParam = searchParams.get('tab');
+    const evalIdParam = searchParams.get('evalId');
+    if (tabParam === 'LAUNCHPAD' && reviewExerciseAccess !== 'none') {
+      setSubmissionTypeTab('LAUNCHPAD');
+    }
+    if (evalIdParam && scopedLaunchpadEvals.length > 0) {
+      const match = scopedLaunchpadEvals.find((e) => e.id === evalIdParam);
+      if (match) {
+        setActiveLaunchpadEval(match);
+        setLaunchpadEvalStatus(match.status === 'Submitted' ? 'Approved' : match.status);
+        setLaunchpadEvalFeedback(match.feedback || '');
+        setSaveSuccess(false);
+      }
+    }
+  }, [searchParams, scopedLaunchpadEvals, reviewExerciseAccess]);
+
+  // Flatten all submissions (essays + tasks + launchpad) from scoped students
+  const studentSubmissions: ExtendedSubmission[] = scopedStudents.flatMap(student => {
     const essayItems: ExtendedSubmission[] = (student.essays || []).map(essay => {
       const displayTitle = essay.title || essay.prompt || 'Untitled Essay';
       const displayPrompt = essay.prompt || essay.title || 'Application Essay Prompt';
@@ -86,8 +143,10 @@ export default function Evaluator() {
       };
     });
 
-    const taskItems: ExtendedSubmission[] = (student.tasks || []).map(task => {
-      let statusLabel = 'Under Review';
+    const taskItems: ExtendedSubmission[] = (student.tasks || [])
+      .filter(task => isTaskVisibleToStaff(task, student, currentUser, permissionsMatrix))
+      .map(task => {
+        let statusLabel = 'Under Review';
       if (task.stage === 'COMPLETED') statusLabel = 'Approved';
       else if (task.stage === 'NEEDS_REVISION') statusLabel = 'Needs Revision';
       else if (task.stage === 'IN_PROGRESS') statusLabel = 'In Progress';
@@ -114,6 +173,36 @@ export default function Evaluator() {
 
     return [...essayItems, ...taskItems];
   });
+
+  const launchpadItems: ExtendedSubmission[] = scopedLaunchpadEvals.map((ev) => {
+    const fieldsCount = Object.keys(ev.submissionJson?.fields || {}).length;
+    const formattedDate = ev.submittedAt
+      ? new Date(ev.submittedAt).toLocaleDateString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        })
+      : 'Recent';
+
+    return {
+      id: ev.id,
+      submissionType: 'LAUNCHPAD',
+      title: `${ev.subjectTitle} — Week ${ev.weekNumber}`,
+      category: 'Launchpad',
+      targetOrUni: `${ev.chapterTitle} · Week ${ev.weekNumber}`,
+      studentName: ev.studentName,
+      studentId: ev.studentId,
+      counselor: students.find((s) => s.id === ev.studentId)?.counselor,
+      studentEmail: students.find((s) => s.id === ev.studentId)?.email,
+      status: ev.status === 'Submitted' ? 'Under Review' : ev.status,
+      submissionDate: formattedDate,
+      promptOrDesc: `${fieldsCount} worksheet response${fieldsCount === 1 ? '' : 's'} submitted`,
+      feedback: ev.feedback || '',
+      rawLaunchpadEval: ev,
+    };
+  });
+
+  const allSubmissions: ExtendedSubmission[] = [...launchpadItems, ...studentSubmissions];
 
   // Filtered queue
   const filteredSubmissions = allSubmissions.filter(sub => {
@@ -143,12 +232,20 @@ export default function Evaluator() {
 
   const underReviewCount = allSubmissions.filter(e => e.status === 'Under Review' || e.status === 'Submitted For Review').length;
   const needsRevisionCount = allSubmissions.filter(e => e.status === 'Needs Revision').length;
-  const approvedCount = allSubmissions.filter(e => e.status === 'Approved' || e.status === 'Completed').length;
+  const approvedCount = allSubmissions.filter(e => e.status === 'Approved' || e.status === 'Completed' || e.status === 'Reviewed').length;
   const essaysCount = allSubmissions.filter(e => e.submissionType === 'ESSAY').length;
   const tasksCount = allSubmissions.filter(e => e.submissionType === 'TASK').length;
+  const launchpadCount = allSubmissions.filter(e => e.submissionType === 'LAUNCHPAD').length;
 
   const handleOpenSubmission = (sub: ExtendedSubmission) => {
-    if (sub.submissionType === 'ESSAY' && sub.rawEssay) {
+    if (sub.submissionType === 'LAUNCHPAD' && sub.rawLaunchpadEval) {
+      setActiveLaunchpadEval(sub.rawLaunchpadEval);
+      setLaunchpadEvalStatus(
+        sub.rawLaunchpadEval.status === 'Submitted' ? 'Approved' : sub.rawLaunchpadEval.status
+      );
+      setLaunchpadEvalFeedback(sub.rawLaunchpadEval.feedback || '');
+      setSaveSuccess(false);
+    } else if (sub.submissionType === 'ESSAY' && sub.rawEssay) {
       setActiveEssaySubmission(sub);
       const essay = sub.rawEssay;
       const versions = essay.versions || [];
@@ -166,6 +263,30 @@ export default function Evaluator() {
       setTaskFeedback(sub.rawTask.feedback || '');
       setSaveSuccess(false);
     }
+  };
+
+  const handleSaveLaunchpadEvaluation = () => {
+    if (!activeLaunchpadEval || isLaunchpadReadOnly) return;
+    setIsSaving(true);
+    evaluateLaunchpadSubmission({
+      evalId: activeLaunchpadEval.id,
+      status: launchpadEvalStatus,
+      feedback: launchpadEvalFeedback.trim(),
+      evaluatorName: currentUser?.name || 'Counselor',
+    });
+    setTimeout(() => {
+      setIsSaving(false);
+      setSaveSuccess(true);
+      setTimeout(() => {
+        setSaveSuccess(false);
+        setActiveLaunchpadEval(null);
+        if (searchParams.has('evalId')) {
+          const next = new URLSearchParams(searchParams);
+          next.delete('evalId');
+          setSearchParams(next, { replace: true });
+        }
+      }, 900);
+    }, 350);
   };
 
   const handleAddComment = () => {
@@ -321,7 +442,7 @@ export default function Evaluator() {
 
   const getStatusBadge = (status?: string) => {
     const s = status || 'Under Review';
-    if (s === 'Approved' || s === 'Completed') {
+    if (s === 'Approved' || s === 'Completed' || s === 'Reviewed') {
       return <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200"><CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> {s}</span>;
     }
     if (s === 'Needs Revision') {
@@ -369,12 +490,12 @@ export default function Evaluator() {
 
       {/* Filter & Search Bar */}
       <Card className="border-slate-200 shadow-sm overflow-hidden">
-        {/* Tab Toggle: All / Essays / Tasks */}
+        {/* Tab Toggle: All / Essays / Tasks / Launchpad */}
         <div className="flex items-center border-b border-slate-200 bg-slate-50/70 px-4 pt-3 gap-2 overflow-x-auto">
           <button
             onClick={() => setSubmissionTypeTab('ALL')}
             className={cn(
-              "px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 flex items-center gap-2",
+              "px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 flex items-center gap-2 whitespace-nowrap",
               submissionTypeTab === 'ALL' 
                 ? "bg-white text-indigo-700 border-indigo-600 shadow-2xs" 
                 : "text-slate-600 border-transparent hover:text-slate-900"
@@ -385,7 +506,7 @@ export default function Evaluator() {
           <button
             onClick={() => setSubmissionTypeTab('ESSAY')}
             className={cn(
-              "px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 flex items-center gap-2",
+              "px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 flex items-center gap-2 whitespace-nowrap",
               submissionTypeTab === 'ESSAY' 
                 ? "bg-white text-indigo-700 border-indigo-600 shadow-2xs" 
                 : "text-slate-600 border-transparent hover:text-slate-900"
@@ -396,7 +517,7 @@ export default function Evaluator() {
           <button
             onClick={() => setSubmissionTypeTab('TASK')}
             className={cn(
-              "px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 flex items-center gap-2",
+              "px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 flex items-center gap-2 whitespace-nowrap",
               submissionTypeTab === 'TASK' 
                 ? "bg-white text-indigo-700 border-indigo-600 shadow-2xs" 
                 : "text-slate-600 border-transparent hover:text-slate-900"
@@ -404,6 +525,19 @@ export default function Evaluator() {
           >
             <CheckSquare className="w-4 h-4 text-emerald-600" /> Tasks & Assignments ({tasksCount})
           </button>
+          {reviewExerciseAccess !== 'none' && (
+            <button
+              onClick={() => setSubmissionTypeTab('LAUNCHPAD')}
+              className={cn(
+                "px-4 py-2.5 text-xs font-bold rounded-t-xl transition-all border-b-2 flex items-center gap-2 whitespace-nowrap",
+                submissionTypeTab === 'LAUNCHPAD' 
+                  ? "bg-white text-indigo-700 border-indigo-600 shadow-2xs" 
+                  : "text-slate-600 border-transparent hover:text-slate-900"
+              )}
+            >
+              <Compass className="w-4 h-4 text-indigo-600" /> Launchpad Exercises ({launchpadCount})
+            </button>
+          )}
         </div>
 
         <div className="p-4 sm:p-6 bg-white border-b border-slate-100 flex flex-col md:flex-row justify-between items-stretch md:items-center gap-4">
@@ -482,10 +616,24 @@ export default function Evaluator() {
                     <td className="px-6 py-4">
                       <span className={cn(
                         "inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold uppercase tracking-wider",
-                        sub.submissionType === 'ESSAY' ? "bg-purple-50 text-purple-700 border border-purple-200" : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                        sub.submissionType === 'ESSAY'
+                          ? "bg-purple-50 text-purple-700 border border-purple-200"
+                          : sub.submissionType === 'LAUNCHPAD'
+                          ? "bg-indigo-50 text-indigo-700 border border-indigo-200"
+                          : "bg-emerald-50 text-emerald-700 border border-emerald-200"
                       )}>
-                        {sub.submissionType === 'ESSAY' ? <FileText className="w-3 h-3" /> : <CheckSquare className="w-3 h-3" />}
-                        {sub.submissionType === 'ESSAY' ? 'Essay' : 'Task'}
+                        {sub.submissionType === 'ESSAY' ? (
+                          <FileText className="w-3 h-3" />
+                        ) : sub.submissionType === 'LAUNCHPAD' ? (
+                          <Compass className="w-3 h-3" />
+                        ) : (
+                          <CheckSquare className="w-3 h-3" />
+                        )}
+                        {sub.submissionType === 'ESSAY'
+                          ? 'Essay'
+                          : sub.submissionType === 'LAUNCHPAD'
+                          ? 'Launchpad'
+                          : 'Task'}
                       </span>
                     </td>
 
@@ -512,7 +660,11 @@ export default function Evaluator() {
                         className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs h-8 shadow-sm flex items-center gap-1.5 ml-auto"
                       >
                         <Edit3 className="w-3.5 h-3.5" /> 
-                        {sub.submissionType === 'ESSAY' ? 'Open Editor' : 'Review Task'} 
+                        {sub.submissionType === 'ESSAY'
+                          ? 'Open Editor'
+                          : sub.submissionType === 'LAUNCHPAD'
+                          ? 'Review Exercise'
+                          : 'Review Task'} 
                         <ArrowRight className="w-3.5 h-3.5" />
                       </Button>
                     </td>
@@ -779,12 +931,32 @@ export default function Evaluator() {
                     <Paperclip className="w-3.5 h-3.5 text-slate-500" /> Attached Documents & Reference Files ({activeTaskSubmission.attachments.length})
                   </span>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                    {activeTaskSubmission.attachments.map((file, i) => (
-                      <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between text-xs font-semibold text-slate-800">
-                        <span className="truncate">{file}</span>
-                        <span className="text-[10px] text-blue-600 font-bold uppercase">Attached</span>
-                      </div>
-                    ))}
+                    {activeTaskSubmission.attachments.map((file: any, i) => {
+                      const label =
+                        typeof file === 'string'
+                          ? file
+                          : file?.fileName || file?.name || `Attachment ${i + 1}`;
+                      const url = typeof file === 'object' && file?.fileUrl ? file.fileUrl : null;
+                      return (
+                        <div key={i} className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between gap-2 text-xs font-semibold text-slate-800">
+                          <span className="truncate">{label}</span>
+                          {url ? (
+                            <a
+                              href={url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              download={typeof file === 'object' ? file?.fileName : undefined}
+                              className="text-[10px] text-indigo-600 hover:underline font-bold uppercase shrink-0 flex items-center gap-1"
+                            >
+                              <span>Open</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          ) : (
+                            <span className="text-[10px] text-blue-600 font-bold uppercase shrink-0">Attached</span>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -831,6 +1003,228 @@ export default function Evaluator() {
 
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* Launchpad Practical Exercise Review Modal */}
+      {activeLaunchpadEval && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/80 backdrop-blur-md animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl w-full max-w-4xl max-h-[92vh] shadow-2xl flex flex-col overflow-hidden border border-slate-200">
+            {/* Top Bar */}
+            <div className="bg-slate-900 text-white px-6 py-4 flex items-center justify-between gap-4 shrink-0 border-b border-slate-800">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-xl bg-indigo-600/30 border border-indigo-400/40 flex items-center justify-center text-indigo-300 shrink-0">
+                  <Compass className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h2 className="text-base font-bold text-white truncate">
+                      {activeLaunchpadEval.subjectTitle} — Week {activeLaunchpadEval.weekNumber}
+                    </h2>
+                    <span className="text-[11px] bg-indigo-900/80 text-indigo-200 px-2.5 py-0.5 rounded-full font-semibold border border-indigo-700">
+                      Launchpad
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 flex items-center gap-2 mt-0.5 truncate">
+                    <span>
+                      Student: <strong className="text-slate-200">{activeLaunchpadEval.studentName}</strong>
+                    </span>
+                    <span>•</span>
+                    <span>{activeLaunchpadEval.chapterTitle}</span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                {saveSuccess && (
+                  <span className="bg-emerald-500/20 text-emerald-300 text-xs px-3 py-1 rounded-full border border-emerald-500/40 font-bold flex items-center gap-1.5">
+                    <Check className="w-4 h-4" /> Synced to Student Portal!
+                  </span>
+                )}
+
+                {!isLaunchpadReadOnly && (
+                  <Button
+                    onClick={handleSaveLaunchpadEvaluation}
+                    disabled={isSaving}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs h-9 shadow-md flex items-center gap-2"
+                  >
+                    <Save className="w-4 h-4" />
+                    {isSaving ? 'Syncing...' : 'Save Evaluation & Notify Student'}
+                  </Button>
+                )}
+
+                <button
+                  onClick={() => {
+                    setActiveLaunchpadEval(null);
+                    if (searchParams.has('evalId')) {
+                      const next = new URLSearchParams(searchParams);
+                      next.delete('evalId');
+                      setSearchParams(next, { replace: true });
+                    }
+                  }}
+                  className="p-1.5 rounded-full hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 space-y-5 overflow-y-auto flex-1 bg-slate-50">
+              {isLaunchpadReadOnly && (
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 flex items-center gap-2">
+                  <Lock className="w-4 h-4 text-amber-700 shrink-0" />
+                  <span>
+                    <strong>Read-Only Review Scope:</strong> You can view this Launchpad submission, but saving evaluation updates is disabled.
+                  </span>
+                </div>
+              )}
+
+              {/* Worksheet Responses */}
+              <div className="p-5 bg-white border border-slate-200 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                  <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                    Submitted Practical Worksheet Responses
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    Submitted{' '}
+                    {activeLaunchpadEval.submittedAt
+                      ? new Date(activeLaunchpadEval.submittedAt).toLocaleString()
+                      : 'Recently'}
+                  </span>
+                </div>
+
+                {Object.entries(activeLaunchpadEval.submissionJson?.fields || {}).length === 0 ? (
+                  <p className="text-xs text-slate-500 italic">No text worksheet fields submitted.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {Object.entries(activeLaunchpadEval.submissionJson?.fields || {}).map(
+                      ([key, val]) => {
+                        const label =
+                          activeLaunchpadEval.submissionJson?.fieldLabels?.[key] ||
+                          key.replace(/_/g, ' ');
+                        return (
+                          <div key={key} className="space-y-1">
+                            <div className="text-xs font-bold text-slate-700">{label}</div>
+                            <div className="text-sm text-slate-800 whitespace-pre-wrap bg-slate-50 p-3 rounded-xl border border-slate-200 leading-relaxed">
+                              {val ? String(val) : '—'}
+                            </div>
+                          </div>
+                        );
+                      }
+                    )}
+                  </div>
+                )}
+
+                {/* Self-Check Checklist */}
+                {activeLaunchpadEval.submissionJson?.checklist &&
+                  Object.keys(activeLaunchpadEval.submissionJson.checklist).length > 0 && (
+                    <div className="pt-2 border-t border-slate-100 space-y-2">
+                      <span className="text-xs font-bold text-slate-600 block">
+                        Student Self-Check Verification
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {Object.entries(activeLaunchpadEval.submissionJson.checklist).map(
+                          ([criterion, checked]) => (
+                            <div
+                              key={criterion}
+                              className="flex items-start gap-2 text-xs text-slate-700 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200"
+                            >
+                              <CheckCircle2
+                                className={cn(
+                                  'w-4 h-4 shrink-0 mt-0.5',
+                                  checked ? 'text-emerald-600' : 'text-slate-300'
+                                )}
+                              />
+                              <span>{criterion}</span>
+                            </div>
+                          )
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                {/* Attachment / Recording URL */}
+                {activeLaunchpadEval.submissionJson?.attachmentUrl && (
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 min-w-0">
+                      <Paperclip className="w-4 h-4 text-indigo-600 shrink-0" />
+                      <span className="truncate">
+                        {activeLaunchpadEval.submissionJson.attachmentName ||
+                          activeLaunchpadEval.submissionJson.attachmentUrl}
+                      </span>
+                    </div>
+                    <a
+                      href={activeLaunchpadEval.submissionJson.attachmentUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      download={activeLaunchpadEval.submissionJson.attachmentName || undefined}
+                      className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-700 hover:underline shrink-0 ml-3"
+                    >
+                      {activeLaunchpadEval.submissionJson.attachmentUrl.startsWith('data:') ? (
+                        <>
+                          <Download className="w-3.5 h-3.5" /> Download Deliverable
+                        </>
+                      ) : (
+                        <>
+                          <ExternalLink className="w-3.5 h-3.5" /> Open Link
+                        </>
+                      )}
+                    </a>
+                  </div>
+                )}
+              </div>
+
+              {/* Counselor Review Controls */}
+              <div className="p-5 bg-white border border-slate-200 rounded-2xl space-y-4">
+                <div>
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block mb-2">
+                    Evaluation Decision
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {(
+                      [
+                        { key: 'Approved', label: 'Approved', activeClass: 'bg-emerald-600 text-white' },
+                        { key: 'Reviewed', label: 'Reviewed', activeClass: 'bg-indigo-600 text-white' },
+                        { key: 'Needs Revision', label: 'Needs Revision', activeClass: 'bg-rose-600 text-white' },
+                        { key: 'Submitted', label: 'Submitted (Pending)', activeClass: 'bg-amber-600 text-white' },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.key}
+                        type="button"
+                        disabled={isLaunchpadReadOnly}
+                        onClick={() => setLaunchpadEvalStatus(opt.key)}
+                        className={cn(
+                          'p-3 rounded-xl text-xs font-bold border transition-all text-center',
+                          launchpadEvalStatus === opt.key
+                            ? `${opt.activeClass} border-transparent shadow-xs`
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100',
+                          isLaunchpadReadOnly && 'opacity-60 cursor-not-allowed'
+                        )}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block mb-1.5">
+                    Counselor Feedback Notes (Synced to Student Task Manager &amp; Launchpad)
+                  </label>
+                  <textarea
+                    rows={3}
+                    disabled={isLaunchpadReadOnly}
+                    value={launchpadEvalFeedback}
+                    onChange={(e) => setLaunchpadEvalFeedback(e.target.value)}
+                    placeholder="Provide actionable praise, framing suggestions, or revision guidance..."
+                    className="w-full p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       )}

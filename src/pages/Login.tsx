@@ -2,18 +2,43 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { GraduationCap, Lock, Mail } from 'lucide-react';
+import { GraduationCap } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { db } from '@/lib/firebase';
 import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
 
 export default function Login() {
   const navigate = useNavigate();
-  const { setCurrentUser, setIsAuthenticated, staff, students } = useDatabase();
+  const { setCurrentUser, setIsAuthenticated, staff, students, signInWithGoogle } = useDatabase();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
+
+  const handleGoogleSignIn = async () => {
+    setError('');
+    setGoogleLoading(true);
+    try {
+      const result = await signInWithGoogle();
+      setGoogleLoading(false);
+      if (result.role === 'STUDENT') {
+        navigate('/student/dashboard');
+      } else {
+        navigate('/team/dashboard');
+      }
+    } catch (err: any) {
+      setGoogleLoading(false);
+      const code = err?.code || '';
+      if (code === 'auth/popup-closed-by-user') {
+        setError('Google sign-in popup was closed before completing sign-in.');
+      } else if (code === 'auth/popup-blocked') {
+        setError('Pop-up blocked by your browser. Please allow pop-ups for this site and try again.');
+      } else {
+        setError(err?.message || 'Google sign-in failed. Please try again.');
+      }
+    }
+  };
 
   const handleCredentialLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -143,19 +168,53 @@ export default function Login() {
           <h2 className="mt-6 text-center text-3xl font-bold text-slate-900 tracking-tight">
             Uppseekers
           </h2>
+          <p className="mt-1 text-center text-sm text-slate-500">
+            Student Counseling & Admissions Portal
+          </p>
         </div>
         
         <Card className="border-slate-200 shadow-sm">
           <CardHeader>
             <CardTitle className="text-center text-xl text-slate-800">Sign in to your account</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="space-y-5">
+            {error && (
+              <div className="bg-red-50 text-red-600 text-sm p-3 rounded-lg border border-red-100 text-center">
+                {error}
+              </div>
+            )}
+
+            <div>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={googleLoading || loading}
+                onClick={handleGoogleSignIn}
+                className="w-full py-2.5 bg-white hover:bg-slate-50 text-slate-800 border-slate-300 font-semibold flex items-center justify-center gap-2.5 shadow-2xs"
+              >
+                <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z" />
+                  <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z" />
+                  <path fill="#FBBC05" d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z" />
+                  <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z" />
+                </svg>
+                <span>{googleLoading ? 'Connecting Google...' : 'Sign in with Google (Sync Live Data)'}</span>
+              </Button>
+              <p className="mt-1.5 text-[11px] text-center text-slate-500">
+                Recommended for team accounts (e.g. uppseekers@gmail.com) to load live student & conversation records.
+              </p>
+            </div>
+
+            <div className="relative">
+              <div className="absolute inset-0 flex items-center">
+                <span className="w-full border-t border-slate-200" />
+              </div>
+              <div className="relative flex justify-center text-xs uppercase">
+                <span className="bg-white px-2 text-slate-400 font-semibold">Or sign in with email</span>
+              </div>
+            </div>
+
             <form onSubmit={handleCredentialLogin} className="space-y-4">
-              {error && (
-                <div className="bg-red-50 text-red-600 text-sm p-3 rounded-lg border border-red-100 text-center">
-                  {error}
-                </div>
-              )}
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Email Address</label>
                 <input 
@@ -178,14 +237,14 @@ export default function Login() {
               </div>
               <Button 
                 type="submit"
-                disabled={loading}
+                disabled={loading || googleLoading}
                 className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 mt-2"
               >
                 {loading ? 'Signing in...' : 'Sign In'}
               </Button>
             </form>
 
-            <div className="mt-6 pt-4 border-t border-slate-100 text-center">
+            <div className="pt-4 border-t border-slate-100 text-center">
               <p className="text-xs text-slate-500">
                 Need to set or change your password? Please contact your platform administrator for a direct password update.
               </p>
@@ -196,4 +255,3 @@ export default function Login() {
     </div>
   );
 }
-

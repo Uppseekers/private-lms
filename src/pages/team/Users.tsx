@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, SlidersHorizontal, Award, Sparkles, CheckSquare, KeyRound } from 'lucide-react';
+import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, ChevronUp, Video, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, SlidersHorizontal, Award, Sparkles, CheckSquare, KeyRound, Send } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage, DocumentInfo } from '@/types';
-import { canStaffAccessAllStudents, isStudentAssignedToStaff, isUserAdmin } from '@/lib/staffPermissions';
+import { canStaffAccessAllStudents, isStudentAssignedToStaff, isUserAdmin, isTaskVisibleToStaff, isTaskAssignedByStaff, isStaffMentorOrFaculty } from '@/lib/staffPermissions';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 import CompetencyRadar from '@/pages/student/CompetencyRadar';
 import PortalCredentialsManager from '@/components/PortalCredentialsManager';
@@ -30,6 +30,8 @@ export default function TeamUsers() {
   const [isBulkTransferModalOpen, setIsBulkTransferModalOpen] = useState(false);
   const [transferSuccessMessage, setTransferSuccessMessage] = useState<string | null>(null);
   const [selectedStudent, setSelectedStudent] = useState<Student | null>(null);
+  const [drawerInitialTab, setDrawerInitialTab] = useState<string>('Profile Details');
+  const [drawerActivityMode, setDrawerActivityMode] = useState<'extended' | 'mini'>('extended');
   const [selectedStaffMember, setSelectedStaffMember] = useState<StaffMember | null>(null);
   const [userForPasswordChange, setUserForPasswordChange] = useState<TargetUserForPassword | null>(null);
 
@@ -453,8 +455,31 @@ export default function TeamUsers() {
                       <span className={getReadinessColor(student.readiness)}>{getReadinessIcon(student.readiness)} {student.readiness}%</span>
                     </td>
                     <td className="px-6 py-4 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setSelectedStudent(student)}>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-blue-600 font-bold" 
+                        onClick={() => {
+                          setSelectedStudent(student);
+                          setDrawerInitialTab('Profile Details');
+                        }}
+                      >
                         View
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 font-bold text-xs inline-flex items-center gap-1 px-2.5 py-1" 
+                        title="View Activity, Meeting Notes & MOM"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedStudent(student);
+                          setDrawerInitialTab('Activity');
+                          setDrawerActivityMode('extended');
+                        }}
+                      >
+                        <Clock className="w-3.5 h-3.5" />
+                        <span>Activity</span>
                       </Button>
                       <Button 
                         variant="ghost" 
@@ -619,7 +644,13 @@ export default function TeamUsers() {
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm transition-opacity" onClick={() => setSelectedStudent(null)} />
           <div className="relative w-full max-w-4xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
-            <StudentDetailDrawer student={selectedStudent} onClose={() => setSelectedStudent(null)} onUpdate={handleUpdateStudent} />
+            <StudentDetailDrawer 
+              student={selectedStudent} 
+              onClose={() => setSelectedStudent(null)} 
+              onUpdate={handleUpdateStudent}
+              initialTab={drawerInitialTab}
+              initialActivityMode={drawerActivityMode}
+            />
           </div>
         </div>
       )}
@@ -930,10 +961,37 @@ function ImportStudentsModal({ onClose, onImport, counselorName }: { onClose: ()
 
 
 
-function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student, onClose: () => void, onUpdate: (s: Student) => void }) {
-  const { currentUser } = useDatabase();
-  const [activeTab, setActiveTab] = useState('Profile Details');
+function StudentDetailDrawer({ 
+  student, 
+  onClose, 
+  onUpdate,
+  initialTab = 'Profile Details',
+  initialActivityMode = 'extended'
+}: { 
+  student: Student;
+  onClose: () => void;
+  onUpdate: (s: Student) => void;
+  initialTab?: string;
+  initialActivityMode?: 'extended' | 'mini';
+}) {
+  const { currentUser, events, batches, permissionsMatrix, conversations, sendConversationMessage } = useDatabase();
+  const [activeTab, setActiveTab] = useState(initialTab);
+  const [activityViewMode, setActivityViewMode] = useState<'extended' | 'mini'>(initialActivityMode);
+  const [cardViewOverrides, setCardViewOverrides] = useState<Record<string, 'extended' | 'mini'>>({});
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [drawerMsgText, setDrawerMsgText] = useState('');
+  const [drawerMsgChannel, setDrawerMsgChannel] = useState<'WhatsApp' | 'Email' | 'Audio Call' | 'Zoom Call' | 'Portal'>('WhatsApp');
+  const [drawerMsgDirection, setDrawerMsgDirection] = useState<'outbound' | 'inbound' | 'note'>('outbound');
+  const [drawerMsgSending, setDrawerMsgSending] = useState(false);
+
+  React.useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab, student.id]);
+
+  React.useEffect(() => {
+    setActivityViewMode(initialActivityMode);
+    setCardViewOverrides({});
+  }, [initialActivityMode, student.id]);
 
   // State for manual activity logging by counselor
   const [isLoggingManualActivity, setIsLoggingManualActivity] = useState(false);
@@ -1013,18 +1071,32 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
       </div>
 
       <div className="flex border-b border-slate-200 px-6 bg-white shrink-0 overflow-x-auto scrollbar-hide">
-        {['Profile Details', 'Competency Radar', 'Shortlists', 'Document Vault', 'Essays', 'Tasks & Projects', 'Activity'].map((tab) => (
+        {['Profile Details', 'Competency Radar', 'Shortlists', 'Document Vault', 'Essays', 'Tasks & Projects', 'Conversations', 'Activity'].map((tab) => (
           <button
             key={tab}
-            onClick={() => setActiveTab(tab)}
+            onClick={() => {
+              setActiveTab(tab);
+              if (tab === 'Activity') {
+                setActivityViewMode('extended');
+                setCardViewOverrides({});
+              }
+            }}
             className={cn(
-              "py-3 px-4 text-sm font-bold transition-colors whitespace-nowrap border-b-2",
+              "py-3 px-4 text-sm font-bold transition-colors whitespace-nowrap border-b-2 flex items-center gap-1.5",
               activeTab === tab
                 ? "border-blue-600 text-blue-700"
                 : "border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300"
             )}
           >
-            {tab}
+            <span>{tab}</span>
+            {tab === 'Activity' && (
+              <span className={cn(
+                "text-[10px] font-mono px-1.5 py-0.5 rounded font-medium",
+                activityViewMode === 'extended' ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-600"
+              )}>
+                {activityViewMode === 'extended' ? 'Extended' : 'Compact'}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -1135,27 +1207,149 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
             return isDateInRange(act.date);
           });
 
-          const totalFilteredCount = filteredLogs.length + filteredActivities.length;
+          // Extract all meeting sessions and minutes of meetings (MOM) for this student from events
+          const studentMeetingEvents = (events || []).filter((e: any) => {
+            if (e.studentId && e.studentId === student.id) return true;
+            if (e.students && typeof e.students === 'string') {
+              const sName = student.name?.toLowerCase().trim();
+              const sId = student.id?.toLowerCase().trim();
+              const eStudents = e.students.toLowerCase();
+              if (sName && (eStudents === sName || eStudents.includes(sName))) return true;
+              if (sId && eStudents.includes(sId)) return true;
+            }
+            if (e.title && typeof e.title === 'string' && student.name) {
+              const sName = student.name.toLowerCase().trim();
+              if (e.title.toLowerCase().includes(sName)) return true;
+            }
+            if (Array.isArray(batches)) {
+              const matchingBatch = batches.find(b => (b.id === e.batch || b.name === e.batch));
+              if (matchingBatch && Array.isArray(matchingBatch.students) && matchingBatch.students.includes(student.id)) {
+                return true;
+              }
+            }
+            return false;
+          });
+
+          const filteredMeetingEvents = studentMeetingEvents.filter(evt => {
+            if (actStatusFilter !== 'ALL' && actStatusFilter !== 'SESSION' && actStatusFilter !== 'VERIFIED') {
+              return false;
+            }
+            if (actCategoryFilter !== 'ALL') {
+              const stream = (evt.stream || evt.title || '').toLowerCase();
+              if (!stream.includes(actCategoryFilter.toLowerCase())) {
+                return false;
+              }
+            }
+            if (actSearchQuery) {
+              const q = actSearchQuery.toLowerCase();
+              const inTitle = evt.title?.toLowerCase().includes(q);
+              const inNotes = evt.notes?.toLowerCase().includes(q);
+              const inHost = evt.host?.toLowerCase().includes(q);
+              const inMOM = (evt.moms || []).some((m: any) => 
+                m.keyPoints?.toLowerCase().includes(q) ||
+                m.studentProgress?.toLowerCase().includes(q) ||
+                m.observations?.toLowerCase().includes(q) ||
+                m.nextSteps?.toLowerCase().includes(q) ||
+                m.followUpActions?.toLowerCase().includes(q) ||
+                m.authorName?.toLowerCase().includes(q)
+              );
+              const inTasks = (evt.tasks || []).some((t: any) => 
+                t.title?.toLowerCase().includes(q) || t.description?.toLowerCase().includes(q)
+              );
+              if (!inTitle && !inNotes && !inHost && !inMOM && !inTasks) return false;
+            }
+            return isDateInRange(evt.day || evt.date);
+          });
+
+          const isLogExtended = (id: string) => {
+            if (cardViewOverrides[id] !== undefined) {
+              return cardViewOverrides[id] === 'extended';
+            }
+            return activityViewMode === 'extended';
+          };
+
+          const toggleCardExtended = (id: string) => {
+            setCardViewOverrides(prev => ({
+              ...prev,
+              [id]: isLogExtended(id) ? 'mini' : 'extended'
+            }));
+          };
+
+          const totalFilteredCount = filteredMeetingEvents.length + filteredLogs.length + filteredActivities.length;
 
           return (
             <div className="space-y-6">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-2 pb-3 border-b border-slate-100">
                 <div>
-                  <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Student Activity Log & Audit Trail</h3>
+                  <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                    <span>Student Activity Log, Meeting Notes & MOM</span>
+                  </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Filter and audit meetings, calls, tasks, document events, and staff notes for {student.name}.
+                    Complete records of counselling sessions, MOM reports, post-meeting tasks, and operations for {student.name}.
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  {/* View Mode Toggle */}
+                  <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivityViewMode('extended');
+                        setCardViewOverrides({});
+                      }}
+                      className={cn(
+                        "px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5",
+                        activityViewMode === 'extended'
+                          ? "bg-white text-indigo-700 shadow-xs font-bold"
+                          : "text-slate-600 hover:text-slate-900"
+                      )}
+                    >
+                      <Eye className="w-3.5 h-3.5 text-indigo-600" />
+                      <span>Extended View (Full Notes & MOM)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActivityViewMode('mini');
+                        setCardViewOverrides({});
+                      }}
+                      className={cn(
+                        "px-3 py-1.5 text-xs font-semibold rounded-md transition-all flex items-center gap-1.5",
+                        activityViewMode === 'mini'
+                          ? "bg-white text-slate-900 shadow-xs font-bold"
+                          : "text-slate-600 hover:text-slate-900"
+                      )}
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Compact View</span>
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2 text-xs text-indigo-700 font-semibold px-2">
+                    <button 
+                      onClick={() => { setActivityViewMode('extended'); setCardViewOverrides({}); }} 
+                      className="hover:underline cursor-pointer"
+                    >
+                      Expand All
+                    </button>
+                    <span>·</span>
+                    <button 
+                      onClick={() => { setActivityViewMode('mini'); setCardViewOverrides({}); }} 
+                      className="hover:underline cursor-pointer"
+                    >
+                      Collapse All
+                    </button>
+                  </div>
+
                   <span className="text-xs bg-blue-100 text-blue-800 font-bold px-2.5 py-1 rounded-full whitespace-nowrap">
-                    {totalFilteredCount} Results Found
+                    {totalFilteredCount} Items
                   </span>
                   <Button 
                     size="sm" 
                     onClick={() => setIsLoggingManualActivity(!isLoggingManualActivity)}
                     className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
                   >
-                    <Plus className="w-3.5 h-3.5 mr-1" /> {isLoggingManualActivity ? 'Cancel' : 'Log Manual Activity'}
+                    <Plus className="w-3.5 h-3.5 mr-1" /> {isLoggingManualActivity ? 'Cancel' : 'Log Activity'}
                   </Button>
                 </div>
               </div>
@@ -1323,68 +1517,713 @@ function StudentDetailDrawer({ student, onClose, onUpdate }: { student: Student,
                 </form>
               )}
 
-              {/* Operational Logs list */}
-              {filteredLogs.length > 0 && (
+              {/* SECTION 1: Counsellor Meeting Notes & Minutes of Meeting (MOM) */}
+              {filteredMeetingEvents.length > 0 && (
                 <div className="space-y-3">
-                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">System & Staff Operations ({filteredLogs.length})</h4>
-                  {filteredLogs.map((log) => (
-                    <div key={log.id} className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-1.5">
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="font-bold text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-100 uppercase tracking-wider">
-                          {log.activityType || log.type}
-                        </span>
-                        <span className="text-slate-400 font-medium">{log.timestamp || log.date}</span>
-                      </div>
-                      <p className="text-sm font-semibold text-slate-900">{log.description}</p>
-                      {log.details && (
-                        <p className="text-xs text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 font-mono">
-                          {log.details}
-                        </p>
-                      )}
-                      <p className="text-[10px] text-slate-400">Performed by: {log.performedBy || 'Staff'} ({log.role || 'COUNSELLOR'})</p>
-                    </div>
-                  ))}
+                  <div className="flex items-center justify-between pb-1 border-b border-indigo-100">
+                    <h4 className="text-xs font-bold text-indigo-950 uppercase tracking-wider flex items-center gap-2">
+                      <span className="p-1 bg-indigo-100 text-indigo-700 rounded">
+                        <Video className="w-3.5 h-3.5" />
+                      </span>
+                      <span>Counsellor Meeting Notes & Minutes of Meeting ({filteredMeetingEvents.length})</span>
+                    </h4>
+                    <span className="text-[11px] text-indigo-600 font-medium">
+                      Official Session Records & MOM
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {filteredMeetingEvents.map((evt) => {
+                      const extended = isLogExtended(evt.id);
+                      const hasMOM = Array.isArray(evt.moms) && evt.moms.length > 0;
+                      const hasTasks = Array.isArray(evt.tasks) && evt.tasks.length > 0;
+                      const hasNotes = Boolean(evt.notes && evt.notes.trim());
+
+                      if (extended) {
+                        return (
+                          <div 
+                            key={evt.id}
+                            className="bg-white p-5 rounded-2xl border-2 border-indigo-300 shadow-sm space-y-4 transition-all"
+                          >
+                            {/* Header */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-extrabold text-indigo-950 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                                  <Video className="w-3.5 h-3.5 text-indigo-600" />
+                                  {evt.stream || '1-on-1 Session'}
+                                </span>
+                                {hasMOM && (
+                                  <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                                    <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                    MOM RECORDED
+                                  </span>
+                                )}
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">
+                                  <Eye className="w-3 h-3 text-indigo-600" />
+                                  FULL NOTES VIEW
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-slate-500 font-medium flex items-center gap-1">
+                                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                  {evt.day || evt.date} {evt.time && `· ${evt.time}`}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleCardExtended(evt.id)}
+                                  className="text-xs font-semibold text-slate-600 hover:text-indigo-700 hover:bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200 transition-colors flex items-center gap-1"
+                                >
+                                  <ChevronUp className="w-3.5 h-3.5" />
+                                  <span>Collapse</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Session Title & Host */}
+                            <div>
+                              <h4 className="text-base font-bold text-slate-900 leading-snug">{evt.title}</h4>
+                              <div className="flex flex-wrap items-center gap-3 mt-1 text-xs text-slate-600">
+                                <span className="flex items-center gap-1 font-medium">
+                                  <strong className="text-slate-500 font-normal">Counsellor / Host:</strong> {evt.host || 'Assigned Counsellor'}
+                                </span>
+                                {evt.location && (
+                                  <span className="flex items-center gap-1 text-blue-600 font-medium">
+                                    <LinkIcon className="w-3 h-3" />
+                                    {evt.location.startsWith('http') ? (
+                                      <a href={evt.location} target="_blank" rel="noreferrer" className="hover:underline flex items-center gap-0.5">
+                                        Meeting Link <ExternalLink className="w-2.5 h-2.5" />
+                                      </a>
+                                    ) : (
+                                      <span>{evt.location}</span>
+                                    )}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Full Discussion Notes */}
+                            {hasNotes && (
+                              <div className="bg-indigo-50/70 p-4 rounded-xl border border-indigo-200 space-y-1.5">
+                                <div className="text-[11px] font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                                  <FileText className="w-4 h-4 text-indigo-600" />
+                                  <span>Counsellor Discussion Notes</span>
+                                </div>
+                                <div className="text-xs text-slate-800 whitespace-pre-wrap leading-relaxed font-sans bg-white/80 p-3 rounded-lg border border-indigo-100">
+                                  {evt.notes}
+                                </div>
+                              </div>
+                            )}
+
+                            {/* Minutes of Meeting (MOM) Details */}
+                            {hasMOM && (
+                              <div className="space-y-3 pt-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                                    <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                                    <span>Minutes of Meeting (MOM Report)</span>
+                                  </span>
+                                </div>
+
+                                {evt.moms.map((mom: any, mIdx: number) => (
+                                  <div key={mIdx} className="bg-emerald-50/40 p-4 rounded-xl border border-emerald-200 space-y-3 text-xs">
+                                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-100 pb-2">
+                                      <span className="font-bold text-emerald-950">
+                                        Documented by {mom.authorName || evt.host || 'Counsellor'} ({mom.authorRole || 'Counsellor'})
+                                      </span>
+                                      {mom.date && <span className="text-slate-500 font-medium">{mom.date}</span>}
+                                    </div>
+
+                                    {mom.keyPoints && (
+                                      <div>
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                                          1. Key Discussion Points:
+                                        </span>
+                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
+                                          {mom.keyPoints}
+                                        </p>
+                                      </div>
+                                    )}
+
+                                    {mom.studentProgress && (
+                                      <div>
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                                          2. Student Progress & Achievements:
+                                        </span>
+                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
+                                          {mom.studentProgress}
+                                        </p>
+                                      </div>
+                                    )}
+
+                                    {mom.observations && (
+                                      <div>
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                                          3. Observations & Concerns:
+                                        </span>
+                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
+                                          {mom.observations}
+                                        </p>
+                                      </div>
+                                    )}
+
+                                    {mom.nextSteps && (
+                                      <div>
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                                          4. Recommended Next Steps:
+                                        </span>
+                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
+                                          {mom.nextSteps}
+                                        </p>
+                                      </div>
+                                    )}
+
+                                    {mom.followUpActions && (
+                                      <div>
+                                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
+                                          5. Follow-Up Action Items:
+                                        </span>
+                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
+                                          {mom.followUpActions}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+
+                            {/* Post-Meeting Assigned Tasks */}
+                            {(() => {
+                              const visibleTasks = (evt.tasks || []).filter((task: any) => 
+                                isTaskVisibleToStaff(task, student, currentUser, permissionsMatrix)
+                              );
+                              if (visibleTasks.length === 0) return null;
+                              return (
+                                <div className="space-y-2 pt-1">
+                                  <span className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
+                                    <CheckSquare className="w-4 h-4 text-indigo-600" />
+                                    <span>Assigned Post-Meeting Tasks ({visibleTasks.length})</span>
+                                  </span>
+                                  <div className="grid grid-cols-1 gap-2">
+                                    {visibleTasks.map((task: any, tIdx: number) => (
+                                    <div key={tIdx} className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+                                      <div>
+                                        <p className="font-bold text-slate-900">{task.title}</p>
+                                        {task.description && <p className="text-slate-600 mt-0.5 leading-relaxed">{task.description}</p>}
+                                      </div>
+                                      <div className="flex items-center gap-2 shrink-0">
+                                        {task.dueDate && (
+                                          <span className="text-[11px] text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-medium">
+                                            Due: {task.dueDate}
+                                          </span>
+                                        )}
+                                        <span className={cn(
+                                          "text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider",
+                                          task.status === 'DONE' ? 'bg-green-100 text-green-800' : 'bg-slate-200 text-slate-700'
+                                        )}>
+                                          {task.status || 'PENDING'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                            {!hasNotes && !hasMOM && !hasTasks && (
+                              <p className="text-xs text-slate-400 italic bg-slate-50 p-3 rounded-lg">
+                                No additional text notes or MOM were entered for this session.
+                              </p>
+                            )}
+
+                            <div className="pt-2 border-t border-slate-100 flex justify-end">
+                              <button
+                                type="button"
+                                onClick={() => toggleCardExtended(evt.id)}
+                                className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 hover:underline cursor-pointer"
+                              >
+                                <ChevronUp className="w-3.5 h-3.5" />
+                                <span>Collapse Meeting Details</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // Compact / Mini View for Meeting Session
+                      return (
+                        <div 
+                          key={evt.id}
+                          className="bg-white px-4 py-3 rounded-xl border border-slate-200 shadow-2xs hover:border-indigo-300 hover:bg-slate-50/70 transition-all flex items-center justify-between gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <span className="p-2 bg-indigo-50 text-indigo-700 rounded-lg shrink-0">
+                              <Video className="w-4 h-4" />
+                            </span>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="text-xs font-bold text-slate-900 truncate">
+                                  {evt.title}
+                                </p>
+                                {hasMOM && (
+                                  <span className="text-[10px] font-bold bg-emerald-100 text-emerald-800 px-2 py-0.2 rounded-full uppercase tracking-wider shrink-0">
+                                    MOM
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                                {evt.day || evt.date} {evt.time && `· ${evt.time}`} · Host: <span className="font-semibold text-slate-700">{evt.host || 'Counsellor'}</span>
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => toggleCardExtended(evt.id)}
+                              className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-600 hover:text-white px-3 py-1.5 rounded-lg border border-indigo-200 transition-all flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>View Notes & MOM</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
 
-              {/* Student General Activity History */}
-              <div className="space-y-3 pt-4 border-t border-slate-200">
-                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">General Workspace History ({filteredActivities.length})</h4>
-                <div className="relative pl-6 space-y-4 border-l-2 border-slate-200 ml-2">
-                  {filteredActivities.map((activity) => (
-                    <div key={activity.id} className="relative">
-                      <span className={cn(
-                        "absolute -left-[31px] w-3 h-3 rounded-full ring-4 ring-white",
-                        activity.type === 'VERIFIED' ? 'bg-green-500' :
-                        activity.type === 'UPLOAD' ? 'bg-blue-500' :
-                        activity.type === 'UPDATE' ? 'bg-amber-500' :
-                        activity.type === 'SESSION' ? 'bg-purple-500' :
-                        'bg-slate-400'
-                      )} />
-                      <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-sm">
-                        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1 flex items-center gap-2">
-                          {activity.date} 
-                          <span className={cn(
-                            activity.type === 'VERIFIED' ? 'text-green-600' :
-                            activity.type === 'UPLOAD' ? 'text-blue-600' :
-                            activity.type === 'UPDATE' ? 'text-amber-600' :
-                            activity.type === 'SESSION' ? 'text-purple-600' :
-                            'text-slate-600'
-                          )}>
-                            {activity.type === 'SYSTEM' ? 'ACCOUNT CREATED' : activity.type}
-                          </span>
-                        </p>
-                        <p className="text-xs text-slate-800 font-medium">{activity.description}</p>
-                      </div>
-                    </div>
-                  ))}
-                  {filteredActivities.length === 0 && filteredLogs.length === 0 && (
-                    <div className="text-slate-500 text-xs italic bg-slate-50 p-6 rounded-xl text-center border border-dashed border-slate-200">
-                      No activity matched the selected filters. Try choosing "Overall / All Time" or resetting status.
-                    </div>
-                  )}
+              {/* SECTION 2: System & Staff Operations (Counsellor Guidance, Document Reviews, etc.) */}
+              {filteredLogs.length > 0 && (
+                <div className="space-y-3 pt-2">
+                  <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                      <span className="p-1 bg-slate-100 text-slate-600 rounded">
+                        <FileText className="w-3.5 h-3.5" />
+                      </span>
+                      <span>Counsellor Guidance & Operational Logs ({filteredLogs.length})</span>
+                    </h4>
+                    <span className="text-[11px] text-slate-400 font-medium">
+                      Student Interactions & Audit Trail
+                    </span>
+                  </div>
+
+                  <div className="space-y-3">
+                    {filteredLogs.map((log) => {
+                      const extended = isLogExtended(log.id);
+
+                      if (extended) {
+                        return (
+                          <div 
+                            key={log.id} 
+                            className="bg-white p-5 rounded-2xl border-2 border-indigo-200 shadow-sm space-y-3 transition-all"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-2.5">
+                              <div className="flex items-center gap-2">
+                                <span className="font-extrabold text-indigo-950 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                                  <span className="w-2 h-2 rounded-full bg-indigo-600 inline-block" />
+                                  {log.activityType || log.type}
+                                </span>
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-100">
+                                  <Eye className="w-3 h-3 text-indigo-600" />
+                                  EXTENDED VIEW
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-slate-500 font-medium flex items-center gap-1">
+                                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                  {log.timestamp || log.date}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleCardExtended(log.id)}
+                                  className="text-xs font-semibold text-slate-600 hover:text-indigo-700 hover:bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200 transition-colors flex items-center gap-1 cursor-pointer"
+                                >
+                                  <ChevronUp className="w-3.5 h-3.5" />
+                                  <span>Collapse</span>
+                                </button>
+                              </div>
+                            </div>
+
+                            <div>
+                              <p className="text-sm font-bold text-slate-900 leading-relaxed whitespace-pre-wrap">{log.description}</p>
+                            </div>
+
+                            {/* Extended Detail breakdown */}
+                            <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200 space-y-2.5 text-xs">
+                              {log.details && (
+                                <div>
+                                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block mb-1">
+                                    Detailed Notes & Updates:
+                                  </span>
+                                  <p className="text-slate-800 font-sans text-xs bg-white p-3 rounded-lg border border-slate-200 whitespace-pre-wrap leading-relaxed">
+                                    {log.details}
+                                  </p>
+                                </div>
+                              )}
+
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-slate-200">
+                                <div className="flex items-center gap-1.5 text-slate-600">
+                                  <span className="font-bold text-slate-500">Performed by:</span>
+                                  <span className="font-semibold text-slate-800">{log.performedBy || 'Staff'}</span>
+                                  <span className="text-[10px] bg-slate-200 text-slate-700 font-bold px-1.5 py-0.5 rounded uppercase">
+                                    {log.role || 'COUNSELLOR'}
+                                  </span>
+                                </div>
+
+                                {(log as any).attendees && (
+                                  <div className="flex items-center gap-1.5 text-slate-600">
+                                    <span className="font-bold text-slate-500">Attendees:</span>
+                                    <span className="font-semibold text-slate-800">{(log as any).attendees}</span>
+                                  </div>
+                                )}
+
+                                {(log as any).resourceName && (
+                                  <div className="flex items-center gap-1.5 text-slate-600 sm:col-span-2">
+                                    <span className="font-bold text-slate-500">Resource:</span>
+                                    <span className="font-semibold text-blue-700">{(log as any).resourceName}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex justify-end pt-1">
+                              <button
+                                type="button"
+                                onClick={() => toggleCardExtended(log.id)}
+                                className="text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center gap-1 hover:underline cursor-pointer"
+                              >
+                                <ChevronUp className="w-3.5 h-3.5" />
+                                <span>Collapse Details</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // Compact / Mini View for Log
+                      return (
+                        <div 
+                          key={log.id} 
+                          className="bg-white px-4 py-3 rounded-xl border border-slate-200 shadow-2xs hover:border-indigo-300 hover:bg-slate-50/70 transition-all flex items-center justify-between gap-3"
+                        >
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <span className="font-bold text-slate-700 bg-slate-100 px-2 py-0.5 rounded text-[11px] uppercase tracking-wider shrink-0">
+                              {log.activityType || log.type}
+                            </span>
+                            <p className="text-xs font-semibold text-slate-800 truncate">
+                              {log.description}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-3 shrink-0 text-xs">
+                            <span className="text-slate-400 text-[11px] font-medium hidden sm:inline">{log.timestamp || log.date}</span>
+                            <span className="text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded font-medium">
+                              {log.performedBy || 'Staff'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => toggleCardExtended(log.id)}
+                              className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-600 hover:text-white px-2.5 py-1 rounded-lg border border-indigo-200 transition-all flex items-center gap-1 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Details</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
+              )}
+
+              {/* SECTION 3: Student General Activity History */}
+              {filteredActivities.length > 0 && (
+                <div className="space-y-3 pt-3 border-t border-slate-200">
+                  <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                      <span className="p-1 bg-slate-100 text-slate-600 rounded">
+                        <Clock className="w-3.5 h-3.5" />
+                      </span>
+                      <span>General Workspace History ({filteredActivities.length})</span>
+                    </h4>
+                  </div>
+                  <div className="relative pl-6 space-y-3 border-l-2 border-slate-200 ml-2">
+                    {filteredActivities.map((activity) => {
+                      const extended = isLogExtended(activity.id);
+
+                      if (extended) {
+                        return (
+                          <div key={activity.id} className="relative">
+                            <span className={cn(
+                              "absolute -left-[31px] w-3 h-3 rounded-full ring-4 ring-white",
+                              activity.type === 'VERIFIED' ? 'bg-green-500' :
+                              activity.type === 'UPLOAD' ? 'bg-blue-500' :
+                              activity.type === 'UPDATE' ? 'bg-amber-500' :
+                              activity.type === 'SESSION' ? 'bg-purple-500' :
+                              'bg-slate-400'
+                            )} />
+                            <div className="bg-white p-4 rounded-xl border-2 border-indigo-200 shadow-sm space-y-2 transition-all">
+                              <div className="flex items-center justify-between text-xs border-b border-slate-100 pb-2">
+                                <div className="flex items-center gap-2">
+                                  <span className={cn(
+                                    "font-bold px-2 py-0.5 rounded text-[10px] uppercase tracking-wider",
+                                    activity.type === 'VERIFIED' ? 'bg-green-100 text-green-800' :
+                                    activity.type === 'UPLOAD' ? 'bg-blue-100 text-blue-800' :
+                                    activity.type === 'UPDATE' ? 'bg-amber-100 text-amber-800' :
+                                    activity.type === 'SESSION' ? 'bg-purple-100 text-purple-800' :
+                                    'bg-slate-100 text-slate-800'
+                                  )}>
+                                    {activity.type === 'SYSTEM' ? 'ACCOUNT CREATED' : activity.type}
+                                  </span>
+                                  <span className="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100">
+                                    EXTENDED
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-slate-400 text-xs font-medium">{activity.date}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleCardExtended(activity.id)}
+                                    className="text-xs font-semibold text-slate-600 hover:text-indigo-700 hover:bg-slate-100 px-2 py-0.5 rounded border border-slate-200 transition-colors flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <ChevronUp className="w-3 h-3" />
+                                    <span>Collapse</span>
+                                  </button>
+                                </div>
+                              </div>
+                              <p className="text-sm font-semibold text-slate-900 leading-relaxed whitespace-pre-wrap">{activity.description}</p>
+                              {(activity as any).details && (
+                                <p className="text-xs text-slate-700 bg-slate-50 p-3 rounded-lg border border-slate-200 font-sans whitespace-pre-wrap leading-relaxed">
+                                  {(activity as any).details}
+                                </p>
+                              )}
+                              <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+                                <span>Logged by: {(activity as any).author || (activity as any).user || 'System'}</span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleCardExtended(activity.id)}
+                                  className="text-indigo-600 hover:underline font-semibold cursor-pointer"
+                                >
+                                  Collapse
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      }
+
+                      // Compact / Mini View
+                      return (
+                        <div key={activity.id} className="relative">
+                          <span className={cn(
+                            "absolute -left-[31px] w-3 h-3 rounded-full ring-4 ring-white",
+                            activity.type === 'VERIFIED' ? 'bg-green-500' :
+                            activity.type === 'UPLOAD' ? 'bg-blue-500' :
+                            activity.type === 'UPDATE' ? 'bg-amber-500' :
+                            activity.type === 'SESSION' ? 'bg-purple-500' :
+                            'bg-slate-400'
+                          )} />
+                          <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs hover:border-indigo-300 hover:bg-slate-50/70 transition-all flex items-center justify-between gap-3">
+                            <div className="min-w-0 flex-1">
+                              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-0.5 flex items-center gap-2">
+                                {activity.date} 
+                                <span className={cn(
+                                  activity.type === 'VERIFIED' ? 'text-green-600' :
+                                  activity.type === 'UPLOAD' ? 'text-blue-600' :
+                                  activity.type === 'UPDATE' ? 'text-amber-600' :
+                                  activity.type === 'SESSION' ? 'text-purple-600' :
+                                  'text-slate-600'
+                                )}>
+                                  {activity.type === 'SYSTEM' ? 'ACCOUNT CREATED' : activity.type}
+                                </span>
+                              </p>
+                              <p className="text-xs text-slate-800 font-medium truncate">
+                                {activity.description}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => toggleCardExtended(activity.id)}
+                              className="text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-600 hover:text-white px-2.5 py-1 rounded-lg border border-indigo-200 transition-all flex items-center gap-1 shrink-0 cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              <span>Details</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {totalFilteredCount === 0 && (
+                <div className="text-slate-500 text-xs italic bg-slate-50 p-8 rounded-xl text-center border border-dashed border-slate-200 space-y-1">
+                  <p className="font-semibold text-slate-700">No meeting notes, MOMs, or logs match your filter criteria.</p>
+                  <p className="text-slate-400">Try changing the Date Range to "Overall / All Time" or resetting the Status / Category filters.</p>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {activeTab === 'Conversations' && (() => {
+          const matchingConvs = (conversations || []).filter(
+            c =>
+              c.studentId === student.id ||
+              (student.email && c.studentEmail?.toLowerCase().trim() === student.email.toLowerCase().trim()) ||
+              (student.name && c.studentName?.toLowerCase().trim() === student.name.toLowerCase().trim())
+          );
+
+          const convMessages = matchingConvs.flatMap(c => c.messages || []);
+          const embeddedMessages = Array.isArray(student.conversations) ? student.conversations : [];
+          const commLogs = (student.operationalLogs || [])
+            .filter(l => {
+              const t = `${l.activityType || ''} ${l.type || ''} ${l.details || ''}`.toLowerCase();
+              return ['whatsapp', 'chat', 'call', 'zoom', 'zoho', 'email', 'conversation', 'message'].some(k => t.includes(k));
+            })
+            .map(l => ({
+              id: `log_${l.id}`,
+              senderName: l.performedBy || student.counselor || 'Counselor',
+              direction: 'outbound' as const,
+              channel: l.activityType || l.type || 'Portal',
+              text: l.description,
+              timestamp: l.timestamp || l.date || '',
+            }));
+
+          const seenKeys = new Set<string>();
+          const allMessages = [...convMessages, ...embeddedMessages, ...commLogs]
+            .filter(m => {
+              const key = `${m.text}|${m.timestamp}`;
+              if (seenKeys.has(key)) return false;
+              seenKeys.add(key);
+              return true;
+            })
+            .sort((a, b) => {
+              const da = Date.parse(a.timestamp || '') || 0;
+              const db = Date.parse(b.timestamp || '') || 0;
+              return da - db;
+            });
+
+          const handleDrawerSend = async (e: React.FormEvent) => {
+            e.preventDefault();
+            if (!drawerMsgText.trim() || drawerMsgSending) return;
+            setDrawerMsgSending(true);
+            try {
+              await sendConversationMessage({
+                studentId: student.id,
+                studentName: student.name,
+                conversationId: matchingConvs[0]?.id || `CONV-${student.id}`,
+                text: drawerMsgText.trim(),
+                channel: drawerMsgChannel,
+                direction: drawerMsgDirection,
+              });
+              setDrawerMsgText('');
+            } finally {
+              setDrawerMsgSending(false);
+            }
+          };
+
+          return (
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-white p-4 rounded-xl border border-slate-200">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Student Conversations ({allMessages.length})</h3>
+                  <p className="text-xs text-slate-500">Live message history across WhatsApp, Email, Calls, and Portal updates</p>
+                </div>
+                <span className="text-xs font-semibold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100">
+                  Counselor: {student.counselor || 'Unassigned'}
+                </span>
               </div>
+
+              <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3 max-h-[380px] overflow-y-auto">
+                {allMessages.length === 0 ? (
+                  <div className="py-10 text-center text-slate-400 text-xs">
+                    <MessageSquare className="w-7 h-7 mx-auto mb-2 text-slate-300" />
+                    <p className="font-semibold text-slate-600">No conversations recorded for {student.name} yet.</p>
+                    <p className="mt-1">Send a message or log a WhatsApp/Email/Call interaction below.</p>
+                  </div>
+                ) : (
+                  allMessages.map((msg, idx) => {
+                    const isInbound = msg.direction === 'inbound';
+                    const isNote = msg.direction === 'note';
+                    if (isNote) {
+                      return (
+                        <div key={msg.id || idx} className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-xs text-amber-950">
+                          <div className="flex items-center justify-between text-[10px] font-bold text-amber-700 mb-1">
+                            <span>Internal Note • {msg.senderName}</span>
+                            <span>{msg.timestamp}</span>
+                          </div>
+                          <p className="whitespace-pre-wrap">{msg.text}</p>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div key={msg.id || idx} className={cn('flex flex-col', isInbound ? 'items-start' : 'items-end')}>
+                        <div className={cn(
+                          'max-w-[85%] rounded-2xl px-3.5 py-2.5 text-xs shadow-2xs',
+                          isInbound
+                            ? 'bg-slate-100 text-slate-900 border border-slate-200'
+                            : 'bg-indigo-600 text-white'
+                        )}>
+                          <div className={cn('text-[10px] font-semibold mb-1', isInbound ? 'text-slate-500' : 'text-indigo-100')}>
+                            {msg.senderName} • {msg.channel || 'Portal'}
+                          </div>
+                          <p className="whitespace-pre-wrap leading-relaxed">{msg.text}</p>
+                        </div>
+                        <span className="text-[10px] text-slate-400 mt-1 px-1">{msg.timestamp}</span>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+
+              <form onSubmit={handleDrawerSend} className="bg-white p-4 rounded-2xl border border-slate-200 space-y-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <select
+                    value={drawerMsgChannel}
+                    onChange={e => setDrawerMsgChannel(e.target.value as any)}
+                    className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-medium text-slate-700"
+                  >
+                    <option value="WhatsApp">WhatsApp</option>
+                    <option value="Email">Email</option>
+                    <option value="Audio Call">Audio Call</option>
+                    <option value="Zoom Call">Zoom Call</option>
+                    <option value="Portal">Portal</option>
+                  </select>
+                  <select
+                    value={drawerMsgDirection}
+                    onChange={e => setDrawerMsgDirection(e.target.value as any)}
+                    className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 font-medium text-slate-700"
+                  >
+                    <option value="outbound">Counselor Reply</option>
+                    <option value="inbound">Student Reply (Log)</option>
+                    <option value="note">Internal Note</option>
+                  </select>
+                </div>
+                <div className="flex items-end gap-2">
+                  <textarea
+                    rows={2}
+                    value={drawerMsgText}
+                    onChange={e => setDrawerMsgText(e.target.value)}
+                    placeholder={`Send or log a message for ${student.name}...`}
+                    className="flex-1 resize-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <Button
+                    type="submit"
+                    size="sm"
+                    disabled={drawerMsgSending || !drawerMsgText.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold gap-1.5 shrink-0"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>{drawerMsgSending ? 'Sending...' : 'Send'}</span>
+                  </Button>
+                </div>
+              </form>
             </div>
           );
         })()}
@@ -2836,8 +3675,10 @@ const TASK_CATEGORIES: TaskCategory[] = [
 ];
 
 function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
-  const { batches, students, setStudents } = useDatabase();
-  const tasks = student.tasks || [];
+  const { batches, students, setStudents, currentUser, permissionsMatrix } = useDatabase();
+  const rawTasks = student.tasks || [];
+  const tasks = rawTasks.filter(task => isTaskVisibleToStaff(task, student, currentUser, permissionsMatrix));
+  const isMentorRestricted = isStaffMentorOrFaculty(currentUser);
   const [isAssigning, setIsAssigning] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<any | null>(null);
@@ -2861,6 +3702,8 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
   
   const handleAssignTask = () => {
     if (!newTaskName) return;
+    const authorRole = currentUser?.role || 'MENTOR';
+    const authorLabel = `${currentUser?.name || 'Staff Member'} (${authorRole})`;
     const newTask: Task = {
       id: Math.random().toString(),
       name: newTaskName,
@@ -2869,7 +3712,7 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
       stage: 'TO_DO',
       description: newTaskDesc,
       attachments: pdfFileName ? [{ id: '1', fileName: pdfFileName, fileUrl: pdfUrl || '#', uploadedAt: new Date().toLocaleDateString() }] : [],
-      assignedBy: 'Counselor / Mentor Portal',
+      assignedBy: authorLabel,
       assignmentType,
       relatedTo,
       pdfFileName,
@@ -2880,7 +3723,7 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
     if (assignTarget === 'student') {
       onUpdate({
         ...student,
-        tasks: [...tasks, newTask],
+        tasks: [...rawTasks, newTask],
         activities: [
           {
             id: Math.random().toString(),
