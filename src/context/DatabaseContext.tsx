@@ -47,7 +47,6 @@ import {
   onAuthStateChanged,
   signOut,
   createUserWithEmailAndPassword,
-  sendEmailVerification,
   sendPasswordResetEmail,
   updateProfile,
   User,
@@ -1057,7 +1056,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
 
-      if (!user || !user.emailVerified) {
+      if (!user || !normalizeEmail(user.email)) {
         if (!cancelled) {
           setIsAuthenticatedState(false);
           setCurrentUserState(null);
@@ -1083,10 +1082,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       setAuthError(null);
 
       try {
-        const tokenResult = await user.getIdTokenResult();
-        if (!tokenResult.claims.email_verified) {
-          await user.getIdToken(true);
-        }
+        await user.getIdToken();
 
         if (authEmail === BOOTSTRAP_ADMIN_EMAIL) {
           await ensureBootstrappedAdminRecords(user);
@@ -1218,7 +1214,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
   // Live role-scoped Firestore onSnapshot listeners
   useEffect(() => {
-    if (!isAuthenticated || !firebaseUser || !firebaseUser.emailVerified || !currentUser) {
+    if (!isAuthenticated || !firebaseUser || !currentUser) {
       return;
     }
 
@@ -1561,6 +1557,20 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     };
   }, [isAuthenticated, firebaseUser?.uid, firebaseUser?.email, currentUser?.role]);
 
+  const sendPortalPasswordResetEmail = async (cleanEmail: string) => {
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail, {
+        url: `${window.location.origin}/login`,
+      });
+    } catch (err: any) {
+      if (err?.code === 'auth/unauthorized-continue-uri' || err?.code === 'auth/invalid-continue-uri') {
+        await sendPasswordResetEmail(auth, cleanEmail);
+      } else {
+        throw err;
+      }
+    }
+  };
+
   // Provision Firebase Email/Password user when Admin creates Student or Staff
   const provisionPortalUser = async ({
     name,
@@ -1608,13 +1618,12 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       if (name) {
         await updateProfile(cred.user, { displayName: name }).catch(() => {});
       }
-      await sendEmailVerification(cred.user).catch(() => {});
       await signOut(provAuth).catch(() => {});
       return { ok: true, uid: cred.user.uid, method: 'client_provisioner' };
     } catch (err: any) {
       if (err?.code === 'auth/email-already-in-use') {
         try {
-          await sendPasswordResetEmail(auth, cleanEmail);
+          await sendPortalPasswordResetEmail(cleanEmail);
           return { ok: true, method: 'reset_email' };
         } catch (resetErr: any) {
           return { ok: false, error: resetErr?.message || 'Account already exists in Firebase Auth.' };
@@ -1624,7 +1633,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  // Admin password reset via Admin SDK or Firebase Reset Email
+  // Admin password reset via Admin SDK, client provisioner for new Auth accounts, or Firebase Reset Email
   const resetPortalUserPassword = async ({
     email,
     name,
@@ -1639,7 +1648,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     const cleanEmail = normalizeEmail(email);
     if (!cleanEmail) return { ok: false, error: 'Email address is required.' };
 
-    if (newPassword && newPassword.trim().length >= 6) {
+    const cleanPwd = (newPassword || '').trim();
+    if (cleanPwd.length >= 6) {
       try {
         const idToken = await getFirebaseIdToken();
         if (idToken) {
@@ -1652,7 +1662,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             body: JSON.stringify({
               email: cleanEmail,
               name,
-              newPassword: newPassword.trim(),
+              newPassword: cleanPwd,
               userType,
             }),
           });
@@ -1660,14 +1670,35 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
           if (res.ok && json?.ok) {
             return { ok: true, mode: 'direct' };
           }
+          if (json && !json.fallbackToClient && res.status >= 400) {
+            return { ok: false, error: json.error || 'Failed to update password in Firebase Auth.' };
+          }
         }
       } catch {
-        // Fallback to Firebase password reset email below
+        // Fall through to secondary client provisioner / reset email
+      }
+
+      // If FIREBASE_SERVICE_ACCOUNT_JSON is not set and the user does not have a Firebase Auth account yet,
+      // create their Firebase Auth account right now with the admin-specified password.
+      try {
+        const provAuth = getProvisionerAuth();
+        const cred = await createUserWithEmailAndPassword(provAuth, cleanEmail, cleanPwd);
+        if (name) {
+          await updateProfile(cred.user, { displayName: name }).catch(() => {});
+        }
+        await signOut(provAuth).catch(() => {});
+        return { ok: true, mode: 'direct' };
+      } catch (provErr: any) {
+        if (provErr?.code !== 'auth/email-already-in-use') {
+          return { ok: false, error: provErr?.message || 'Failed to update password in Firebase Auth.' };
+        }
+        // User already exists in Firebase Auth; without FIREBASE_SERVICE_ACCOUNT_JSON on the server,
+        // Firebase requires sending a password reset email so the user can update their password.
       }
     }
 
     try {
-      await sendPasswordResetEmail(auth, cleanEmail);
+      await sendPortalPasswordResetEmail(cleanEmail);
       return { ok: true, mode: 'reset_email' };
     } catch (err: any) {
       return { ok: false, error: err?.message || 'Failed to send Firebase password reset email.' };
@@ -1722,7 +1753,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
   const writeStudentToFirestore = async (student: Student) => {
     const fbUser = auth.currentUser;
-    if (!fbUser || !fbUser.emailVerified) return;
+    if (!fbUser) return;
     const safeId = toValidDocId(student.id, 'STU');
     const isStudentSelf =
       (currentUser?.role || '').toUpperCase() === 'STUDENT' ||

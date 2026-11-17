@@ -3,22 +3,30 @@ import { getAuth, Auth } from 'firebase-admin/auth';
 import { getFirestore, Firestore } from 'firebase-admin/firestore';
 import firebaseConfig from '../../firebase-applet-config.json' with { type: 'json' };
 
+function normalizeServiceAccountObject(parsed: any): Record<string, any> | null {
+  if (!parsed || typeof parsed !== 'object') return null;
+  if (!parsed.client_email || !parsed.private_key) return null;
+  return {
+    ...parsed,
+    private_key: String(parsed.private_key).replace(/\\n/g, '\n'),
+  };
+}
+
 function parseServiceAccount(): Record<string, any> | null {
-  const raw = (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
+  let raw = (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
   if (!raw) return null;
+  if ((raw.startsWith("'") && raw.endsWith("'")) || (raw.startsWith('"') && raw.endsWith('"'))) {
+    raw = raw.slice(1, -1).trim();
+  }
   try {
-    const parsed = JSON.parse(raw);
-    if (parsed && parsed.client_email && parsed.private_key) {
-      return parsed;
-    }
+    const normalized = normalizeServiceAccountObject(JSON.parse(raw));
+    if (normalized) return normalized;
   } catch {
     // Also support base64-encoded JSON in env vars
     try {
       const decoded = Buffer.from(raw, 'base64').toString('utf8');
-      const parsed = JSON.parse(decoded);
-      if (parsed && parsed.client_email && parsed.private_key) {
-        return parsed;
-      }
+      const normalized = normalizeServiceAccountObject(JSON.parse(decoded));
+      if (normalized) return normalized;
     } catch {
       return null;
     }

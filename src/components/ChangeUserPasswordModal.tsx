@@ -57,6 +57,7 @@ export default function ChangeUserPasswordModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [successMode, setSuccessMode] = useState<'direct' | 'reset_email'>('direct');
+  const [triggeredByResetButton, setTriggeredByResetButton] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   if (!isOpen || !targetUser) return null;
@@ -108,10 +109,11 @@ export default function ChangeUserPasswordModal({
         throw new Error(res.error || 'Failed to update password.');
       }
       const resolvedMode = (res && res.mode) || 'direct';
+      setTriggeredByResetButton(false);
       setSuccessMode(resolvedMode);
       setSuccessMessage(
         resolvedMode === 'reset_email'
-          ? `Firebase password reset email sent to ${targetUser.email}.`
+          ? `Typed password was NOT applied — Firebase Reset Link sent to ${targetUser.email} instead.`
           : `Password successfully updated for ${targetUser.name}!`
       );
     } catch (err: any) {
@@ -127,6 +129,7 @@ export default function ChangeUserPasswordModal({
       setIsSubmitting(true);
       setValidationError(null);
       await onSendResetEmail(targetUser.email);
+      setTriggeredByResetButton(true);
       setSuccessMode('reset_email');
       setSuccessMessage(`Firebase password reset link sent to ${targetUser.email}.`);
     } catch (err: any) {
@@ -201,20 +204,45 @@ Please log in and keep your credentials secure.`;
           </div>
 
           {successMessage ? (
-            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl space-y-3 animate-in zoom-in-95 duration-200">
-              <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+            <div
+              className={`p-4 border rounded-xl space-y-3 animate-in zoom-in-95 duration-200 ${
+                successMode === 'reset_email' && !triggeredByResetButton
+                  ? 'bg-amber-50 border-amber-300'
+                  : 'bg-emerald-50 border-emerald-200'
+              }`}
+            >
+              <div
+                className={`flex items-center gap-2 font-bold text-sm ${
+                  successMode === 'reset_email' && !triggeredByResetButton ? 'text-amber-900' : 'text-emerald-800'
+                }`}
+              >
+                {successMode === 'reset_email' && !triggeredByResetButton ? (
+                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+                ) : (
+                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                )}
                 <span>{successMessage}</span>
               </div>
 
               {successMode === 'reset_email' ? (
-                <p className="text-xs text-emerald-700 leading-relaxed">
-                  The user has received a Firebase password reset link at <strong>{targetUser.email}</strong> to set their new password securely.
-                </p>
+                triggeredByResetButton ? (
+                  <p className="text-xs text-emerald-700 leading-relaxed">
+                    The user has received a Firebase password reset link at <strong>{targetUser.email}</strong> to set their new password securely.
+                  </p>
+                ) : (
+                  <div className="text-xs text-amber-800 leading-relaxed space-y-1.5">
+                    <p>
+                      <strong>{targetUser.email}</strong> already has a Firebase Authentication account. For security, Firebase does not allow overwriting an existing user&apos;s password directly without server Admin SDK credentials.
+                    </p>
+                    <p>
+                      Instead, a <strong>Firebase password reset link</strong> has been emailed to <strong>{targetUser.email}</strong>. Ask the user to open that email (check Inbox &amp; Spam) and set their new password—it will work immediately on the login page.
+                    </p>
+                  </div>
+                )
               ) : (
                 <>
                   <p className="text-xs text-emerald-700">
-                    The new password is now active in Firebase Authentication and works immediately across all browsers and devices.
+                    The new password is now active in Firebase Authentication and works immediately across all browsers and devices—no email verification required.
                   </p>
                   <div className="p-3 bg-white rounded-lg border border-emerald-200 text-xs space-y-2">
                     <div className="flex items-center justify-between">

@@ -2,15 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { GraduationCap, MailCheck, AlertCircle, RefreshCw, ShieldCheck } from 'lucide-react';
+import { GraduationCap, AlertCircle } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { auth, normalizeEmail } from '@/lib/firebase';
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  sendEmailVerification,
   updateProfile,
-  signOut,
 } from 'firebase/auth';
 
 const BOOTSTRAP_ADMIN_EMAIL = 'uppseekers@gmail.com';
@@ -46,7 +44,6 @@ export default function Login() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
-  const [needsVerificationEmail, setNeedsVerificationEmail] = useState<string | null>(null);
   const [showBootstrapAdminSetup, setShowBootstrapAdminSetup] = useState(false);
 
   useEffect(() => {
@@ -74,15 +71,7 @@ export default function Login() {
 
     setLoading(true);
     try {
-      const cred = await signInWithEmailAndPassword(auth, cleanEmail, password);
-      if (!cred.user.emailVerified) {
-        setNeedsVerificationEmail(cred.user.email || cleanEmail);
-        setNotice(
-          'Your account exists, but your email address is not verified yet. Please click the verification link in your inbox, then click "I\'ve Verified — Continue".'
-        );
-        setLoading(false);
-        return;
-      }
+      await signInWithEmailAndPassword(auth, cleanEmail, password);
       // DatabaseContext onAuthStateChanged resolves the Firestore role & profile automatically
     } catch (err: any) {
       const code = err?.code || '';
@@ -112,12 +101,8 @@ export default function Login() {
     try {
       const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
       await updateProfile(cred.user, { displayName: 'System Admin' }).catch(() => {});
-      await sendEmailVerification(cred.user);
-      setNeedsVerificationEmail(cleanEmail);
       setShowBootstrapAdminSetup(false);
-      setNotice(
-        `Primary Admin account created and verification email sent to ${cleanEmail}. Verify your inbox, then click "I've Verified — Continue".`
-      );
+      setNotice('Primary Admin account created! Signing you in...');
     } catch (err: any) {
       if (err?.code === 'auth/email-already-in-use') {
         setShowBootstrapAdminSetup(false);
@@ -127,56 +112,6 @@ export default function Login() {
       } else {
         setError(mapFirebaseAuthError(err));
       }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResendVerification = async () => {
-    setError('');
-    setNotice('');
-    if (!auth.currentUser) {
-      setNeedsVerificationEmail(null);
-      setError('Session expired. Please enter your email and password again.');
-      return;
-    }
-    setLoading(true);
-    try {
-      await sendEmailVerification(auth.currentUser);
-      setNotice(`A fresh verification link was sent to ${auth.currentUser.email}. Check your inbox and spam folder.`);
-    } catch (err: any) {
-      setError(mapFirebaseAuthError(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleCheckVerified = async () => {
-    setError('');
-    setNotice('');
-    if (!auth.currentUser) {
-      setNeedsVerificationEmail(null);
-      setError('Session expired. Please sign in again.');
-      return;
-    }
-    setLoading(true);
-    try {
-      await auth.currentUser.reload();
-      if (!auth.currentUser.emailVerified) {
-        setError('Email is still marked as unverified. Please open the verification link in your inbox first.');
-        return;
-      }
-      await auth.currentUser.getIdToken(true);
-      // Re-trigger Firebase auth listener cleanly with verified token
-      const cleanEmail = normalizeEmail(email || auth.currentUser.email);
-      if (cleanEmail && password) {
-        await signOut(auth);
-        await signInWithEmailAndPassword(auth, cleanEmail, password);
-      } else {
-        window.location.reload();
-      }
-    } catch (err: any) {
-      setError(mapFirebaseAuthError(err));
     } finally {
       setLoading(false);
     }
@@ -202,7 +137,7 @@ export default function Login() {
         <Card className="border-slate-200 shadow-sm">
           <CardHeader>
             <CardTitle className="text-center text-xl text-slate-800">
-              {needsVerificationEmail ? 'Verify Your Email' : 'Sign in to your account'}
+              Sign in to your account
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
@@ -219,55 +154,6 @@ export default function Login() {
               </div>
             )}
 
-            {needsVerificationEmail ? (
-              <div className="space-y-4">
-                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5">
-                  <div className="flex items-center gap-2 font-bold text-amber-800">
-                    <MailCheck className="w-4 h-4 text-amber-600" />
-                    Email verification required for {needsVerificationEmail}
-                  </div>
-                  <p className="text-amber-700 leading-relaxed">
-                    Open the verification email sent to your address, click the confirmation link, and then continue below.
-                  </p>
-                </div>
-
-                <Button
-                  type="button"
-                  onClick={handleCheckVerified}
-                  disabled={loading}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 flex items-center justify-center gap-2"
-                >
-                  <ShieldCheck className="w-4 h-4" />
-                  {loading ? 'Checking verification...' : "I've Verified — Continue"}
-                </Button>
-
-                <div className="flex items-center justify-between gap-3 pt-1">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleResendVerification}
-                    disabled={loading}
-                    className="flex-1 text-xs flex items-center justify-center gap-1.5"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Resend Email
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={async () => {
-                      await signOut(auth).catch(() => {});
-                      setNeedsVerificationEmail(null);
-                      setNotice('');
-                      setError('');
-                    }}
-                    className="flex-1 text-xs"
-                  >
-                    Use Different Email
-                  </Button>
-                </div>
-              </div>
-            ) : (
               <>
                 <form onSubmit={handleCredentialLogin} className="space-y-4">
                   <div>
@@ -344,7 +230,6 @@ export default function Login() {
                   </p>
                 </div>
               </>
-            )}
           </CardContent>
         </Card>
       </div>
