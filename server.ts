@@ -1,4 +1,6 @@
 import express from "express";
+import http from "http";
+import { WebSocketServer, WebSocket } from "ws";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
@@ -8,7 +10,7 @@ import nodemailer from "nodemailer";
 import crypto from "crypto";
 import mammoth from "mammoth";
 import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
-import { db } from "./src/db/index.ts";
+import { db, createPool } from "./src/db/index.ts";
 import {
   users,
   studentsData,
@@ -213,7 +215,203 @@ async function findUserByUidOrEmail(uid?: string, email?: string) {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const httpServer = http.createServer(app);
+  const PORT = Number(process.env.PORT) || 3000;
+  const SERVER_INSTANCE_ID = crypto.randomUUID();
+
+  // Real-time WebSocket server attached to the same HTTP server
+  interface AliveWebSocket extends WebSocket {
+    isAlive?: boolean;
+  }
+  const wss = new WebSocketServer({ server: httpServer, path: "/ws/realtime" });
+
+  const sendToLocalWsClients = (serializedPayload: string) => {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(serializedPayload);
+        } catch {
+          // Ignore send errors on closing sockets
+        }
+      }
+    });
+  };
+
+  // Cross-instance Cloud Run & Preview<->Published PostgreSQL LISTEN/NOTIFY bridge
+  let pgListenClient: any = null;
+  let pgListenConnecting = false;
+  let pgIdleReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  let pgReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const hasSqlConfigured = () =>
+    Boolean(process.env.SQL_HOST || process.env.DATABASE_URL || process.env.POSTGRES_URL);
+
+  const releasePgListener = () => {
+    if (pgReconnectTimer) {
+      clearTimeout(pgReconnectTimer);
+      pgReconnectTimer = null;
+    }
+    if (pgListenClient) {
+      const clientToRelease = pgListenClient;
+      pgListenClient = null;
+      clientToRelease.removeAllListeners("notification");
+      clientToRelease.removeAllListeners("error");
+      clientToRelease.removeAllListeners("end");
+      clientToRelease.query("UNLISTEN uppseekers_realtime").catch(() => {}).finally(() => {
+        try {
+          clientToRelease.release();
+        } catch {
+          // Ignore release errors
+        }
+      });
+    }
+  };
+
+  const ensurePgListener = async () => {
+    if (!hasSqlConfigured() || pgListenClient || pgListenConnecting || wss.clients.size === 0) {
+      return;
+    }
+    pgListenConnecting = true;
+    try {
+      const pool = createPool();
+      const client = await pool.connect();
+      if (wss.clients.size === 0) {
+        client.release();
+        pgListenConnecting = false;
+        return;
+      }
+      pgListenClient = client;
+
+      client.on("notification", (msg: any) => {
+        if (msg?.channel !== "uppseekers_realtime" || !msg.payload) return;
+        try {
+          const parsed = JSON.parse(msg.payload);
+          if (!parsed || parsed.instanceId === SERVER_INSTANCE_ID) return;
+          const { instanceId: _ignored, ...cleanEvent } = parsed;
+          sendToLocalWsClients(JSON.stringify(cleanEvent));
+        } catch {
+          // Ignore malformed notification payloads
+        }
+      });
+
+      const handleDisconnect = () => {
+        if (pgListenClient === client) {
+          pgListenClient = null;
+          try {
+            client.release(true);
+          } catch {
+            // Ignore release errors
+          }
+          if (wss.clients.size > 0 && !pgReconnectTimer) {
+            pgReconnectTimer = setTimeout(() => {
+              pgReconnectTimer = null;
+              void ensurePgListener();
+            }, 3000);
+          }
+        }
+      };
+
+      client.on("error", handleDisconnect);
+      client.on("end", handleDisconnect);
+
+      await client.query("LISTEN uppseekers_realtime");
+    } catch {
+      if (wss.clients.size > 0 && !pgReconnectTimer) {
+        pgReconnectTimer = setTimeout(() => {
+          pgReconnectTimer = null;
+          void ensurePgListener();
+        }, 4000);
+      }
+    } finally {
+      pgListenConnecting = false;
+    }
+  };
+
+  wss.on("connection", (ws: AliveWebSocket) => {
+    ws.isAlive = true;
+    if (pgIdleReleaseTimer) {
+      clearTimeout(pgIdleReleaseTimer);
+      pgIdleReleaseTimer = null;
+    }
+    void ensurePgListener();
+
+    ws.on("pong", () => {
+      ws.isAlive = true;
+    });
+    ws.on("message", (raw) => {
+      ws.isAlive = true;
+      try {
+        const msg = JSON.parse(String(raw));
+        if (msg?.type === "ping" && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "pong", timestamp: new Date().toISOString() }));
+        }
+      } catch {
+        // Ignore malformed client frames
+      }
+    });
+    ws.on("close", () => {
+      if (wss.clients.size === 0 && !pgIdleReleaseTimer) {
+        pgIdleReleaseTimer = setTimeout(() => {
+          pgIdleReleaseTimer = null;
+          if (wss.clients.size === 0) {
+            releasePgListener();
+          }
+        }, 30000);
+      }
+    });
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "connected",
+          timestamp: new Date().toISOString(),
+        })
+      );
+    }
+  });
+
+  const wsHeartbeat = setInterval(() => {
+    wss.clients.forEach((client) => {
+      const ws = client as AliveWebSocket;
+      if (ws.isAlive === false) {
+        ws.terminate();
+        return;
+      }
+      ws.isAlive = false;
+      try {
+        ws.ping();
+      } catch {
+        // Ignore ping errors on closing sockets
+      }
+    });
+  }, 25000);
+
+  wss.on("close", () => {
+    clearInterval(wsHeartbeat);
+    releasePgListener();
+  });
+
+  const broadcastRealtime = (event: {
+    type: string;
+    scope: "launchpad" | "data" | "both";
+    entity?: string;
+    targetId?: string;
+  }) => {
+    const fullEvent = {
+      ...event,
+      timestamp: new Date().toISOString(),
+    };
+    sendToLocalWsClients(JSON.stringify(fullEvent));
+
+    if (hasSqlConfigured()) {
+      const pgPayload = JSON.stringify({
+        ...fullEvent,
+        instanceId: SERVER_INSTANCE_ID,
+      });
+      createPool()
+        .query("SELECT pg_notify('uppseekers_realtime', $1)", [pgPayload])
+        .catch(() => {});
+    }
+  };
 
   app.use(express.json({ limit: "50mb" }));
 
@@ -629,6 +827,7 @@ async function startServer() {
         }
       }
 
+      broadcastRealtime({ type: "student:created", scope: "data", entity: "students", targetId: uid });
       res.json({ success: true, user });
     } catch (e) {
       console.error('Error creating student:', e);
@@ -689,6 +888,7 @@ async function startServer() {
         }
       }
 
+      broadcastRealtime({ type: "staff:created", scope: "data", entity: "staff", targetId: uid });
       res.json({ success: true, user });
     } catch (e) {
       console.error('Error creating staff:', e);
@@ -740,6 +940,7 @@ async function startServer() {
           }
         }
       }, null);
+      broadcastRealtime({ type: "staff:updated", scope: "data", entity: "staff" });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -757,6 +958,7 @@ async function startServer() {
           await db.delete(users).where(eq(users.id, userRecord.id));
         }
       }, null);
+      broadcastRealtime({ type: "staff:deleted", scope: "data", entity: "staff", targetId: id });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -846,6 +1048,7 @@ async function startServer() {
           }
         }
       }, null);
+      broadcastRealtime({ type: "students:updated", scope: "data", entity: "students" });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -863,6 +1066,7 @@ async function startServer() {
           await db.delete(users).where(eq(users.id, userRecord.id));
         }
       }, null);
+      broadcastRealtime({ type: "student:deleted", scope: "data", entity: "students", targetId: id });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -953,6 +1157,7 @@ async function startServer() {
         }
       }, null);
 
+      broadcastRealtime({ type: "student:updated", scope: "data", entity: "student", targetId: student.id });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -1015,6 +1220,7 @@ async function startServer() {
         }
       }, null);
 
+      broadcastRealtime({ type: "user:password_changed", scope: "data", entity: "users" });
       res.json({ success: true, message: "Password updated successfully" });
     } catch (e: any) {
       console.error("Error in /api/admin/change-password:", e);
@@ -1279,6 +1485,7 @@ async function startServer() {
           });
         }
       }, null);
+      broadcastRealtime({ type: "batches:updated", scope: "data", entity: "batches" });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -1291,6 +1498,7 @@ async function startServer() {
       if (id) {
         await safeDbQuery(() => db.delete(batchesData).where(eq(batchesData.id, id)), null);
       }
+      broadcastRealtime({ type: "batch:deleted", scope: "data", entity: "batches", targetId: id });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -1340,6 +1548,7 @@ async function startServer() {
           });
         }
       }, null);
+      broadcastRealtime({ type: "events:updated", scope: "data", entity: "events" });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -1352,6 +1561,7 @@ async function startServer() {
       if (id) {
         await safeDbQuery(() => db.delete(eventsData).where(eq(eventsData.id, id)), null);
       }
+      broadcastRealtime({ type: "event:deleted", scope: "data", entity: "events", targetId: id });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -1751,6 +1961,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "permissions:updated", scope: "data", entity: "permissions" });
       res.json({ success: true });
     } catch (e) {
       res.json({ success: true });
@@ -1758,6 +1969,7 @@ Provide your response in two clearly labeled sections using Markdown:
   });
 
   app.get("/api/data", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
       const allUsers = await safeDbQuery(() => db.select().from(users), []);
       const allStudentsData = await safeDbQuery(() => db.select().from(studentsData), []);
@@ -1849,6 +2061,7 @@ Provide your response in two clearly labeled sections using Markdown:
 
   // Launchpad Module API Endpoints
   app.get("/api/launchpad/state", async (req, res) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
     try {
       const subjects = await safeDbQuery(() => db.select().from(launchpadSubjects).orderBy(asc(launchpadSubjects.sortOrder)), []);
       const chapters = await safeDbQuery(() => db.select().from(launchpadChapters).orderBy(asc(launchpadChapters.weekNumber)), []);
@@ -1931,6 +2144,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:subject_saved", scope: "launchpad", entity: "subjects", targetId: s.id });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save launchpad subject" });
@@ -1945,6 +2159,7 @@ Provide your response in two clearly labeled sections using Markdown:
         await db.delete(launchpadCertificationQuestions).where(eq(launchpadCertificationQuestions.subjectId, id));
         await db.delete(launchpadSubjects).where(eq(launchpadSubjects.id, id));
       }, null);
+      broadcastRealtime({ type: "launchpad:subject_deleted", scope: "launchpad", entity: "subjects", targetId: id });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete launchpad subject" });
@@ -1983,6 +2198,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:chapter_saved", scope: "launchpad", entity: "chapters", targetId: c.id });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save launchpad chapter" });
@@ -2003,6 +2219,7 @@ Provide your response in two clearly labeled sections using Markdown:
             .where(eq(launchpadChapters.id, ch.id));
         }
       }, null);
+      broadcastRealtime({ type: "launchpad:chapters_reordered", scope: "launchpad", entity: "chapters" });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to reorder chapters" });
@@ -2015,6 +2232,7 @@ Provide your response in two clearly labeled sections using Markdown:
       await safeDbQuery(async () => {
         await db.delete(launchpadChapters).where(eq(launchpadChapters.id, id));
       }, null);
+      broadcastRealtime({ type: "launchpad:chapter_deleted", scope: "launchpad", entity: "chapters", targetId: id });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete launchpad chapter" });
@@ -2047,6 +2265,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:cert_question_saved", scope: "launchpad", entity: "certQuestions", targetId: q.id });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save certification question" });
@@ -2059,6 +2278,7 @@ Provide your response in two clearly labeled sections using Markdown:
       await safeDbQuery(async () => {
         await db.delete(launchpadCertificationQuestions).where(eq(launchpadCertificationQuestions.id, id));
       }, null);
+      broadcastRealtime({ type: "launchpad:cert_question_deleted", scope: "launchpad", entity: "certQuestions", targetId: id });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to delete certification question" });
@@ -2107,6 +2327,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:permissions_updated", scope: "launchpad", entity: "permissions", targetId: userId });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save launchpad permission" });
@@ -2126,6 +2347,7 @@ Provide your response in two clearly labeled sections using Markdown:
             .onConflictDoNothing({ target: launchpadStudentEnrollments.studentId });
         }
       }, null);
+      broadcastRealtime({ type: "launchpad:enrollments_updated", scope: "launchpad", entity: "enrollments" });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to enroll students" });
@@ -2138,6 +2360,7 @@ Provide your response in two clearly labeled sections using Markdown:
       await safeDbQuery(async () => {
         await db.delete(launchpadStudentEnrollments).where(eq(launchpadStudentEnrollments.studentId, studentId));
       }, null);
+      broadcastRealtime({ type: "launchpad:enrollment_deleted", scope: "launchpad", entity: "enrollments", targetId: studentId });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to remove enrollment" });
@@ -2152,6 +2375,16 @@ Provide your response in two clearly labeled sections using Markdown:
       }
       const id = `${studentId}__${subjectId}`;
       await safeDbQuery(async () => {
+        // Automatically ensure the student is enrolled in Launchpad whenever a subject is unlocked
+        if (Boolean(isUnlocked)) {
+          await db.insert(launchpadStudentEnrollments)
+            .values({
+              studentId,
+              assignedBy: unlockedBy || 'Counselor',
+              assignedAt: new Date(),
+            })
+            .onConflictDoNothing({ target: launchpadStudentEnrollments.studentId });
+        }
         await db.insert(launchpadSubjectReleases)
           .values({
             id,
@@ -2170,6 +2403,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:release_updated", scope: "launchpad", entity: "releases", targetId: studentId });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to update subject release" });
@@ -2229,6 +2463,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:progress_updated", scope: "launchpad", entity: "progress", targetId: studentId });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save launchpad progress" });
@@ -2263,6 +2498,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:certification_saved", scope: "launchpad", entity: "certifications", targetId: studentId });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save certification" });
@@ -2305,6 +2541,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:evaluation_saved", scope: "launchpad", entity: "evaluations", targetId: ev.studentId });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save launchpad evaluation" });
@@ -2339,6 +2576,7 @@ Provide your response in two clearly labeled sections using Markdown:
             },
           });
       }, null);
+      broadcastRealtime({ type: "launchpad:notification_created", scope: "launchpad", entity: "notifications", targetId: n.recipientId });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to save notification" });
@@ -2353,6 +2591,7 @@ Provide your response in two clearly labeled sections using Markdown:
           .set({ isRead: true })
           .where(eq(notificationsTable.id, id));
       }, null);
+      broadcastRealtime({ type: "launchpad:notification_read", scope: "launchpad", entity: "notifications", targetId: id });
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Failed to mark notification read" });
@@ -3854,14 +4093,23 @@ Preserve the author's exact wording wherever present in the document. If a list 
     });
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(
+      express.static(distPath, {
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith('.html')) {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+          }
+        },
+      })
+    );
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
   if (!process.env.VERCEL) {
-    app.listen(PORT, "0.0.0.0", () => {
+    httpServer.listen(PORT, "0.0.0.0", () => {
       console.log(`Server running on http://0.0.0.0:${PORT}`);
     });
   }

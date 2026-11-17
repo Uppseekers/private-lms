@@ -65,7 +65,12 @@ export default function StudentLaunchpad() {
     launchpadCertifications: rawLaunchpadCertifications,
     saveLaunchpadCertification,
     launchpadEvaluations: rawLaunchpadEvaluations,
+    initializeData,
   } = useDatabase();
+
+  useEffect(() => {
+    void initializeData(localStorage.getItem('auth_token') || '');
+  }, []);
 
   const launchpadSubjects = Array.isArray(rawLaunchpadSubjects) ? rawLaunchpadSubjects : [];
   const launchpadChapters = Array.isArray(rawLaunchpadChapters) ? rawLaunchpadChapters : [];
@@ -77,21 +82,43 @@ export default function StudentLaunchpad() {
   const launchpadEvaluations = Array.isArray(rawLaunchpadEvaluations) ? rawLaunchpadEvaluations : [];
 
   const currentStudent = useMemo(() => {
+    const cleanUserEmail = (currentUser?.email || '').trim().toLowerCase();
     return (
       students.find(
         (s) =>
           (currentUser?.id && s.id === currentUser.id) ||
-          (currentUser?.email && s.email?.toLowerCase() === currentUser.email.toLowerCase())
-      ) || students[0]
+          (cleanUserEmail && (s.email || '').trim().toLowerCase() === cleanUserEmail)
+      ) ||
+      ((currentUser?.role || '').toUpperCase() === 'STUDENT'
+        ? (currentUser as any)
+        : students[0])
     );
   }, [students, currentUser]);
 
-  const studentId = currentStudent?.id || 'STU-101';
+  const studentId = currentStudent?.id || currentUser?.id || 'STU-101';
   const studentName = currentStudent?.name || currentUser?.name || 'Student';
 
+  const studentCandidateIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (studentId) ids.add(studentId);
+    if (currentUser?.id) ids.add(currentUser.id);
+    const cleanEmail = (currentStudent?.email || currentUser?.email || '').trim().toLowerCase();
+    if (cleanEmail) {
+      students.forEach((s) => {
+        if ((s.email || '').trim().toLowerCase() === cleanEmail && s.id) {
+          ids.add(s.id);
+        }
+      });
+    }
+    return ids;
+  }, [studentId, currentUser?.id, currentUser?.email, currentStudent?.email, students]);
+
   const isEnrolled = useMemo(() => {
-    return launchpadEnrollments.some((e) => e.studentId === studentId);
-  }, [launchpadEnrollments, studentId]);
+    return (
+      launchpadEnrollments.some((e) => studentCandidateIds.has(e.studentId)) ||
+      launchpadSubjectReleases.some((r) => studentCandidateIds.has(r.studentId) && r.isUnlocked)
+    );
+  }, [launchpadEnrollments, launchpadSubjectReleases, studentCandidateIds]);
 
   const visibleSubjects = useMemo(
     () =>
@@ -134,23 +161,25 @@ export default function StudentLaunchpad() {
 
   // Helper: check if subject is unlocked for current student
   const isSubjectUnlocked = (subjectId: string) => {
-    const release = launchpadSubjectReleases.find(
-      (r) => r.studentId === studentId && r.subjectId === subjectId
+    return launchpadSubjectReleases.some(
+      (r) => studentCandidateIds.has(r.studentId) && r.subjectId === subjectId && r.isUnlocked
     );
-    return Boolean(release?.isUnlocked);
   };
 
   // Helper: get certification for a subject
   const getCertification = (subjectId: string) => {
     return launchpadCertifications.find(
-      (c) => c.studentId === studentId && c.subjectId === subjectId && c.passed
+      (c) => studentCandidateIds.has(c.studentId) && c.subjectId === subjectId && c.passed
     );
   };
 
   // Helper: get week progress record
   const getWeekProgress = (subjectId: string, weekNumber: number): LaunchpadWeekProgress => {
     const found = launchpadProgress.find(
-      (p) => p.studentId === studentId && p.subjectId === subjectId && p.weekNumber === weekNumber
+      (p) =>
+        studentCandidateIds.has(p.studentId) &&
+        p.subjectId === subjectId &&
+        p.weekNumber === weekNumber
     );
     return (
       found || {
@@ -170,7 +199,10 @@ export default function StudentLaunchpad() {
   const getEffectiveEvalStatus = (subjectId: string, weekNumber: number) => {
     const wp = getWeekProgress(subjectId, weekNumber);
     const ev = launchpadEvaluations.find(
-      (e) => e.studentId === studentId && e.subjectId === subjectId && e.weekNumber === weekNumber
+      (e) =>
+        studentCandidateIds.has(e.studentId) &&
+        e.subjectId === subjectId &&
+        e.weekNumber === weekNumber
     );
     return wp.evaluationStatus || ev?.status || null;
   };
@@ -201,7 +233,7 @@ export default function StudentLaunchpad() {
     });
 
     const cert = getCertification(subject.id);
-    const unlockedByCounselor = isEnrolled && isSubjectUnlocked(subject.id);
+    const unlockedByCounselor = isSubjectUnlocked(subject.id);
     const hasNeedsRevision = Boolean(needsRevisionWeek);
     const hasSubmittedOrProgress =
       submittedWeeks > 0 || completedSteps > 0 || Boolean(cert) || hasNeedsRevision;
@@ -699,7 +731,7 @@ export default function StudentLaunchpad() {
     const weekProgress = getWeekProgress(activeSubject.id, currentWeek.weekNumber);
     const currentEvaluation = launchpadEvaluations.find(
       (e) =>
-        e.studentId === studentId &&
+        studentCandidateIds.has(e.studentId) &&
         e.subjectId === activeSubject.id &&
         e.weekNumber === currentWeek.weekNumber
     );

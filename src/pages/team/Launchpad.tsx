@@ -94,7 +94,12 @@ export default function TeamLaunchpad() {
     toggleLaunchpadSubjectRelease,
     launchpadProgress,
     launchpadCertifications,
+    initializeData,
   } = useDatabase();
+
+  useEffect(() => {
+    void initializeData(localStorage.getItem('auth_token') || '');
+  }, []);
 
   const { studentTabAccess, editCurriculumAccess } = useMemo(
     () => getStaffLaunchpadPermissions(currentUser, launchpadPermissions, permissionsMatrix),

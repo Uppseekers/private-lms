@@ -2306,11 +2306,18 @@ function calculateReadiness(student: Student): number {
   });
 
   const setEvents = async (newEvents: EventItem[]) => {
+    const token = localStorage.getItem('auth_token') || 'custom_user';
     const validNewEvents = Array.isArray(newEvents) ? newEvents : [];
     const currentEvents = Array.isArray(events) ? events : [];
     const deleted = currentEvents.filter(prev => !validNewEvents.some(n => n.id === prev.id));
     deleted.forEach(d => {
-      if (d.id) void deleteDocFromFirestore('events', d.id);
+      if (d.id) {
+        void deleteDocFromFirestore('events', d.id);
+        fetch(`/api/events/${encodeURIComponent(d.id)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        }).catch(console.error);
+      }
     });
     setEventsState(validNewEvents);
     safeLocalStorageSet('uppseekers_events_v2', validNewEvents);
@@ -2319,7 +2326,6 @@ function calculateReadiness(student: Student): number {
         void syncDocToFirestore('events', e.id, e);
       }
     });
-    const token = localStorage.getItem('auth_token') || 'custom_user';
     fetch('/api/events', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -2339,11 +2345,18 @@ function calculateReadiness(student: Student): number {
   });
 
   const setBatches = async (newBatches: Batch[]) => {
+    const token = localStorage.getItem('auth_token') || 'custom_user';
     const validNewBatches = Array.isArray(newBatches) ? newBatches : [];
     const currentBatches = Array.isArray(batches) ? batches : [];
     const deleted = currentBatches.filter(prev => !validNewBatches.some(n => n.id === prev.id));
     deleted.forEach(d => {
-      if (d.id) void deleteDocFromFirestore('batches', d.id);
+      if (d.id) {
+        void deleteDocFromFirestore('batches', d.id);
+        fetch(`/api/batches/${encodeURIComponent(d.id)}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${token}` }
+        }).catch(console.error);
+      }
     });
     setBatchesState(validNewBatches);
     safeLocalStorageSet('uppseekers_batches_v2', validNewBatches);
@@ -2352,7 +2365,6 @@ function calculateReadiness(student: Student): number {
         void syncDocToFirestore('batches', b.id, b);
       }
     });
-    const token = localStorage.getItem('auth_token') || 'custom_user';
     fetch('/api/batches', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
@@ -2782,6 +2794,16 @@ function calculateReadiness(student: Student): number {
   const toggleLaunchpadSubjectRelease = (studentId: string, subjectId: string, isUnlocked: boolean, unlockedBy?: string) => {
     const now = new Date().toISOString();
     const id = `${studentId}__${subjectId}`;
+    // Optimistically ensure the student is also enrolled in Launchpad whenever a subject is unlocked
+    if (isUnlocked) {
+      setLaunchpadEnrollmentsState(prev => {
+        if (prev.some(e => e.studentId === studentId)) return prev;
+        const next = [...prev, { studentId, assignedBy: unlockedBy || 'Counselor', assignedAt: now }];
+        safeLocalStorageSet('uppseekers_launchpad_enrollments_v1', next);
+        void syncDocToFirestore('launchpad', 'enrollments', { items: next, updatedAt: now });
+        return next;
+      });
+    }
     setLaunchpadSubjectReleasesState(prev => {
       const exists = prev.some(r => r.id === id);
       const item: LaunchpadSubjectRelease = {
@@ -3175,197 +3197,357 @@ function calculateReadiness(student: Student): number {
     }).catch(console.error);
   };
 
-  const initializeData = async (token: string) => {
+  const hydrateLaunchpadData = async (token: string) => {
     try {
-      const response = await fetch('/api/data', {
+      const r = await fetch(`/api/launchpad/state?t=${Date.now()}`, {
+        cache: 'no-store',
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      // Also hydrate Launchpad state from Cloud SQL if available
-      fetch('/api/launchpad/state', {
-        headers: { 'Authorization': `Bearer ${token}` }
-      }).then(r => r.ok ? r.json() : null).then(lpData => {
-        if (lpData) {
-          if (Array.isArray(lpData.subjects)) {
-            const mappedSubjects: LaunchpadSubject[] = lpData.subjects.map((s: any) => ({
-              id: s.id,
-              order: s.sortOrder ?? s.order ?? 1,
-              title: s.title,
-              description: s.description || '',
-              accentHex: s.accentHex || '#4F46E5',
-              surfaceTint: s.surfaceTint || '#EEF2FF',
-              iconKey: s.iconKey || 'comm-public-speaking',
-              customIconUrl: s.customIconUrl || undefined,
-              hasCurriculum: Boolean(s.hasCurriculum),
-              courseGoal: s.courseGoal || undefined,
-              passingThreshold: s.passingThreshold ?? 75,
-              certificateTitle: s.certificateTitle || undefined,
-              isArchived: Boolean(s.isArchived),
-            }));
-            const mergedSubjects = mergeLaunchpadSubjectsWithDefaults(mappedSubjects);
-            setLaunchpadSubjectsState(mergedSubjects);
-            safeLocalStorageSet('uppseekers_launchpad_subjects_v1', mergedSubjects);
-          }
-          if (Array.isArray(lpData.chapters)) {
-            const mappedChapters: LaunchpadWeekModule[] = lpData.chapters.map((c: any) => ({
-              id: c.id,
-              subjectId: c.subjectId,
-              weekNumber: c.weekNumber,
-              title: c.title,
-              learningObjectives: c.learningObjectives || [],
-              lecture: c.lectureJson || c.lecture || { title: '', speaker: '', url: '', duration: '', focusNote: '' },
-              readingGuide: c.readingGuideJson || c.readingGuide || { title: c.title, readTime: '5 min read', summary: '', sections: [] },
-              practicalExercise: c.practicalExerciseJson || c.practicalExercise || { title: '', scenario: '', selfCheckCriteria: [], fields: [] },
-            }));
-            const mergedChapters = mergeLaunchpadChaptersWithDefaults(mappedChapters);
-            setLaunchpadChaptersState(mergedChapters);
-            safeLocalStorageSet('uppseekers_launchpad_chapters_v1', mergedChapters);
-          }
-          if (Array.isArray(lpData.certQuestions)) {
-            const mappedQs: LaunchpadCertQuestionRecord[] = lpData.certQuestions.map((q: any) => ({
-              id: q.id,
-              subjectId: q.subjectId,
-              questionType: q.questionType,
-              sortOrder: q.sortOrder ?? 1,
-              payload: q.payloadJson || q.payload || {},
-            }));
-            const mergedQs = mergeLaunchpadCertQuestionsWithDefaults(mappedQs);
-            setLaunchpadCertQuestionsState(mergedQs);
-            safeLocalStorageSet('uppseekers_launchpad_cert_qs_v1', mergedQs);
-          }
-          if (Array.isArray(lpData.permissions) && lpData.permissions.length > 0) {
-            setLaunchpadPermissionsState(lpData.permissions);
-            safeLocalStorageSet('uppseekers_launchpad_perms_v1', lpData.permissions);
-          }
-          if (Array.isArray(lpData.enrollments) && lpData.enrollments.length > 0) {
-            setLaunchpadEnrollmentsState(lpData.enrollments);
-            safeLocalStorageSet('uppseekers_launchpad_enrollments_v1', lpData.enrollments);
-          }
-          if (Array.isArray(lpData.releases) && lpData.releases.length > 0) {
-            setLaunchpadSubjectReleasesState(lpData.releases);
-            safeLocalStorageSet('uppseekers_launchpad_releases_v1', lpData.releases);
-          }
-          if (Array.isArray(lpData.progress) && lpData.progress.length > 0) {
-            setLaunchpadProgressState(lpData.progress);
-            safeLocalStorageSet('uppseekers_launchpad_progress_v1', lpData.progress);
-          }
-          if (Array.isArray(lpData.certifications) && lpData.certifications.length > 0) {
-            setLaunchpadCertificationsState(lpData.certifications);
-            safeLocalStorageSet('uppseekers_launchpad_certs_v1', lpData.certifications);
-          }
-          if (Array.isArray(lpData.evaluations) && lpData.evaluations.length > 0) {
-            setLaunchpadEvaluationsState(lpData.evaluations);
-            safeLocalStorageSet('uppseekers_launchpad_evals_v1', lpData.evaluations);
-          }
-          if (Array.isArray(lpData.notifications) && lpData.notifications.length > 0) {
-            const mappedNotifs: AppNotification[] = lpData.notifications.map((n: any) => ({
-              id: n.id,
-              recipientType: n.recipientType,
-              recipientId: n.recipientId,
-              title: n.title,
-              message: n.message,
-              category: n.category || 'LAUNCHPAD',
-              link: n.link || '/student/launchpad',
-              metadataJson: n.metadataJson || n.metadata || {},
-              isRead: Boolean(n.isRead),
-              createdAt: n.createdAt || new Date().toISOString(),
-            }));
-            setAppNotificationsState(mappedNotifs);
-            safeLocalStorageSet('uppseekers_notifications_v1', mappedNotifs);
-          }
-        }
-      }).catch(() => {});
+      if (!r.ok) return null;
+      const lpData = await r.json();
+      if (!lpData) return null;
 
-      if (response.ok) {
-        const data = await response.json();
-        let hydratedStudents: Student[] = [];
-        let hydratedStaff: StaffMember[] = [];
-
-        if (Array.isArray(data.students) && data.students.length > 0) {
-          hydratedStudents = data.students.map((raw: any) => {
-            const s = { ...raw } as Student;
-            if (!s.intake) s.intake = 'Fall 2026';
-            if (!Array.isArray(s.tasks)) s.tasks = [];
-            if (!Array.isArray(s.activities)) s.activities = [];
-            if (!Array.isArray(s.documents)) s.documents = [];
-            if (!Array.isArray(s.shortlist)) s.shortlist = [];
-            if (!Array.isArray(s.countries)) s.countries = ['USA'];
-            if (!s.operationalLogs || s.operationalLogs.length === 0) {
-              s.operationalLogs = getDefaultOperationalLogsForStudent(s.id, s.name, s.counselor);
-            }
-            if (s.phone && typeof s.phone === 'string' && s.phone.includes('|')) {
-              s.phone = s.phone.split('|')[0].trim();
-            }
-            s.tasks = s.tasks.map((t) => normalizeTask(t, { studentId: s.id, studentName: s.name }));
-            s.activities = s.activities.map((a) => normalizeActivity(a, { studentId: s.id, studentName: s.name }));
-            return s;
-          });
-          setStudentsState(hydratedStudents);
-          safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(hydratedStudents));
-        }
-
-        if (Array.isArray(data.staff) && data.staff.length > 0) {
-          hydratedStaff = data.staff;
-          setStaffState(hydratedStaff);
-          safeLocalStorageSet('uppseekers_staff_v2', hydratedStaff);
-        }
-
-        if (Array.isArray(data.batches) && data.batches.length > 0) {
-          setBatchesState(data.batches);
-          safeLocalStorageSet('uppseekers_batches_v2', data.batches);
-        }
-
-        if (Array.isArray(data.events) && data.events.length > 0) {
-          setEventsState(data.events);
-          safeLocalStorageSet('uppseekers_events_v2', data.events);
-        }
-
-        if (data.permissionsMatrix && typeof data.permissionsMatrix === 'object') {
-          const mergedPerms = mergePermissionsWithDefaults(data.permissionsMatrix);
-          setPermissionsMatrixState(mergedPerms);
-          safeLocalStorageSet('uppseekers_permissions_v2', mergedPerms);
-        }
-
-        // Sync active currentUser session with fresh server profile/role data
-        setCurrentUser(prev => {
-          if (!prev) return prev;
-          const prevEmail = (prev.email || '').trim().toLowerCase();
-          const prevId = (prev.id || '').trim();
-          const isPrevStudent = (prev.role || '').toUpperCase() === 'STUDENT';
-
-          if (isPrevStudent && hydratedStudents.length > 0) {
-            const matchedStu = hydratedStudents.find(
-              s =>
-                (prevId && s.id === prevId) ||
-                (prevEmail && (s.email || '').trim().toLowerCase() === prevEmail)
-            );
-            if (matchedStu) {
-              return {
-                ...prev,
-                ...matchedStu,
-                role: 'STUDENT',
-                status: 'Active',
-              } as any;
-            }
-          } else if (!isPrevStudent && hydratedStaff.length > 0) {
-            const matchedStaff = hydratedStaff.find(
-              st =>
-                (prevId && (st.id === prevId || (prevId === '1' && st.id === 'admin-1') || (prevId === 'admin-1' && st.id === '1'))) ||
-                (prevEmail && (st.email || '').trim().toLowerCase() === prevEmail)
-            );
-            if (matchedStaff) {
-              return { ...prev, ...matchedStaff };
-            }
-          }
-          return prev;
-        });
-
-        return data;
+      if (Array.isArray(lpData.subjects)) {
+        const mappedSubjects: LaunchpadSubject[] = lpData.subjects.map((s: any) => ({
+          id: s.id,
+          order: s.sortOrder ?? s.order ?? 1,
+          title: s.title,
+          description: s.description || '',
+          accentHex: s.accentHex || '#4F46E5',
+          surfaceTint: s.surfaceTint || '#EEF2FF',
+          iconKey: s.iconKey || 'comm-public-speaking',
+          customIconUrl: s.customIconUrl || undefined,
+          hasCurriculum: Boolean(s.hasCurriculum),
+          courseGoal: s.courseGoal || undefined,
+          passingThreshold: s.passingThreshold ?? 75,
+          certificateTitle: s.certificateTitle || undefined,
+          isArchived: Boolean(s.isArchived),
+        }));
+        const resolvedSubjects =
+          mappedSubjects.length > 0
+            ? [...mappedSubjects].sort((a, b) => (a.order ?? 99) - (b.order ?? 99))
+            : mergeLaunchpadSubjectsWithDefaults(mappedSubjects);
+        setLaunchpadSubjectsState(resolvedSubjects);
+        safeLocalStorageSet('uppseekers_launchpad_subjects_v1', resolvedSubjects);
       }
-    } catch (e) {
-      console.error('Failed to initialize data from server', e);
+      if (Array.isArray(lpData.chapters)) {
+        const mappedChapters: LaunchpadWeekModule[] = lpData.chapters.map((c: any) => ({
+          id: c.id,
+          subjectId: c.subjectId,
+          weekNumber: c.weekNumber,
+          title: c.title,
+          learningObjectives: c.learningObjectives || [],
+          lecture: c.lectureJson || c.lecture || { title: '', speaker: '', url: '', duration: '', focusNote: '' },
+          readingGuide: c.readingGuideJson || c.readingGuide || { title: c.title, readTime: '5 min read', summary: '', sections: [] },
+          practicalExercise: c.practicalExerciseJson || c.practicalExercise || { title: '', scenario: '', selfCheckCriteria: [], fields: [] },
+        }));
+        const mergedChapters = mergeLaunchpadChaptersWithDefaults(mappedChapters);
+        setLaunchpadChaptersState(mergedChapters);
+        safeLocalStorageSet('uppseekers_launchpad_chapters_v1', mergedChapters);
+      }
+      if (Array.isArray(lpData.certQuestions)) {
+        const mappedQs: LaunchpadCertQuestionRecord[] = lpData.certQuestions.map((q: any) => ({
+          id: q.id,
+          subjectId: q.subjectId,
+          questionType: q.questionType,
+          sortOrder: q.sortOrder ?? 1,
+          payload: q.payloadJson || q.payload || {},
+        }));
+        const mergedQs = mergeLaunchpadCertQuestionsWithDefaults(mappedQs);
+        setLaunchpadCertQuestionsState(mergedQs);
+        safeLocalStorageSet('uppseekers_launchpad_cert_qs_v1', mergedQs);
+      }
+      if (Array.isArray(lpData.permissions)) {
+        setLaunchpadPermissionsState(lpData.permissions);
+        safeLocalStorageSet('uppseekers_launchpad_perms_v1', lpData.permissions);
+      }
+      if (Array.isArray(lpData.enrollments)) {
+        setLaunchpadEnrollmentsState(lpData.enrollments);
+        safeLocalStorageSet('uppseekers_launchpad_enrollments_v1', lpData.enrollments);
+      }
+      if (Array.isArray(lpData.releases)) {
+        setLaunchpadSubjectReleasesState(lpData.releases);
+        safeLocalStorageSet('uppseekers_launchpad_releases_v1', lpData.releases);
+      }
+      if (Array.isArray(lpData.progress)) {
+        setLaunchpadProgressState(lpData.progress);
+        safeLocalStorageSet('uppseekers_launchpad_progress_v1', lpData.progress);
+      }
+      if (Array.isArray(lpData.certifications)) {
+        setLaunchpadCertificationsState(lpData.certifications);
+        safeLocalStorageSet('uppseekers_launchpad_certs_v1', lpData.certifications);
+      }
+      if (Array.isArray(lpData.evaluations)) {
+        setLaunchpadEvaluationsState(lpData.evaluations);
+        safeLocalStorageSet('uppseekers_launchpad_evals_v1', lpData.evaluations);
+      }
+      if (Array.isArray(lpData.notifications)) {
+        const mappedNotifs: AppNotification[] = lpData.notifications.map((n: any) => ({
+          id: n.id,
+          recipientType: n.recipientType,
+          recipientId: n.recipientId,
+          title: n.title,
+          message: n.message,
+          category: n.category || 'LAUNCHPAD',
+          link: n.link || '/student/launchpad',
+          metadataJson: n.metadataJson || n.metadata || {},
+          isRead: Boolean(n.isRead),
+          createdAt: n.createdAt || new Date().toISOString(),
+        }));
+        setAppNotificationsState(mappedNotifs);
+        safeLocalStorageSet('uppseekers_notifications_v1', mappedNotifs);
+      }
+      return lpData;
+    } catch {
+      return null;
     }
-    return null;
   };
+
+  const hydratePortalData = async (token: string) => {
+    try {
+      const response = await fetch(`/api/data?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (!response.ok) return null;
+
+      const data = await response.json();
+      let hydratedStudents: Student[] = [];
+      let hydratedStaff: StaffMember[] = [];
+
+      if (Array.isArray(data.students) && data.students.length > 0) {
+        hydratedStudents = data.students.map((raw: any) => {
+          const s = { ...raw } as Student;
+          if (!s.intake) s.intake = 'Fall 2026';
+          if (!Array.isArray(s.tasks)) s.tasks = [];
+          if (!Array.isArray(s.activities)) s.activities = [];
+          if (!Array.isArray(s.documents)) s.documents = [];
+          if (!Array.isArray(s.shortlist)) s.shortlist = [];
+          if (!Array.isArray(s.countries)) s.countries = ['USA'];
+          if (!s.operationalLogs || s.operationalLogs.length === 0) {
+            s.operationalLogs = getDefaultOperationalLogsForStudent(s.id, s.name, s.counselor);
+          }
+          if (s.phone && typeof s.phone === 'string' && s.phone.includes('|')) {
+            s.phone = s.phone.split('|')[0].trim();
+          }
+          s.tasks = s.tasks.map((t) => normalizeTask(t, { studentId: s.id, studentName: s.name }));
+          s.activities = s.activities.map((a) => normalizeActivity(a, { studentId: s.id, studentName: s.name }));
+          return s;
+        });
+        setStudentsState(hydratedStudents);
+        safeLocalStorageSet('uppseekers_students_v2', sanitizeStudentsForLocalStorage(hydratedStudents));
+      }
+
+      if (Array.isArray(data.staff) && data.staff.length > 0) {
+        hydratedStaff = data.staff;
+        setStaffState(hydratedStaff);
+        safeLocalStorageSet('uppseekers_staff_v2', hydratedStaff);
+      }
+
+      if (Array.isArray(data.batches)) {
+        setBatchesState(data.batches);
+        safeLocalStorageSet('uppseekers_batches_v2', data.batches);
+      }
+
+      if (Array.isArray(data.events)) {
+        setEventsState(data.events);
+        safeLocalStorageSet('uppseekers_events_v2', data.events);
+      }
+
+      if (data.permissionsMatrix && typeof data.permissionsMatrix === 'object') {
+        const mergedPerms = mergePermissionsWithDefaults(data.permissionsMatrix);
+        setPermissionsMatrixState(mergedPerms);
+        safeLocalStorageSet('uppseekers_permissions_v2', mergedPerms);
+      }
+
+      // Sync active currentUser session with fresh server profile/role data
+      setCurrentUser(prev => {
+        if (!prev) return prev;
+        const prevEmail = (prev.email || '').trim().toLowerCase();
+        const prevId = (prev.id || '').trim();
+        const isPrevStudent = (prev.role || '').toUpperCase() === 'STUDENT';
+
+        if (isPrevStudent && hydratedStudents.length > 0) {
+          const matchedStu = hydratedStudents.find(
+            s =>
+              (prevId && s.id === prevId) ||
+              (prevEmail && (s.email || '').trim().toLowerCase() === prevEmail)
+          );
+          if (matchedStu) {
+            return {
+              ...prev,
+              ...matchedStu,
+              role: 'STUDENT',
+              status: 'Active',
+            } as any;
+          }
+        } else if (!isPrevStudent && hydratedStaff.length > 0) {
+          const matchedStaff = hydratedStaff.find(
+            st =>
+              (prevId && (st.id === prevId || (prevId === '1' && st.id === 'admin-1') || (prevId === 'admin-1' && st.id === '1'))) ||
+              (prevEmail && (st.email || '').trim().toLowerCase() === prevEmail)
+          );
+          if (matchedStaff) {
+            return { ...prev, ...matchedStaff };
+          }
+        }
+        return prev;
+      });
+
+      return data;
+    } catch (e) {
+      console.error('Failed to hydrate portal data from server', e);
+      return null;
+    }
+  };
+
+  const initializeData = async (token: string) => {
+    const [portalData] = await Promise.all([
+      hydratePortalData(token),
+      hydrateLaunchpadData(token),
+    ]);
+    return portalData;
+  };
+
+  // Real-time WebSocket subscription (/ws/realtime) + reconnect & tab-visibility state reconciliation
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    let ws: WebSocket | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+    let clientPingInterval: ReturnType<typeof setInterval> | null = null;
+    let isDisposed = false;
+    let hasConnectedOnce = false;
+    let reconnectAttempt = 0;
+    let pendingDataSync = false;
+    let pendingLaunchpadSync = false;
+
+    const flushPendingSync = () => {
+      coalesceTimer = null;
+      if (isDisposed) return;
+      const token = localStorage.getItem('auth_token') || '';
+      const needData = pendingDataSync;
+      const needLp = pendingLaunchpadSync;
+      pendingDataSync = false;
+      pendingLaunchpadSync = false;
+
+      if (needData) {
+        void hydratePortalData(token);
+      }
+      if (needLp) {
+        void hydrateLaunchpadData(token);
+      }
+    };
+
+    const scheduleRealtimeSync = (scope: 'data' | 'launchpad' | 'both') => {
+      if (scope === 'data' || scope === 'both') pendingDataSync = true;
+      if (scope === 'launchpad' || scope === 'both') pendingLaunchpadSync = true;
+      if (coalesceTimer) clearTimeout(coalesceTimer);
+      coalesceTimer = setTimeout(flushPendingSync, 150);
+    };
+
+    const connectWebSocket = () => {
+      if (isDisposed) return;
+      try {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/realtime`;
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          reconnectAttempt = 0;
+          if (hasConnectedOnce) {
+            // Reconcile full state from server immediately after reconnecting
+            scheduleRealtimeSync('both');
+          }
+          hasConnectedOnce = true;
+
+          if (clientPingInterval) clearInterval(clientPingInterval);
+          clientPingInterval = setInterval(() => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(JSON.stringify({ type: 'ping' }));
+              } catch {
+                // Ignore send errors
+              }
+            }
+          }, 25000);
+        };
+
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(String(evt.data));
+            if (!msg || msg.type === 'connected' || msg.type === 'pong') return;
+            if (msg.scope === 'launchpad' || msg.scope === 'data' || msg.scope === 'both') {
+              scheduleRealtimeSync(msg.scope);
+            } else {
+              scheduleRealtimeSync('both');
+            }
+          } catch {
+            // Ignore non-JSON frames
+          }
+        };
+
+        ws.onclose = () => {
+          if (clientPingInterval) {
+            clearInterval(clientPingInterval);
+            clientPingInterval = null;
+          }
+          if (!isDisposed) {
+            const delayMs = Math.min(1000 * Math.pow(2, reconnectAttempt), 10000);
+            reconnectAttempt += 1;
+            reconnectTimer = setTimeout(connectWebSocket, delayMs);
+          }
+        };
+
+        ws.onerror = () => {
+          try {
+            ws?.close();
+          } catch {
+            // Ignore close errors
+          }
+        };
+      } catch {
+        if (!isDisposed) {
+          const delayMs = Math.min(1000 * Math.pow(2, reconnectAttempt), 10000);
+          reconnectAttempt += 1;
+          reconnectTimer = setTimeout(connectWebSocket, delayMs);
+        }
+      }
+    };
+
+    connectWebSocket();
+
+    const handleVisibilityOrOnline = () => {
+      if (document.visibilityState === 'visible') {
+        scheduleRealtimeSync('both');
+        if (!ws || ws.readyState === WebSocket.CLOSED) {
+          if (reconnectTimer) clearTimeout(reconnectTimer);
+          reconnectAttempt = 0;
+          connectWebSocket();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityOrOnline);
+    window.addEventListener('online', handleVisibilityOrOnline);
+    window.addEventListener('focus', handleVisibilityOrOnline);
+
+    return () => {
+      isDisposed = true;
+      document.removeEventListener('visibilitychange', handleVisibilityOrOnline);
+      window.removeEventListener('online', handleVisibilityOrOnline);
+      window.removeEventListener('focus', handleVisibilityOrOnline);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (coalesceTimer) clearTimeout(coalesceTimer);
+      if (clientPingInterval) clearInterval(clientPingInterval);
+      try {
+        ws?.close();
+      } catch {
+        // Ignore close errors
+      }
+    };
+  }, []);
 
   return (
     <DatabaseContext.Provider value={{

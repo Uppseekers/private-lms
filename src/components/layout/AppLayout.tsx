@@ -99,7 +99,7 @@ export default function AppLayout() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const notifDropdownRef = useRef<HTMLDivElement>(null);
 
-  const { currentUser, permissionsMatrix, launchpadPermissions, launchpadEnrollments, appNotifications, staff, students, batches, events, setCurrentUser, setIsAuthenticated, setStaff, setStudents, firestoreStatus, signInWithGoogle, signOutAll } = useDatabase();
+  const { currentUser, permissionsMatrix, launchpadPermissions, launchpadEnrollments, launchpadSubjectReleases, appNotifications, staff, students, batches, events, setCurrentUser, setIsAuthenticated, setStaff, setStudents, firestoreStatus, signInWithGoogle, signOutAll } = useDatabase();
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [googleSyncing, setGoogleSyncing] = useState(false);
   const [googleSyncError, setGoogleSyncError] = useState<string | null>(null);
@@ -257,9 +257,38 @@ export default function AppLayout() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  const currentStudent = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0];
+  const cleanCurrentUserEmail = (currentUser?.email || '').trim().toLowerCase();
+  const currentStudent =
+    students.find(
+      s =>
+        (currentUser?.id && s.id === currentUser.id) ||
+        (cleanCurrentUserEmail && (s.email || '').trim().toLowerCase() === cleanCurrentUserEmail)
+    ) ||
+    ((currentUser?.role || '').toUpperCase() === 'STUDENT' ? (currentUser as any) : students[0]);
+
+  const currentStudentCandidateIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    if (currentStudent?.id) ids.add(currentStudent.id);
+    if (currentUser?.id) ids.add(currentUser.id);
+    const emailKey = (currentStudent?.email || currentUser?.email || '').trim().toLowerCase();
+    if (emailKey) {
+      students.forEach(s => {
+        if ((s.email || '').trim().toLowerCase() === emailKey && s.id) {
+          ids.add(s.id);
+        }
+      });
+    }
+    return ids;
+  }, [currentStudent?.id, currentStudent?.email, currentUser?.id, currentUser?.email, students]);
+
   const isStudentLaunchpadEnrolled = Boolean(
-    currentStudent && Array.isArray(launchpadEnrollments) && launchpadEnrollments.some(e => e.studentId === currentStudent.id)
+    currentStudent &&
+      ((Array.isArray(launchpadEnrollments) &&
+        launchpadEnrollments.some(e => currentStudentCandidateIds.has(e.studentId))) ||
+        (Array.isArray(launchpadSubjectReleases) &&
+          launchpadSubjectReleases.some(
+            r => currentStudentCandidateIds.has(r.studentId) && r.isUnlocked
+          )))
   );
 
   // Supersearch filtering across entity types
@@ -318,7 +347,7 @@ export default function AppLayout() {
     if (!isTeam && currentStudent) {
       // 0. LATEST REAL-TIME APP NOTIFICATIONS (newest first)
       (appNotifications || [])
-        .filter(n => n.recipientType === 'student' && n.recipientId === currentStudent.id)
+        .filter(n => n.recipientType === 'student' && currentStudentCandidateIds.has(n.recipientId))
         .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
         .forEach((n) => {
           list.push({
