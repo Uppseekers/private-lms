@@ -23,12 +23,27 @@ export function isUserAdmin(currentUser?: StaffMember | null): boolean {
 }
 
 /**
+ * Normalizes a display name or counselor label for resilient relational matching
+ * (strips honorifics, parenthetical role suffixes, and collapses whitespace).
+ */
+export function normalizePersonMatchToken(raw?: string | null): string {
+  if (!raw) return '';
+  return String(raw)
+    .toLowerCase()
+    .replace(/\([^)]*\)/g, ' ')
+    .replace(/\b(ms|mrs|mr|dr|prof|miss|mam|ma'am|maam|sir)\.?\b/g, ' ')
+    .replace(/[^a-z0-9@._\-\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Determines whether a staff member has global/unrestricted access to all students in the database.
  * Evaluates:
- * 1. Administrator roles (SYSTEM_ADMIN, OPERATIONS_LEAD, DEVELOPER, ADMIN, CATEGORY_MANAGER)
+ * 1. Administrator roles (SYSTEM_ADMIN, ADMIN, SUPER_ADMIN)
  * 2. Explicit students scope string ('All', 'ALL', 'Global', 'Global Scope', 'All Students')
- * 3. Category Manager role or roles granted 'Global Scope' in permissions matrix
- * 4. Stored permissions matrix in localStorage for the role
+ * 3. Category Manager, Operations Lead, Head Counselor, Academic Director roles
+ * 4. Roles granted 'Global Scope' in the live permissions matrix
  */
 export function canStaffAccessAllStudents(
   currentUser?: StaffMember | null,
@@ -40,24 +55,29 @@ export function canStaffAccessAllStudents(
   // 1. Check explicit staff member students scope field
   const studentsScope = (currentUser.students || '').trim().toLowerCase();
   const explicitScope = ((currentUser as any).scope || '').trim().toLowerCase();
+  const accessScope = ((currentUser as any).accessScope || (currentUser as any).access_scope || '').trim().toLowerCase();
   if (
     studentsScope === 'all' ||
+    studentsScope === 'all students' ||
     studentsScope === 'global' ||
     studentsScope === 'global scope' ||
-    studentsScope.includes('all') ||
-    studentsScope.includes('global') ||
-    explicitScope.includes('all') ||
-    explicitScope.includes('global')
+    /\b(all students|global scope|global)\b/.test(studentsScope) ||
+    explicitScope === 'all' ||
+    explicitScope.includes('global') ||
+    accessScope === 'all' ||
+    accessScope.includes('global')
   ) {
     return true;
   }
 
-  // 2. Check role-level global scope (e.g. CATEGORY_MANAGER)
+  // 2. Check role-level global scope (e.g. CATEGORY_MANAGER, OPERATIONS_LEAD)
   const roleUpper = (currentUser.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
   if (
     roleUpper === 'CATEGORY_MANAGER' ||
     roleUpper === 'CATEGORY_LEAD' ||
     roleUpper.includes('CATEGORY') ||
+    roleUpper === 'OPERATIONS_LEAD' ||
+    roleUpper === 'OPS_LEAD' ||
     roleUpper === 'ACADEMIC_DIRECTOR' ||
     roleUpper === 'HEAD_COUNSELOR'
   ) {
@@ -84,7 +104,226 @@ export function canStaffAccessAllStudents(
 }
 
 /**
- * Checks if a specific student is assigned to the staff member.
+ * Checks whether a single raw counselor/mentor value (ID, email, full name, or first name)
+ * refers to the given staff member.
+ */
+export function doesValueMatchStaffMember(rawVal: unknown, staffMember?: StaffMember | null): boolean {
+  if (!rawVal || !staffMember || typeof rawVal !== 'string') return false;
+  const rawTrimmed = rawVal.trim().toLowerCase();
+  if (
+    !rawTrimmed ||
+    rawTrimmed === 'unassigned' ||
+    rawTrimmed === 'none' ||
+    rawTrimmed === 'tbd' ||
+    rawTrimmed === 'pending assignment' ||
+    rawTrimmed === 'not assigned'
+  ) {
+    return false;
+  }
+
+  const staffId = (staffMember.id || '').trim().toLowerCase();
+  const staffEmail = (staffMember.email || '').trim().toLowerCase();
+  const staffNameNorm = normalizePersonMatchToken(staffMember.name);
+  const valNorm = normalizePersonMatchToken(rawVal);
+
+  if (staffId && rawTrimmed === staffId) return true;
+  if (staffEmail && rawTrimmed === staffEmail) return true;
+
+  // Handle email local-part match across same corporate domain (e.g. manika@uppseekers.com vs manika.premchandani@uppseekers.com)
+  if (rawTrimmed.includes('@') && staffNameNorm) {
+    const [rawLocal, rawDomain] = rawTrimmed.split('@');
+    const [, staffDomain] = staffEmail.split('@');
+    const rawLocalWords = rawLocal.replace(/[._-]+/g, ' ').trim();
+    if (rawLocalWords === staffNameNorm) return true;
+    const staffFirstWord = staffNameNorm.split(' ')[0] || '';
+    if (
+      staffDomain &&
+      rawDomain === staffDomain &&
+      staffFirstWord.length >= 4 &&
+      (rawLocalWords === staffFirstWord || rawLocalWords.split(' ')[0] === staffFirstWord)
+    ) {
+      return true;
+    }
+  }
+
+  if (!staffNameNorm || !valNorm) return false;
+  if (valNorm === staffNameNorm) return true;
+
+  const staffParts = staffNameNorm.split(' ').filter(Boolean);
+  const valParts = valNorm.split(' ').filter(Boolean);
+  const staffFirst = staffParts[0] || '';
+  const valFirst = valParts[0] || '';
+
+  // Multi-word whole-token containment (e.g. "Manika Premchandani - Senior Counselor")
+  if (staffParts.length >= 2 && staffParts.every((p) => valParts.includes(p))) {
+    return true;
+  }
+  if (valParts.length >= 2 && valParts.every((p) => staffParts.includes(p))) {
+    return true;
+  }
+
+  // Exact first-name match when one side is a single first name (e.g. "Manika" <-> "Manika Premchandani")
+  if (staffFirst.length >= 3 && valFirst === staffFirst && (valParts.length === 1 || staffParts.length === 1)) {
+    return true;
+  }
+
+  // First name + last initial/prefix match (e.g. "Manika P" <-> "Manika Premchandani")
+  if (
+    staffFirst.length >= 3 &&
+    valFirst === staffFirst &&
+    staffParts.length >= 2 &&
+    valParts.length >= 2 &&
+    (staffParts[1].startsWith(valParts[1]) || valParts[1].startsWith(staffParts[1]))
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Resolves the canonical primary counselor StaffMember for a student from the staff directory
+ * using foreign key (`counselorId`), email (`counselorEmail`), or counselor name.
+ */
+export function resolveCounselorForStudent(
+  student?: Partial<Student> | null,
+  staffList: StaffMember[] = []
+): StaffMember | null {
+  if (!student || !Array.isArray(staffList) || staffList.length === 0) return null;
+  const sAny = student as Record<string, any>;
+
+  const candidateId = String(sAny.counselorId || sAny.counselor_id || '').trim().toLowerCase();
+  if (candidateId) {
+    const byId = staffList.find((st) => st && String(st.id || '').trim().toLowerCase() === candidateId);
+    if (byId) return byId;
+  }
+
+  const candidateEmail = String(sAny.counselorEmail || sAny.counselor_email || '').trim().toLowerCase();
+  if (candidateEmail) {
+    const byEmail = staffList.find((st) => st && String(st.email || '').trim().toLowerCase() === candidateEmail);
+    if (byEmail) return byEmail;
+  }
+
+  const candidateLabels = [
+    student.counselor,
+    sAny.counselor_name,
+    sAny.counsellor,
+    sAny.assignedCounselor,
+    sAny.primaryCounselor,
+    sAny.mentor,
+  ]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .filter(Boolean);
+
+  for (const label of candidateLabels) {
+    const exactMatch = staffList.find((st) => {
+      if (!st) return false;
+      return (
+        normalizePersonMatchToken(st.name) === normalizePersonMatchToken(label) ||
+        String(st.email || '').trim().toLowerCase() === label.toLowerCase() ||
+        String(st.id || '').trim().toLowerCase() === label.toLowerCase()
+      );
+    });
+    if (exactMatch) return exactMatch;
+
+    // Prefer Counselor-role staff first if multiple staff share a first name
+    const counselorFuzzy = staffList.find(
+      (st) => st && isStaffCounselor(st) && doesValueMatchStaffMember(label, st)
+    );
+    if (counselorFuzzy) return counselorFuzzy;
+
+    const anyFuzzy = staffList.find((st) => st && doesValueMatchStaffMember(label, st));
+    if (anyFuzzy) return anyFuzzy;
+  }
+
+  return null;
+}
+
+/**
+ * Pure relational assignment check (ignores global-scope bypass).
+ * Used by both counselor counters and profile/drawer student list views so counts and lists always match 1:1.
+ */
+export function isStudentDirectlyAssignedToStaff(
+  student: Student,
+  staffMember?: StaffMember | null,
+  batches: any[] = []
+): boolean {
+  if (!student || !staffMember) return false;
+
+  const sAny = student as Record<string, any>;
+  const directFields = [
+    sAny.counselorId,
+    sAny.counselor_id,
+    sAny.counselorEmail,
+    sAny.counselor_email,
+    student.counselor,
+    sAny.counselor_name,
+    sAny.counsellor,
+    sAny.assignedCounselor,
+    sAny.primaryCounselor,
+    student.researchMentor,
+    student.satVerbalMentor,
+    student.satMathMentor,
+    sAny.universityMentor,
+    sAny.mentor,
+    sAny.mentorId,
+    sAny.mentor_id,
+  ];
+
+  for (const val of directFields) {
+    if (doesValueMatchStaffMember(val, staffMember)) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(sAny.mentors)) {
+    if (sAny.mentors.some((m: any) => doesValueMatchStaffMember(m, staffMember))) {
+      return true;
+    }
+  }
+
+  if (Array.isArray(batches)) {
+    const stuIdLower = String(student.id || '').trim().toLowerCase();
+    const stuEmailLower = String(student.email || '').trim().toLowerCase();
+    const stuNameNorm = normalizePersonMatchToken(student.name);
+    for (const b of batches) {
+      const hasMentor = Array.isArray(b?.mentors) && b.mentors.some((m: string) => doesValueMatchStaffMember(m, staffMember));
+      if (!hasMentor) continue;
+      const hasStudent =
+        Array.isArray(b?.students) &&
+        b.students.some((sid: string) => {
+          const cleanSid = String(sid || '').trim().toLowerCase();
+          if (!cleanSid) return false;
+          return (
+            (stuIdLower && cleanSid === stuIdLower) ||
+            (stuEmailLower && cleanSid === stuEmailLower) ||
+            (stuNameNorm && normalizePersonMatchToken(sid) === stuNameNorm)
+          );
+        });
+      if (hasStudent) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Returns all students directly assigned to a counselor/mentor via the unified relational mapping
+ * (used by both summary counters and profile/drawer student lists).
+ */
+export function getDirectAssignedStudentsForStaff(
+  students: Student[],
+  staffMember?: StaffMember | null,
+  batches: any[] = []
+): Student[] {
+  if (!staffMember || !Array.isArray(students)) return [];
+  return students.filter((s) => s && isStudentDirectlyAssignedToStaff(s, staffMember, batches));
+}
+
+/**
+ * Checks if a specific student is accessible/assigned to the staff member (including global-scope roles).
  */
 export function isStudentAssignedToStaff(
   student: Student,
@@ -92,73 +331,13 @@ export function isStudentAssignedToStaff(
   permissionsMatrix?: Record<string, any[]>,
   batches: any[] = []
 ): boolean {
-  if (!currentUser) return false;
-  
-  // If staff has global access, return true
+  if (!currentUser || !student) return false;
+
   if (canStaffAccessAllStudents(currentUser, permissionsMatrix)) {
     return true;
   }
 
-  const staffName = (currentUser.name || '').trim().toLowerCase();
-  const staffEmail = (currentUser.email || '').trim().toLowerCase();
-  const staffId = (currentUser.id || '').trim().toLowerCase();
-
-  const counselorName = (student.counselor || '').trim().toLowerCase();
-  const counselorEmail = ((student as any).counselorEmail || '').trim().toLowerCase();
-  const researchMentor = (student.researchMentor || '').trim().toLowerCase();
-  const satVerbalMentor = (student.satVerbalMentor || '').trim().toLowerCase();
-  const satMathMentor = (student.satMathMentor || '').trim().toLowerCase();
-  const universityMentor = ((student as any).universityMentor || '').trim().toLowerCase();
-  const anyMentor = ((student as any).mentor || '').trim().toLowerCase();
-  const anyCounsellor = ((student as any).counsellor || '').trim().toLowerCase();
-  const anyCounselorId = ((student as any).counselorId || '').trim().toLowerCase();
-  const anyMentorId = ((student as any).mentorId || '').trim().toLowerCase();
-  const rawMentorsList = (student as any).mentors;
-
-  // Helper for matching values against staff credentials
-  const staffFirst = staffName.split(/\s+/)[0] || '';
-  const matchesStaff = (val: string) => {
-    if (!val) return false;
-    const cleanVal = val.toLowerCase().trim();
-    return (
-      cleanVal === staffName ||
-      cleanVal === staffEmail ||
-      cleanVal === staffId ||
-      (staffName.length > 2 && cleanVal.includes(staffName)) ||
-      (cleanVal.length > 2 && staffName.includes(cleanVal)) ||
-      (cleanVal.length >= 3 && staffFirst === cleanVal)
-    );
-  };
-
-  if (matchesStaff(counselorName)) return true;
-  if (matchesStaff(counselorEmail)) return true;
-  if (matchesStaff(researchMentor)) return true;
-  if (matchesStaff(satVerbalMentor)) return true;
-  if (matchesStaff(satMathMentor)) return true;
-  if (matchesStaff(universityMentor)) return true;
-  if (matchesStaff(anyMentor)) return true;
-  if (matchesStaff(anyCounsellor)) return true;
-  if (matchesStaff(anyCounselorId)) return true;
-  if (matchesStaff(anyMentorId)) return true;
-
-  if (Array.isArray(rawMentorsList)) {
-    if (rawMentorsList.some((m: any) => typeof m === 'string' && matchesStaff(m))) return true;
-  }
-
-  // Check if student is assigned to staff member via batches passed from live Firestore state
-  if (Array.isArray(batches)) {
-    for (const b of batches) {
-      const hasMentor = Array.isArray(b?.mentors) && b.mentors.some((m: string) => matchesStaff(m));
-      const hasStudent =
-        Array.isArray(b?.students) &&
-        b.students.some((sid: string) => sid === student.id || sid?.toLowerCase?.() === student.email?.toLowerCase?.());
-      if (hasMentor && hasStudent) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  return isStudentDirectlyAssignedToStaff(student, currentUser, batches);
 }
 
 /**
@@ -172,7 +351,7 @@ export function getScopedStudentsForStaff(
 ): Student[] {
   if (!currentUser) return students;
   if (canStaffAccessAllStudents(currentUser, permissionsMatrix)) return students;
-  return students.filter(student => isStudentAssignedToStaff(student, currentUser, permissionsMatrix, batches));
+  return students.filter((student) => isStudentDirectlyAssignedToStaff(student, currentUser, batches));
 }
 
 /**
@@ -416,7 +595,7 @@ export function canStaffAccessEvent(
   }
 
   if (targetStudent) {
-    return isStudentAssignedToStaff(targetStudent, currentUser, permissionsMatrix);
+    return isStudentAssignedToStaff(targetStudent, currentUser, permissionsMatrix, batches);
   }
 
   return false;
@@ -500,7 +679,8 @@ export function isTaskVisibleToStaff(
   task: any,
   student: Student,
   currentUser?: StaffMember | null,
-  permissionsMatrix?: Record<string, any[]>
+  permissionsMatrix?: Record<string, any[]>,
+  batches: any[] = []
 ): boolean {
   if (!currentUser || !task) return false;
   if (isUserAdmin(currentUser)) return true;
@@ -512,11 +692,11 @@ export function isTaskVisibleToStaff(
 
   // Counselor: access for their assigned students only
   if (isStaffCounselor(currentUser)) {
-    return isStudentAssignedToStaff(student, currentUser, permissionsMatrix);
+    return isStudentAssignedToStaff(student, currentUser, permissionsMatrix, batches);
   }
 
   // Other staff (Category Manager / Operations): check student assignment
-  return isStudentAssignedToStaff(student, currentUser, permissionsMatrix);
+  return isStudentAssignedToStaff(student, currentUser, permissionsMatrix, batches);
 }
 
 /**

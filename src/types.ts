@@ -265,12 +265,20 @@ export interface Student {
   countries: string[];
   readiness: number;
   counselor: string;
+  counselorId?: string;
+  counselorEmail?: string;
+  counsellor?: string;
+  mentor?: string;
+  mentorId?: string;
   researchMentor?: string;
   satVerbalMentor?: string;
   satMathMentor?: string;
+  universityMentor?: string;
   school: string;
   major1?: string;
   major2?: string;
+  targetDegree?: string;
+  targetCountry?: string;
   taskSheetLink?: string;
   activities: Activity[];
   extracurriculars?: ExtracurricularActivity[];
@@ -282,6 +290,12 @@ export interface Student {
   password?: string;
   credentials?: PortalCredential[];
   conversations?: ConversationMessage[];
+  uid?: string;
+  role?: string;
+  status?: string;
+  allowedViewerEmails?: string[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface ConversationMessage {

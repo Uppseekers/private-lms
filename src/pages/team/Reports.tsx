@@ -113,7 +113,7 @@ export default function TeamReports() {
   // Accessible students list for dropdown filters
   const accessibleStudents = (isAdmin || hasGlobalScope)
     ? students
-    : students.filter(s => isStudentAssignedToStaff(s, currentUser, permissionsMatrix));
+    : students.filter(s => isStudentAssignedToStaff(s, currentUser, permissionsMatrix, batches));
 
   // Auto switch tab if one is restricted
   React.useEffect(() => {
@@ -280,10 +280,10 @@ export default function TeamReports() {
     return allMeetings.filter(m => {
       if (currentUser?.name && m.meetingOwnerName.toLowerCase() === currentUser.name.toLowerCase()) return true;
       const studentMatch = students.find(s => s.id === m.studentId);
-      if (studentMatch && isStudentAssignedToStaff(studentMatch, currentUser, permissionsMatrix)) return true;
+      if (studentMatch && isStudentAssignedToStaff(studentMatch, currentUser, permissionsMatrix, batches)) return true;
       return false;
     });
-  }, [allMeetings, hasGlobalMeetingScope, currentUser, students, permissionsMatrix]);
+  }, [allMeetings, hasGlobalMeetingScope, currentUser, students, permissionsMatrix, batches]);
 
   // Filtered meetings
   const filteredMeetings = useMemo(() => {
@@ -535,10 +535,10 @@ export default function TeamReports() {
     return allActivities.filter(a => {
       if (currentUser?.name && a.performedBy.toLowerCase() === currentUser.name.toLowerCase()) return true;
       const studentMatch = students.find(s => s.id === a.studentId);
-      if (studentMatch && isStudentAssignedToStaff(studentMatch, currentUser, permissionsMatrix)) return true;
+      if (studentMatch && isStudentAssignedToStaff(studentMatch, currentUser, permissionsMatrix, batches)) return true;
       return false;
     });
-  }, [allActivities, hasGlobalActivityScope, currentUser, students, permissionsMatrix]);
+  }, [allActivities, hasGlobalActivityScope, currentUser, students, permissionsMatrix, batches]);
 
   // Filtered activities
   const filteredActivities = useMemo(() => {

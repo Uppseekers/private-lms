@@ -36,7 +36,13 @@ import {
 import { cn } from '@/lib/utils';
 import { useDatabase, PermissionCategory } from '@/context/DatabaseContext';
 import { StaffMember } from '@/types';
-import { isUserAdmin, isStudentAssignedToStaff } from '@/lib/staffPermissions';
+import {
+  isUserAdmin,
+  canStaffAccessAllStudents,
+  isStudentDirectlyAssignedToStaff,
+  getDirectAssignedStudentsForStaff,
+  doesValueMatchStaffMember,
+} from '@/lib/staffPermissions';
 import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
 import ZohoSetupDiagnosticsPanel from '@/components/ZohoSetupDiagnosticsPanel';
 
@@ -102,6 +108,8 @@ export default function TeamSettings() {
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [assignTargetId, setAssignTargetId] = useState<string | null>(null);
   const [assignedStudentIds, setAssignedStudentIds] = useState<string[]>([]);
+  const [assignSearchQuery, setAssignSearchQuery] = useState('');
+  const [assignFilterMode, setAssignFilterMode] = useState<'all' | 'assigned' | 'unassigned' | 'activity'>('all');
 
   // Recovery & Access Sync state
   const [isSyncingAccess, setIsSyncingAccess] = useState(false);
@@ -314,13 +322,37 @@ export default function TeamSettings() {
     }
   };
 
+  const studentHasHistoricalStaffActivity = (s: any, member: StaffMember): boolean => {
+    if (!s || !member) return false;
+    const acts = Array.isArray(s.activities) ? s.activities : [];
+    const logs = Array.isArray(s.operationalLogs) ? s.operationalLogs : [];
+    const tasks = Array.isArray(s.tasks) ? s.tasks : [];
+    const essays = Array.isArray(s.essays) ? s.essays : [];
+
+    return (
+      acts.some(
+        (a: any) =>
+          doesValueMatchStaffMember(a?.user, member) ||
+          doesValueMatchStaffMember(a?.author, member)
+      ) ||
+      logs.some((l: any) => doesValueMatchStaffMember(l?.performedBy, member)) ||
+      tasks.some((t: any) => doesValueMatchStaffMember(t?.assignedBy, member)) ||
+      essays.some(
+        (es: any) =>
+          doesValueMatchStaffMember(es?.counselor, member) ||
+          (Array.isArray(es?.versions) && es.versions.some((v: any) => doesValueMatchStaffMember(v?.author, member)))
+      )
+    );
+  };
+
   const openAssignModal = (member: StaffMember) => {
     setAssignTargetId(member.id);
-    const scopedMember: StaffMember = { ...member, students: 'Assigned Scope' };
     const assigned = students
-      .filter((s) => isStudentAssignedToStaff(s, scopedMember, undefined, batches))
+      .filter((s) => isStudentDirectlyAssignedToStaff(s, member, batches))
       .map((s) => s.id);
     setAssignedStudentIds(assigned);
+    setAssignSearchQuery('');
+    setAssignFilterMode('all');
     setIsAssignModalOpen(true);
   };
 
@@ -338,47 +370,66 @@ export default function TeamSettings() {
     if (!member) return;
 
     const roleUpper = (member.role || '').toUpperCase().replace(/[\s-]+/g, '_');
-    const memberNameLower = (member.name || '').trim().toLowerCase();
-    const memberEmailLower = (member.email || '').trim().toLowerCase();
-    const memberFirstLower = memberNameLower.split(/\s+/)[0] || '';
-    const matchesMemberVal = (val?: string) => {
-      const clean = (val || '').trim().toLowerCase();
-      if (!clean) return false;
-      return (
-        clean === memberNameLower ||
-        (memberEmailLower && clean === memberEmailLower) ||
-        (memberFirstLower.length >= 3 && clean === memberFirstLower)
-      );
-    };
+    const cleanMemberName = (member.name || '').trim();
+    const cleanMemberEmail = (member.email || '').trim().toLowerCase();
 
     const updatedStudents = students.map(s => {
       if (assignedStudentIds.includes(s.id)) {
-        if (roleUpper === 'RESEARCH_GUIDE') {
-          return { ...s, researchMentor: member.name };
+        if (roleUpper === 'RESEARCH_GUIDE' || roleUpper === 'RESEARCH_MENTOR' || roleUpper === 'RESEARCH_FACULTY') {
+          return { ...s, researchMentor: cleanMemberName };
         } else if (roleUpper === 'SAT_MATH_FACULTY') {
-          return { ...s, satMathMentor: member.name };
+          return { ...s, satMathMentor: cleanMemberName };
         } else if (roleUpper === 'SAT_VERBAL_FACULTY') {
-          return { ...s, satVerbalMentor: member.name };
+          return { ...s, satVerbalMentor: cleanMemberName };
         } else {
-          return { ...s, counselor: member.name, mentor: member.name } as any;
+          return {
+            ...s,
+            counselor: cleanMemberName,
+            counselorId: member.id,
+            counselorEmail: cleanMemberEmail,
+            counsellor: cleanMemberName,
+            mentor: cleanMemberName,
+          };
         }
       } else {
         const updated = { ...s } as any;
-        if (matchesMemberVal(updated.counselor)) updated.counselor = '';
-        if (matchesMemberVal(updated.counselorEmail)) updated.counselorEmail = '';
-        if (matchesMemberVal(updated.researchMentor)) updated.researchMentor = '';
-        if (matchesMemberVal(updated.satMathMentor)) updated.satMathMentor = '';
-        if (matchesMemberVal(updated.satVerbalMentor)) updated.satVerbalMentor = '';
-        if (matchesMemberVal(updated.mentor)) updated.mentor = '';
+        if (
+          doesValueMatchStaffMember(updated.counselor, member) ||
+          doesValueMatchStaffMember(updated.counselorId, member) ||
+          doesValueMatchStaffMember(updated.counselorEmail, member) ||
+          doesValueMatchStaffMember(updated.counsellor, member)
+        ) {
+          updated.counselor = '';
+          delete updated.counselorId;
+          delete updated.counselorEmail;
+          delete updated.counsellor;
+        }
+        if (doesValueMatchStaffMember(updated.researchMentor, member)) updated.researchMentor = '';
+        if (doesValueMatchStaffMember(updated.satMathMentor, member)) updated.satMathMentor = '';
+        if (doesValueMatchStaffMember(updated.satVerbalMentor, member)) updated.satVerbalMentor = '';
+        if (doesValueMatchStaffMember(updated.mentor, member)) updated.mentor = '';
         return updated;
       }
     });
     setStudents(updatedStudents);
 
-    const updatedStaff = staff.map(s => 
-      s.id === assignTargetId ? { ...s, students: `${assignedStudentIds.length} Students` } : s
+    const updatedStaff = staff.map(s =>
+      s.id === assignTargetId
+        ? {
+            ...s,
+            students: canStaffAccessAllStudents(s, permissionsMatrix)
+              ? 'All'
+              : `${assignedStudentIds.length} Student${assignedStudentIds.length !== 1 ? 's' : ''}`,
+          }
+        : s
     );
     setStaff(updatedStaff);
+
+    void resyncPortalAccess({
+      staffList: updatedStaff,
+      studentsList: updatedStudents,
+      forceStaffDir: false,
+    });
 
     addAuditLog(`Updated student assignments for ${member.name} (${assignedStudentIds.length} assigned)`);
     setIsAssignModalOpen(false);
@@ -724,16 +775,39 @@ export default function TeamSettings() {
                       </td>
                     )}
                     <td className="px-6 py-4 text-slate-600 font-medium">
-                      {(member.students || '').toLowerCase().includes('all') || (member.students || '').toLowerCase().includes('global') || member.role === 'CATEGORY_MANAGER' || member.role === 'SYSTEM_ADMIN' ? (
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-md text-xs font-bold border border-emerald-200">
-                          <Shield className="w-3 h-3 text-emerald-600" /> Global Scope (All Students)
-                        </span>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-slate-700 font-semibold">{member.students || '0 Students'}</span>
-                          <Button variant="ghost" size="sm" onClick={() => openAssignModal(member)} className="text-xs text-indigo-600 hover:text-indigo-700 underline p-0 h-auto font-semibold">Assign</Button>
-                        </div>
-                      )}
+                      {(() => {
+                        const directCount = getDirectAssignedStudentsForStaff(students, member, batches).length;
+                        const isGlobalMember = canStaffAccessAllStudents(member, permissionsMatrix);
+                        if (isGlobalMember) {
+                          return (
+                            <div className="flex items-center gap-2">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 text-emerald-700 rounded-md text-xs font-bold border border-emerald-200">
+                                <Shield className="w-3 h-3 text-emerald-600" /> Global Scope ({students.length} Students)
+                              </span>
+                              {directCount > 0 && (
+                                <span className="text-[11px] text-slate-500 font-semibold">
+                                  ({directCount} direct)
+                                </span>
+                              )}
+                            </div>
+                          );
+                        }
+                        return (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-slate-700 font-semibold">
+                              {directCount} Student{directCount !== 1 ? 's' : ''}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => openAssignModal(member)}
+                              className="text-xs text-indigo-600 hover:text-indigo-700 underline p-0 h-auto font-semibold"
+                            >
+                              Assign
+                            </Button>
+                          </div>
+                        );
+                      })()}
                     </td>
                     <td className="px-6 py-4">
                       <span className={cn("flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider", member.status === 'Active' ? 'text-emerald-600' : 'text-slate-400')}>
@@ -1341,6 +1415,7 @@ export default function TeamSettings() {
 
       {activeTab === 'developer' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+           {currentUser && <ZohoSetupDiagnosticsPanel currentUser={currentUser} />}
            <Card className="border-slate-200 shadow-sm">
              <CardHeader className="bg-slate-50 border-b border-slate-200">
                <CardTitle className="text-sm font-bold uppercase tracking-wider text-slate-900">API Keys & Integrations</CardTitle>
@@ -1579,40 +1654,159 @@ export default function TeamSettings() {
       )}
 
       {/* Assign Students Modal */}
-      {isAssignModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl w-full max-w-md overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="font-bold text-slate-900 uppercase tracking-wider text-sm">Assign Students</h3>
-              <button onClick={() => setIsAssignModalOpen(false)} className="text-slate-400 hover:text-slate-600">
-                <Power className="w-4 h-4 rotate-45" />
-              </button>
-            </div>
-            <div className="p-6 max-h-96 overflow-y-auto">
-               <div className="space-y-2">
-                  {students.map(student => (
-                    <div key={student.id} className="flex items-center gap-3 p-2 hover:bg-slate-50 rounded-lg border border-transparent hover:border-slate-100 transition-colors cursor-pointer" onClick={() => toggleStudentAssignment(student.id)}>
-                      <input 
-                        type="checkbox" 
-                        checked={assignedStudentIds.includes(student.id)} 
-                        onChange={() => toggleStudentAssignment(student.id)}
-                        className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer" 
-                      />
-                      <div>
-                        <div className="font-semibold text-slate-900 text-sm">{student.name}</div>
-                        <div className="text-xs text-slate-500">{student.email}</div>
+      {isAssignModalOpen && (() => {
+        const targetMember = staff.find(st => st.id === assignTargetId) || null;
+        const historicalMatchSet = new Set(
+          targetMember
+            ? students.filter(st => studentHasHistoricalStaffActivity(st, targetMember)).map(st => st.id)
+            : []
+        );
+        const visibleAssignStudents = students.filter(st => {
+          const isChecked = assignedStudentIds.includes(st.id);
+          const curCounselor = (st.counselor || '').trim();
+          const isUnassigned = !curCounselor || curCounselor.toLowerCase() === 'unassigned';
+          if (assignFilterMode === 'assigned' && !isChecked) return false;
+          if (assignFilterMode === 'unassigned' && !isUnassigned) return false;
+          if (assignFilterMode === 'activity' && !historicalMatchSet.has(st.id)) return false;
+          if (assignSearchQuery.trim()) {
+            const q = assignSearchQuery.trim().toLowerCase();
+            return (
+              (st.name || '').toLowerCase().includes(q) ||
+              (st.email || '').toLowerCase().includes(q) ||
+              curCounselor.toLowerCase().includes(q) ||
+              (st.id || '').toLowerCase().includes(q)
+            );
+          }
+          return true;
+        });
+
+        return (
+          <div className="fixed inset-0 bg-slate-900/50 flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl">
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h3 className="font-bold text-slate-900 uppercase tracking-wider text-sm">
+                    Assign Students {targetMember ? `• ${targetMember.name}` : ''}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {assignedStudentIds.length} student{assignedStudentIds.length !== 1 ? 's' : ''} selected
+                  </p>
+                </div>
+                <button onClick={() => setIsAssignModalOpen(false)} className="text-slate-400 hover:text-slate-600">
+                  <Power className="w-4 h-4 rotate-45" />
+                </button>
+              </div>
+              <div className="p-4 border-b border-slate-100 space-y-3 bg-white">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={assignSearchQuery}
+                    onChange={(e) => setAssignSearchQuery(e.target.value)}
+                    placeholder="Search student name, email, or current counselor..."
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { id: 'all', label: `All (${students.length})` },
+                      { id: 'assigned', label: `Selected (${assignedStudentIds.length})` },
+                      {
+                        id: 'unassigned',
+                        label: `Unassigned (${students.filter(st => !(st.counselor || '').trim() || (st.counselor || '').trim().toLowerCase() === 'unassigned').length})`,
+                      },
+                      ...(historicalMatchSet.size > 0
+                        ? [{ id: 'activity', label: `Past Updates (${historicalMatchSet.size})` }]
+                        : []),
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setAssignFilterMode(tab.id as any)}
+                        className={cn(
+                          'px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors',
+                          assignFilterMode === tab.id
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                        )}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    {historicalMatchSet.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAssignedStudentIds((prev) =>
+                            Array.from(new Set([...prev, ...Array.from(historicalMatchSet)]))
+                          )
+                        }
+                        className="font-semibold text-emerald-700 hover:underline"
+                      >
+                        + Add Past Activity ({historicalMatchSet.size})
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAssignedStudentIds((prev) =>
+                          Array.from(new Set([...prev, ...visibleAssignStudents.map((st) => st.id)]))
+                        )
+                      }
+                      className="font-semibold text-indigo-600 hover:underline"
+                    >
+                      Select Visible
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="p-4 max-h-80 overflow-y-auto">
+                <div className="space-y-1.5">
+                  {visibleAssignStudents.map(student => (
+                    <div
+                      key={student.id}
+                      className="flex items-center justify-between gap-3 p-2.5 hover:bg-slate-50 rounded-lg border border-transparent hover:border-slate-100 transition-colors cursor-pointer"
+                      onClick={() => toggleStudentAssignment(student.id)}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={assignedStudentIds.includes(student.id)}
+                          onChange={() => {}}
+                          className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-slate-900 text-sm truncate">{student.name}</div>
+                          <div className="text-xs text-slate-500 truncate">{student.email}</div>
+                        </div>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded">
+                          {(student.counselor || '').trim() || 'Unassigned'}
+                        </span>
                       </div>
                     </div>
                   ))}
-               </div>
-            </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setIsAssignModalOpen(false)} className="bg-white">Cancel</Button>
-              <Button onClick={saveAssignments} className="bg-indigo-600 hover:bg-indigo-700 text-white">Save Assignments</Button>
+                  {visibleAssignStudents.length === 0 && (
+                    <div className="py-8 text-center text-xs text-slate-400">
+                      No students match the current filter.
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setIsAssignModalOpen(false)} className="bg-white">Cancel</Button>
+                <Button onClick={saveAssignments} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                  Save Assignments ({assignedStudentIds.length})
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Admin Change Password Modal in Team Settings */}
       {isAdmin && userForPasswordChange && (

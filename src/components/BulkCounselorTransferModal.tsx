@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, OperationalLog, Activity } from '@/types';
-import { isStudentAssignedToStaff } from '@/lib/staffPermissions';
+import { isStudentDirectlyAssignedToStaff, resolveCounselorForStudent } from '@/lib/staffPermissions';
 
 interface BulkCounselorTransferModalProps {
   isOpen: boolean;
@@ -97,9 +97,9 @@ export default function BulkCounselorTransferModal({
     );
   });
 
-  // Helper to count active students per staff member
+  // Helper to count active directly assigned students per staff member
   const getStudentCount = (staffMember: StaffMember) => {
-    return students.filter(s => isStudentAssignedToStaff(s, staffMember)).length;
+    return students.filter(s => isStudentDirectlyAssignedToStaff(s, staffMember)).length;
   };
 
   const handleConfirm = () => {
@@ -108,6 +108,12 @@ export default function BulkCounselorTransferModal({
       return;
     }
     setValidationError(null);
+
+    const resolvedTargetStaff = updateCounselor
+      ? staff.find(st => st.id === targetCounselor || st.name === targetCounselor) ||
+        resolveCounselorForStudent({ counselor: targetCounselor }, staff)
+      : null;
+    const canonicalCounselorName = resolvedTargetStaff?.name || targetCounselor;
 
     const nowStr = new Date().toLocaleDateString('en-US', { 
       month: 'short', 
@@ -119,7 +125,7 @@ export default function BulkCounselorTransferModal({
       if (!selectedStudentIds.includes(student.id)) return student;
 
       const oldCounselor = student.counselor || 'Unassigned';
-      const newCounselor = updateCounselor ? targetCounselor : student.counselor;
+      const newCounselor = updateCounselor ? canonicalCounselorName : student.counselor;
       const newResearch = updateResearchMentor ? targetResearchMentor : student.researchMentor;
       const newSatVerbal = updateSatMentors ? targetSatVerbalMentor : student.satVerbalMentor;
       const newSatMath = updateSatMentors ? targetSatMathMentor : student.satMathMentor;
@@ -128,21 +134,21 @@ export default function BulkCounselorTransferModal({
       const newActivities: Activity[] = [];
 
       if (recordLog) {
-        if (updateCounselor && targetCounselor !== oldCounselor) {
+        if (updateCounselor && canonicalCounselorName !== oldCounselor) {
           newLogs.push({
             id: 'log_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
             timestamp: nowStr,
             performedBy: currentUser?.name || 'Administrator',
             role: currentUser?.role || 'ADMIN',
             activityType: 'Counselor Transfer',
-            description: `Admissions Counselor reassigned from "${oldCounselor}" to "${targetCounselor}". Note: ${transferReason}`
+            description: `Admissions Counselor reassigned from "${oldCounselor}" to "${canonicalCounselorName}". Note: ${transferReason}`
           });
 
           newActivities.push({
             id: 'act_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
             date: nowStr,
             type: 'SYSTEM',
-            description: `Counselor reassigned to ${targetCounselor} (${transferReason})`
+            description: `Counselor reassigned to ${canonicalCounselorName} (${transferReason})`
           });
         }
 
@@ -161,6 +167,12 @@ export default function BulkCounselorTransferModal({
       return {
         ...student,
         counselor: newCounselor,
+        ...(updateCounselor
+          ? {
+              counselorId: resolvedTargetStaff?.id || undefined,
+              counselorEmail: resolvedTargetStaff?.email ? resolvedTargetStaff.email.trim().toLowerCase() : undefined,
+            }
+          : {}),
         ...(updateResearchMentor ? { researchMentor: newResearch } : {}),
         ...(updateSatMentors ? { satVerbalMentor: newSatVerbal, satMathMentor: newSatMath } : {}),
         operationalLogs: [...newLogs, ...(student.operationalLogs || [])],

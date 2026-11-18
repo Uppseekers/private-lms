@@ -64,7 +64,14 @@ import {
   testFirestoreConnection,
 } from '@/lib/firebase';
 import { normalizeTask, normalizeActivity } from '@/lib/taskActivityUtils';
-import { isUserAdmin, canStaffAccessAllStudents } from '@/lib/staffPermissions';
+import {
+  isUserAdmin,
+  canStaffAccessAllStudents,
+  doesValueMatchStaffMember,
+  resolveCounselorForStudent,
+  getDirectAssignedStudentsForStaff,
+  isStaffCounselor,
+} from '@/lib/staffPermissions';
 
 type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | 'Enabled' | 'None' | null;
 
@@ -544,7 +551,11 @@ interface DatabaseContextType {
     userType?: 'student' | 'staff';
   }) => Promise<PasswordResetResult>;
   signOutAll: () => Promise<void>;
-  resyncPortalAccess: (opts?: { forceStaffDir?: boolean }) => Promise<ResyncPortalAccessResult>;
+  resyncPortalAccess: (opts?: {
+    forceStaffDir?: boolean;
+    staffList?: StaffMember[];
+    studentsList?: Student[];
+  }) => Promise<ResyncPortalAccessResult>;
   restoreLegacySqlToFirestore: (opts?: {
     includeDemo?: boolean;
     importRecords?: boolean;
@@ -657,6 +668,17 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
   const seededCatalogRef = useRef<boolean>(false);
   const autoRepairedSessionRef = useRef<string | null>(null);
+  const counselorRepairedIdsRef = useRef<Set<string>>(new Set());
+
+  const extractStaffFirstName = (rawName?: string | null): string => {
+    if (!rawName) return '';
+    const cleaned = String(rawName)
+      .replace(/\([^)]*\)/g, ' ')
+      .replace(/^\s*(ms|mrs|mr|dr|prof|miss)\.?\s+/i, '')
+      .trim();
+    const first = cleaned.split(/\s+/)[0] || '';
+    return first.slice(0, 80);
+  };
 
   const setCurrentUser = (
     userOrFn: StaffMember | null | ((prev: StaffMember | null) => StaffMember | null)
@@ -821,41 +843,40 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     const stuEmail = normalizeEmail(student?.email);
     if (stuEmail) emails.add(stuEmail);
 
+    const directCounselorEmail = normalizeEmail((student as any)?.counselorEmail || (student as any)?.counselor_email);
+    if (directCounselorEmail) emails.add(directCounselorEmail);
+
+    const resolvedCounselor = resolveCounselorForStudent(student, staffList);
+    if (resolvedCounselor?.email) {
+      emails.add(normalizeEmail(resolvedCounselor.email));
+    }
+
     const assignedNamesOrIds = [
       student?.counselor,
+      (student as any)?.counselor_name,
       (student as any)?.counsellor,
       (student as any)?.counselorEmail,
+      (student as any)?.counselor_email,
       (student as any)?.counselorId,
+      (student as any)?.counselor_id,
+      (student as any)?.assignedCounselor,
+      (student as any)?.primaryCounselor,
       (student as any)?.mentor,
       (student as any)?.mentorId,
+      (student as any)?.mentor_id,
       student?.researchMentor,
       student?.satMathMentor,
       student?.satVerbalMentor,
       (student as any)?.universityMentor,
       ...(Array.isArray((student as any)?.mentors) ? (student as any).mentors : []),
     ]
-      .map((v) => String(v || '').trim().toLowerCase())
+      .map((v) => String(v || '').trim())
       .filter(Boolean);
-
-    const matchesStaffValue = (st: StaffMember, val: string): boolean => {
-      const stEmail = normalizeEmail(st?.email);
-      const stName = String(st?.name || '').trim().toLowerCase();
-      const stId = String(st?.id || '').trim().toLowerCase();
-      const stFirst = stName.split(/\s+/)[0] || '';
-      return (
-        val === stName ||
-        (stEmail && val === stEmail) ||
-        (stId && val === stId) ||
-        (stName.length > 2 && val.includes(stName)) ||
-        (val.length >= 3 && stName.includes(val)) ||
-        (val.length >= 3 && stFirst === val)
-      );
-    };
 
     for (const st of staffList || []) {
       const stEmail = normalizeEmail(st?.email);
       if (!stEmail) continue;
-      if (assignedNamesOrIds.some((val) => matchesStaffValue(st, val))) {
+      if (assignedNamesOrIds.some((val) => doesValueMatchStaffMember(val, st))) {
         emails.add(stEmail);
       }
     }
@@ -868,15 +889,15 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         b.students.some((sid) => sid === stuId || normalizeEmail(sid) === stuEmail);
       if (inBatch && Array.isArray(b.mentors)) {
         for (const m of b.mentors) {
-          const cleanM = String(m || '').trim().toLowerCase();
+          const cleanM = String(m || '').trim();
           if (!cleanM) continue;
-          const matchedStaff = (staffList || []).find((st) => matchesStaffValue(st, cleanM));
+          const matchedStaff = (staffList || []).find((st) => doesValueMatchStaffMember(cleanM, st));
           if (matchedStaff?.email) emails.add(normalizeEmail(matchedStaff.email));
         }
       }
     }
 
-    return Array.from(emails).slice(0, 50);
+    return Array.from(emails).slice(0, 200);
   };
 
   const computeAllStaffViewerEmails = (staffList: StaffMember[] = staff, extraEmail?: string): string[] => {
@@ -993,11 +1014,13 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       role: 'SYSTEM_ADMIN',
     });
 
+    const adminDisplayName = fbUser.displayName || 'System Admin';
     await setDoc(doc(db, 'staff_directory', adminKey), {
       id: adminKey,
       staffId: 'admin-1',
       email: authEmail,
-      name: fbUser.displayName || 'System Admin',
+      name: adminDisplayName,
+      firstName: extractStaffFirstName(adminDisplayName),
       role: 'SYSTEM_ADMIN',
       status: 'Active',
       students: 'All',
@@ -1178,6 +1201,20 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             return;
           }
 
+          if (!matchedStaff && dirData?.staffId) {
+            try {
+              const directStaffSnap = await getDoc(doc(db, 'staff', String(dirData.staffId)));
+              if (directStaffSnap.exists()) {
+                matchedStaff = stripPasswordField({
+                  ...(directStaffSnap.data() as StaffMember),
+                  id: directStaffSnap.id,
+                });
+              }
+            } catch {
+              // Fallback to email query below
+            }
+          }
+
           if (!matchedStaff) {
             try {
               const staffQ = query(collection(db, 'staff'), where('email', '==', authEmail));
@@ -1194,7 +1231,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
           if (cancelled) return;
 
-          const staffProfile: StaffMember = matchedStaff || {
+          const rawProfile: StaffMember = matchedStaff || {
             id: dirData?.staffId || user.uid,
             name: dirData?.name || user.displayName || authEmail.split('@')[0],
             email: authEmail,
@@ -1203,12 +1240,55 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             status: dirData?.status || 'Active',
           };
 
+          const shouldHaveAllScope = canStaffAccessAllStudents(rawProfile, permissionsMatrixState);
+          const staffProfile: StaffMember = {
+            ...rawProfile,
+            students: shouldHaveAllScope ? 'All' : (rawProfile.students || 'Assigned Scope'),
+          };
+
           if (String(staffProfile.status || 'Active').toLowerCase() === 'suspended') {
             setAuthError('Your staff account is suspended. Please contact your administrator.');
             await signOut(auth).catch(() => {});
             setIsFirebaseAuthReady(true);
             return;
           }
+
+          // Self-heal /staff_directory/{emailKey} from authoritative /staff/{id} record so Firestore rules
+          // immediately recognize Category Managers, Global Scope staff, and Counselors on first login.
+          if (matchedStaff && matchedStaff.id) {
+            const statusNorm = String(matchedStaff.status || 'Active').toLowerCase() === 'suspended' ? 'Suspended' : 'Active';
+            const cleanFullName = String(matchedStaff.name || authEmail).trim().slice(0, 200);
+            const cleanFirstName = extractStaffFirstName(cleanFullName);
+            const expectedStudentsField = shouldHaveAllScope
+              ? (matchedStaff.students && ['All', 'ALL', 'Global', 'Global Scope', 'All Students'].includes(matchedStaff.students)
+                  ? matchedStaff.students
+                  : 'All')
+              : String(matchedStaff.students || 'Assigned Scope').slice(0, 120);
+
+            if (
+              !dirData ||
+              dirData.staffId !== matchedStaff.id ||
+              dirData.role !== matchedStaff.role ||
+              dirData.status !== statusNorm ||
+              dirData.name !== cleanFullName ||
+              dirData.firstName !== cleanFirstName ||
+              dirData.students !== expectedStudentsField
+            ) {
+              await setDoc(doc(db, 'staff_directory', emailKey), {
+                id: emailKey,
+                staffId: matchedStaff.id,
+                email: authEmail,
+                name: cleanFullName,
+                ...(cleanFirstName ? { firstName: cleanFirstName } : {}),
+                role: String(matchedStaff.role || 'COUNSELOR').slice(0, 60),
+                status: statusNorm,
+                students: expectedStudentsField,
+                updatedAt: new Date().toISOString(),
+              }).catch(() => {});
+            }
+          }
+
+          if (cancelled) return;
 
           setCurrentUserState(staffProfile);
           setIsAuthenticatedState(true);
@@ -1268,6 +1348,14 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     };
   }, []);
 
+  const hasGlobalPortalAccess = Boolean(
+    currentUser &&
+      (currentUser.role || '').toUpperCase() !== 'STUDENT' &&
+      (normalizeEmail(currentUser.email) === BOOTSTRAP_ADMIN_EMAIL ||
+        isUserAdmin(currentUser) ||
+        canStaffAccessAllStudents(currentUser, permissionsMatrixState))
+  );
+
   // Live role-scoped Firestore onSnapshot listeners
   useEffect(() => {
     if (!isAuthenticated || !firebaseUser || !currentUser) {
@@ -1278,8 +1366,12 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     const isBootAdmin = authEmail === BOOTSTRAP_ADMIN_EMAIL;
     const isStudent = (currentUser.role || '').toUpperCase() === 'STUDENT';
     const isStaff = !isStudent;
+    const hasGlobalAccess = isBootAdmin || (isStaff && hasGlobalPortalAccess);
 
-    const handleSnapErr = (path: string) => (err: any) => {
+    const handleSnapErr = (path: string, ignorePermissionDenied = false) => (err: any) => {
+      if (ignorePermissionDenied && err?.code === 'permission-denied') {
+        return;
+      }
       const info = buildFirestoreErrorInfo(err, OperationType.LIST, path);
       console.warn('Firestore snapshot listener warning:', JSON.stringify(info));
       if (err?.code === 'permission-denied') {
@@ -1287,63 +1379,156 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       }
     };
 
+    const normalizeStudentDoc = (docId: string, docData: any): Student => {
+      const raw = stripPasswordField({ ...(docData as Student), id: docId });
+      if (!raw.intake) raw.intake = 'Fall 2026';
+      if (!Array.isArray(raw.tasks)) raw.tasks = [];
+      if (!Array.isArray(raw.activities)) raw.activities = [];
+      if (!Array.isArray(raw.documents)) raw.documents = [];
+      if (!Array.isArray(raw.shortlist)) raw.shortlist = [];
+      if (!Array.isArray(raw.countries)) raw.countries = ['USA'];
+      if (!Array.isArray(raw.operationalLogs) || raw.operationalLogs.length === 0) {
+        raw.operationalLogs = getDefaultOperationalLogsForStudent(raw.id, raw.name, raw.counselor);
+      }
+      raw.tasks = raw.tasks.map((t) => normalizeTask(t, { studentId: raw.id, studentName: raw.name }));
+      raw.activities = raw.activities.map((a) =>
+        normalizeActivity(a, { studentId: raw.id, studentName: raw.name })
+      );
+      return raw;
+    };
+
     const unsubs: (() => void)[] = [];
 
-    // 1. Students
-    const studentsQuery = isBootAdmin
-      ? collection(db, 'students')
-      : isStaff
-      ? query(collection(db, 'students'), where('allowedViewerEmails', 'array-contains', authEmail))
-      : query(collection(db, 'students'), where('email', '==', authEmail));
+    // 1. Students:
+    // - Global Scope roles (System Admin, Category Manager, Operations Lead, Global Scope): full collection
+    // - Assigned Scope staff (Counselors/Mentors): merged relational queries (allowedViewerEmails + counselorEmail + counselorId + counselor name)
+    // - Students: own profile by email
+    if (hasGlobalAccess || !isStaff) {
+      const studentsQuery = hasGlobalAccess
+        ? collection(db, 'students')
+        : query(collection(db, 'students'), where('email', '==', authEmail));
 
-    unsubs.push(
-      onSnapshot(
-        studentsQuery,
-        (snap) => {
-          const list: Student[] = [];
-          snap.forEach((d) => {
-            const raw = stripPasswordField({ ...(d.data() as Student), id: d.id });
-            if (!raw.intake) raw.intake = 'Fall 2026';
-            if (!Array.isArray(raw.tasks)) raw.tasks = [];
-            if (!Array.isArray(raw.activities)) raw.activities = [];
-            if (!Array.isArray(raw.documents)) raw.documents = [];
-            if (!Array.isArray(raw.shortlist)) raw.shortlist = [];
-            if (!Array.isArray(raw.countries)) raw.countries = ['USA'];
-            if (!Array.isArray(raw.operationalLogs) || raw.operationalLogs.length === 0) {
-              raw.operationalLogs = getDefaultOperationalLogsForStudent(raw.id, raw.name, raw.counselor);
-            }
-            raw.tasks = raw.tasks.map((t) => normalizeTask(t, { studentId: raw.id, studentName: raw.name }));
-            raw.activities = raw.activities.map((a) =>
-              normalizeActivity(a, { studentId: raw.id, studentName: raw.name })
-            );
-            list.push(raw);
-          });
-          setStudentsState(list);
-          setFirestoreStatus('connected');
+      unsubs.push(
+        onSnapshot(
+          studentsQuery,
+          (snap) => {
+            const list: Student[] = [];
+            snap.forEach((d) => {
+              list.push(normalizeStudentDoc(d.id, d.data()));
+            });
+            setStudentsState(list);
+            setFirestoreStatus('connected');
 
-          if (isStudent) {
-            const selfStu = list.find((s) => normalizeEmail(s.email) === authEmail) || list[0];
-            if (selfStu) {
-              setCurrentUserState((prev) =>
-                prev
-                  ? {
-                      ...prev,
-                      ...selfStu,
-                      role: 'STUDENT',
-                      status: (selfStu as any).status || 'Active',
-                    }
-                  : prev
-              );
+            if (isStudent) {
+              const selfStu = list.find((s) => normalizeEmail(s.email) === authEmail) || list[0];
+              if (selfStu) {
+                setCurrentUserState((prev) =>
+                  prev
+                    ? {
+                        ...prev,
+                        ...selfStu,
+                        role: 'STUDENT',
+                        status: (selfStu as any).status || 'Active',
+                      }
+                    : prev
+                );
+              }
             }
+          },
+          handleSnapErr('students')
+        )
+      );
+    } else {
+      const bucketMap = new Map<string, Map<string, Student>>();
+      const flushMergedCounselorStudents = () => {
+        const merged = new Map<string, Student>();
+        for (const subMap of bucketMap.values()) {
+          for (const [id, stu] of subMap.entries()) {
+            merged.set(id, stu);
           }
+        }
+        setStudentsState(Array.from(merged.values()));
+        setFirestoreStatus('connected');
+      };
+
+      const counselorQueries: { key: string; q: ReturnType<typeof query>; optional?: boolean }[] = [
+        {
+          key: 'viewerEmails',
+          q: query(collection(db, 'students'), where('allowedViewerEmails', 'array-contains', authEmail)),
         },
-        handleSnapErr('students')
-      )
-    );
+        {
+          key: 'counselorEmail',
+          q: query(collection(db, 'students'), where('counselorEmail', '==', authEmail)),
+          optional: true,
+        },
+      ];
+
+      const cleanStaffId = String(currentUser.id || '').trim();
+      if (cleanStaffId) {
+        counselorQueries.push({
+          key: 'counselorId',
+          q: query(collection(db, 'students'), where('counselorId', '==', cleanStaffId)),
+          optional: true,
+        });
+      }
+      const cleanStaffName = String(currentUser.name || '').trim();
+      const cleanFirstName = extractStaffFirstName(cleanStaffName);
+      if (cleanStaffName) {
+        counselorQueries.push({
+          key: 'counselorName',
+          q: query(collection(db, 'students'), where('counselor', '==', cleanStaffName)),
+          optional: true,
+        });
+        counselorQueries.push({
+          key: 'counsellorName',
+          q: query(collection(db, 'students'), where('counsellor', '==', cleanStaffName)),
+          optional: true,
+        });
+        counselorQueries.push({
+          key: 'mentorName',
+          q: query(collection(db, 'students'), where('mentor', '==', cleanStaffName)),
+          optional: true,
+        });
+      }
+      if (cleanFirstName && cleanFirstName.length >= 3 && cleanFirstName !== cleanStaffName) {
+        counselorQueries.push({
+          key: 'counselorFirstName',
+          q: query(collection(db, 'students'), where('counselor', '==', cleanFirstName)),
+          optional: true,
+        });
+        counselorQueries.push({
+          key: 'counsellorFirstName',
+          q: query(collection(db, 'students'), where('counsellor', '==', cleanFirstName)),
+          optional: true,
+        });
+        counselorQueries.push({
+          key: 'mentorFirstName',
+          q: query(collection(db, 'students'), where('mentor', '==', cleanFirstName)),
+          optional: true,
+        });
+      }
+
+      for (const entry of counselorQueries) {
+        unsubs.push(
+          onSnapshot(
+            entry.q,
+            (snap) => {
+              const subMap = new Map<string, Student>();
+              snap.forEach((d) => {
+                subMap.set(d.id, normalizeStudentDoc(d.id, d.data()));
+              });
+              bucketMap.set(entry.key, subMap);
+              flushMergedCounselorStudents();
+            },
+            handleSnapErr(`students:${entry.key}`, Boolean(entry.optional))
+          )
+        );
+      }
+    }
 
     // 2. Staff & Permissions Matrix (for staff roles)
     if (isStaff) {
-      const staffQuery = isBootAdmin
+      const staffQuery = hasGlobalAccess
         ? collection(db, 'staff')
         : query(collection(db, 'staff'), where('allowedViewerEmails', 'array-contains', authEmail));
       unsubs.push(
@@ -1379,7 +1564,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         )
       );
 
-      const lpPermQuery = isBootAdmin
+      const lpPermQuery = hasGlobalAccess
         ? collection(db, 'launchpad_team_permissions')
         : query(collection(db, 'launchpad_team_permissions'), where('userEmail', '==', authEmail));
       unsubs.push(
@@ -1398,7 +1583,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     }
 
     // 3. Batches
-    const batchesQuery = isBootAdmin
+    const batchesQuery = hasGlobalAccess
       ? collection(db, 'batches')
       : query(collection(db, 'batches'), where('allowedViewerEmails', 'array-contains', authEmail));
     unsubs.push(
@@ -1414,7 +1599,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     );
 
     // 4. Events
-    const eventsQuery = isBootAdmin
+    const eventsQuery = hasGlobalAccess
       ? collection(db, 'events')
       : query(collection(db, 'events'), where('allowedViewerEmails', 'array-contains', authEmail));
     unsubs.push(
@@ -1430,7 +1615,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     );
 
     // 5. Conversations
-    const convQuery = isBootAdmin
+    const convQuery = hasGlobalAccess
       ? collection(db, 'conversations')
       : isStaff
       ? query(collection(db, 'conversations'), where('allowedViewerEmails', 'array-contains', authEmail))
@@ -1500,7 +1685,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     );
 
     // 7. Launchpad Enrollments, Releases, Progress, Certifications, Evaluations, Notifications
-    const enrollmentsQ = isBootAdmin
+    const enrollmentsQ = hasGlobalAccess
       ? collection(db, 'launchpad_enrollments')
       : isStaff
       ? query(collection(db, 'launchpad_enrollments'), where('allowedViewerEmails', 'array-contains', authEmail))
@@ -1517,7 +1702,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       )
     );
 
-    const releasesQ = isBootAdmin
+    const releasesQ = hasGlobalAccess
       ? collection(db, 'launchpad_releases')
       : isStaff
       ? query(collection(db, 'launchpad_releases'), where('allowedViewerEmails', 'array-contains', authEmail))
@@ -1534,7 +1719,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       )
     );
 
-    const progressQ = isBootAdmin
+    const progressQ = hasGlobalAccess
       ? collection(db, 'launchpad_progress')
       : isStaff
       ? query(collection(db, 'launchpad_progress'), where('allowedViewerEmails', 'array-contains', authEmail))
@@ -1551,7 +1736,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       )
     );
 
-    const certsQ = isBootAdmin
+    const certsQ = hasGlobalAccess
       ? collection(db, 'launchpad_certifications')
       : isStaff
       ? query(collection(db, 'launchpad_certifications'), where('allowedViewerEmails', 'array-contains', authEmail))
@@ -1568,7 +1753,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       )
     );
 
-    const evalsQ = isBootAdmin
+    const evalsQ = hasGlobalAccess
       ? collection(db, 'assignment_evaluations')
       : isStaff
       ? query(collection(db, 'assignment_evaluations'), where('allowedViewerEmails', 'array-contains', authEmail))
@@ -1611,7 +1796,15 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         }
       });
     };
-  }, [isAuthenticated, firebaseUser?.uid, firebaseUser?.email, currentUser?.role]);
+  }, [
+    isAuthenticated,
+    firebaseUser?.uid,
+    firebaseUser?.email,
+    currentUser?.role,
+    currentUser?.id,
+    currentUser?.name,
+    hasGlobalPortalAccess,
+  ]);
 
   const sendPortalPasswordResetEmail = async (cleanEmail: string) => {
     try {
@@ -1763,6 +1956,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
   const signOutAll = async (): Promise<void> => {
     autoRepairedSessionRef.current = null;
+    counselorRepairedIdsRef.current.clear();
     await signOut(auth).catch(() => {});
     setIsAuthenticatedState(false);
     setCurrentUserState(null);
@@ -1784,47 +1978,33 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     forceStaffDir?: boolean;
   }): Promise<ResyncPortalAccessResult> => {
     const fbUser = auth.currentUser;
-    if (!fbUser || !isUserAdmin(currentUser)) {
+    const isAdminSession = isUserAdmin(currentUser);
+    const hasGlobalSession =
+      isAdminSession || canStaffAccessAllStudents(currentUser, permissionsMatrixState);
+    if (!fbUser || !hasGlobalSession) {
       return { studentsUpdated: 0, staffSynced: 0, batchesUpdated: 0, eventsUpdated: 0 };
     }
 
-    const isBootAdmin = normalizeEmail(fbUser.email) === BOOTSTRAP_ADMIN_EMAIL;
     let staffList = params?.staffList;
     let studentsList = params?.studentsList;
     let batchesList = params?.batchesList;
     let eventsList = params?.eventsList;
 
     if (!staffList) {
-      if (isBootAdmin) {
-        const snap = await getDocs(collection(db, 'staff')).catch(() => null);
-        staffList = snap ? snap.docs.map((d) => stripPasswordField({ ...(d.data() as StaffMember), id: d.id })) : staff;
-      } else {
-        staffList = staff;
-      }
+      const snap = await getDocs(collection(db, 'staff')).catch(() => null);
+      staffList = snap ? snap.docs.map((d) => stripPasswordField({ ...(d.data() as StaffMember), id: d.id })) : staff;
     }
     if (!studentsList) {
-      if (isBootAdmin) {
-        const snap = await getDocs(collection(db, 'students')).catch(() => null);
-        studentsList = snap ? snap.docs.map((d) => stripPasswordField({ ...(d.data() as Student), id: d.id })) : students;
-      } else {
-        studentsList = students;
-      }
+      const snap = await getDocs(collection(db, 'students')).catch(() => null);
+      studentsList = snap ? snap.docs.map((d) => stripPasswordField({ ...(d.data() as Student), id: d.id })) : students;
     }
     if (!batchesList) {
-      if (isBootAdmin) {
-        const snap = await getDocs(collection(db, 'batches')).catch(() => null);
-        batchesList = snap ? snap.docs.map((d) => ({ ...(d.data() as Batch), id: d.id })) : batches;
-      } else {
-        batchesList = batches;
-      }
+      const snap = await getDocs(collection(db, 'batches')).catch(() => null);
+      batchesList = snap ? snap.docs.map((d) => ({ ...(d.data() as Batch), id: d.id })) : batches;
     }
     if (!eventsList) {
-      if (isBootAdmin) {
-        const snap = await getDocs(collection(db, 'events')).catch(() => null);
-        eventsList = snap ? snap.docs.map((d) => ({ ...(d.data() as EventItem), id: d.id })) : events;
-      } else {
-        eventsList = events;
-      }
+      const snap = await getDocs(collection(db, 'events')).catch(() => null);
+      eventsList = snap ? snap.docs.map((d) => ({ ...(d.data() as EventItem), id: d.id })) : events;
     }
 
     const now = new Date().toISOString();
@@ -1832,83 +2012,139 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     const allStaffViewers = computeAllStaffViewerEmails(staffList);
 
     let staffSynced = 0;
-    for (const st of staffList) {
-      const cleanEmail = normalizeEmail(st?.email);
-      if (!cleanEmail) continue;
-      const dirId = normalizeEmailKey(cleanEmail);
-      const safeStaffId = toValidDocId(st.id || `STAFF-${dirId}`, 'STAFF');
-      const statusNorm = String(st.status || 'Active').toLowerCase() === 'suspended' ? 'Suspended' : 'Active';
-      const dirRef = doc(db, 'staff_directory', dirId);
-      try {
-        const existingDir = params?.forceStaffDir ? null : await getDoc(dirRef).catch(() => null);
-        const dirData = existingDir?.exists() ? (existingDir.data() as any) : null;
-        if (
-          params?.forceStaffDir ||
-          !existingDir?.exists() ||
-          dirData?.status !== statusNorm ||
-          dirData?.role !== (st.role || 'COUNSELOR') ||
-          dirData?.name !== (st.name || cleanEmail)
-        ) {
-          await setDoc(dirRef, {
-            id: dirId,
-            staffId: safeStaffId,
-            email: cleanEmail,
-            name: String(st.name || cleanEmail).trim().slice(0, 200),
-            role: String(st.role || 'COUNSELOR').slice(0, 60),
-            status: statusNorm,
-            students: String(st.students || 'Assigned Scope').slice(0, 120),
-            updatedAt: now,
-          });
-          staffSynced++;
-        }
+    if (isAdminSession) {
+      for (const st of staffList) {
+        const cleanEmail = normalizeEmail(st?.email);
+        if (!cleanEmail) continue;
+        const dirId = normalizeEmailKey(cleanEmail);
+        const safeStaffId = toValidDocId(st.id || `STAFF-${dirId}`, 'STAFF');
+        const statusNorm = String(st.status || 'Active').toLowerCase() === 'suspended' ? 'Suspended' : 'Active';
+        const shouldHaveAll = canStaffAccessAllStudents(st, permissionsMatrixState);
+        const liveAssignedCount = getDirectAssignedStudentsForStaff(studentsList, st, batchesList).length;
+        const expectedStudentsField = shouldHaveAll
+          ? (st.students && ['All', 'ALL', 'Global', 'Global Scope', 'All Students'].includes(st.students)
+              ? st.students
+              : 'All')
+          : `${liveAssignedCount} Student${liveAssignedCount !== 1 ? 's' : ''}`;
+        const cleanFullName = String(st.name || cleanEmail).trim().slice(0, 200);
+        const cleanFirstName = extractStaffFirstName(cleanFullName);
+        const dirRef = doc(db, 'staff_directory', dirId);
+        try {
+          const existingDir = params?.forceStaffDir ? null : await getDoc(dirRef).catch(() => null);
+          const dirData = existingDir?.exists() ? (existingDir.data() as any) : null;
+          if (
+            params?.forceStaffDir ||
+            !existingDir?.exists() ||
+            dirData?.status !== statusNorm ||
+            dirData?.role !== (st.role || 'COUNSELOR') ||
+            dirData?.name !== cleanFullName ||
+            dirData?.firstName !== cleanFirstName ||
+            dirData?.students !== expectedStudentsField ||
+            dirData?.staffId !== safeStaffId
+          ) {
+            await setDoc(dirRef, {
+              id: dirId,
+              staffId: safeStaffId,
+              email: cleanEmail,
+              name: cleanFullName,
+              ...(cleanFirstName ? { firstName: cleanFirstName } : {}),
+              role: String(st.role || 'COUNSELOR').slice(0, 60),
+              status: statusNorm,
+              students: expectedStudentsField,
+              updatedAt: now,
+            });
+            staffSynced++;
+          }
 
-        const expectedStaffViewers = Array.from(new Set([...allStaffViewers, cleanEmail])).slice(0, 50);
-        if (st.id && !validIdRegex.test(st.id)) {
-          const staffPayload = stripUndefinedAndNulls({
-            id: safeStaffId,
-            uid: (st as any).uid,
-            name: String(st.name || cleanEmail).trim().slice(0, 200),
-            email: cleanEmail.slice(0, 200),
-            role: String(st.role || 'COUNSELOR').slice(0, 60),
-            students: String(st.students || 'Assigned Scope').slice(0, 120),
-            status: statusNorm,
-            allowedViewerEmails: expectedStaffViewers,
-            updatedAt: now,
-          });
-          await setDoc(doc(db, 'staff', safeStaffId), staffPayload);
-          await deleteDoc(doc(db, 'staff', st.id)).catch(() => {});
-        } else if (
-          st.id &&
-          !sameStringArray((st as any).allowedViewerEmails, expectedStaffViewers)
-        ) {
-          await updateDoc(doc(db, 'staff', st.id), {
-            allowedViewerEmails: expectedStaffViewers,
-            updatedAt: now,
-          }).catch(() => {});
+          const expectedStaffViewers = Array.from(new Set([...allStaffViewers, cleanEmail])).slice(0, 200);
+          if (st.id && !validIdRegex.test(st.id)) {
+            const staffPayload = stripUndefinedAndNulls({
+              id: safeStaffId,
+              uid: (st as any).uid,
+              name: String(st.name || cleanEmail).trim().slice(0, 200),
+              email: cleanEmail.slice(0, 200),
+              role: String(st.role || 'COUNSELOR').slice(0, 60),
+              students: expectedStudentsField,
+              status: statusNorm,
+              allowedViewerEmails: expectedStaffViewers,
+              updatedAt: now,
+            });
+            await setDoc(doc(db, 'staff', safeStaffId), staffPayload);
+            await deleteDoc(doc(db, 'staff', st.id)).catch(() => {});
+          } else if (
+            st.id &&
+            (!sameStringArray((st as any).allowedViewerEmails, expectedStaffViewers) ||
+              st.students !== expectedStudentsField)
+          ) {
+            await updateDoc(doc(db, 'staff', st.id), {
+              students: expectedStudentsField,
+              allowedViewerEmails: expectedStaffViewers,
+              updatedAt: now,
+            }).catch(() => {});
+          }
+        } catch (err) {
+          console.warn('Staff directory sync warning:', cleanEmail, err);
         }
-      } catch (err) {
-        console.warn('Staff directory sync warning:', cleanEmail, err);
       }
     }
 
     let studentsUpdated = 0;
     for (const stu of studentsList) {
       if (!stu?.id) continue;
-      const nextViewers = computeStudentViewerEmails(stu, staffList, permissionsMatrixState, batchesList);
+      const matchedCounselor = resolveCounselorForStudent(stu, staffList);
+      const expectedCounselorId = matchedCounselor?.id ? String(matchedCounselor.id).trim() : '';
+      const expectedCounselorEmail = matchedCounselor?.email ? normalizeEmail(matchedCounselor.email) : '';
+      const expectedCounselorName = matchedCounselor?.name ? String(matchedCounselor.name).trim() : (stu.counselor || '');
+
+      const enrichedStu: Student = {
+        ...stu,
+        ...(matchedCounselor
+          ? {
+              counselor: expectedCounselorName,
+              counselorId: expectedCounselorId,
+              counselorEmail: expectedCounselorEmail,
+            }
+          : {}),
+      };
+
+      const nextViewers = computeStudentViewerEmails(enrichedStu, staffList, permissionsMatrixState, batchesList);
       const prevViewers = (stu as any).allowedViewerEmails;
       const needsIdMigration = !validIdRegex.test(stu.id) || stu.id.length > 128;
-      if (!needsIdMigration && sameStringArray(prevViewers, nextViewers)) {
+      const needsForeignKeySync =
+        Boolean(matchedCounselor) &&
+        (stu.counselorId !== expectedCounselorId ||
+          normalizeEmail(stu.counselorEmail) !== expectedCounselorEmail ||
+          stu.counselor !== expectedCounselorName);
+
+      if (!needsIdMigration && !needsForeignKeySync && sameStringArray(prevViewers, nextViewers)) {
         continue;
       }
+
       try {
-        if (needsIdMigration) {
-          const safeStuId = toValidDocId(stu.id, 'STU');
-          const payload = buildStudentDocPayload({ ...stu, id: safeStuId }, safeStuId);
-          payload.allowedViewerEmails = nextViewers;
+        const safeStuId = toValidDocId(stu.id, 'STU');
+        const payload = buildStudentDocPayload(
+          { ...enrichedStu, id: safeStuId },
+          safeStuId,
+          staffList,
+          batchesList
+        );
+        payload.allowedViewerEmails = nextViewers;
+        payload.updatedAt = now;
+
+        if (isAdminSession || needsIdMigration) {
           await setDoc(doc(db, 'students', safeStuId), payload);
-          await deleteDoc(doc(db, 'students', stu.id)).catch(() => {});
+          if (needsIdMigration && safeStuId !== stu.id) {
+            await deleteDoc(doc(db, 'students', stu.id)).catch(() => {});
+          }
         } else {
-          await updateDoc(doc(db, 'students', stu.id), {
+          await updateDoc(doc(db, 'students', safeStuId), {
+            ...(matchedCounselor
+              ? {
+                  counselor: payload.counselor,
+                  counselorId: payload.counselorId,
+                  counselorEmail: payload.counselorEmail,
+                }
+              : {}),
             allowedViewerEmails: nextViewers,
             updatedAt: now,
           });
@@ -1960,13 +2196,21 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     return { studentsUpdated, staffSynced, batchesUpdated, eventsUpdated };
   };
 
-  const resyncPortalAccess = async (opts?: { forceStaffDir?: boolean }): Promise<ResyncPortalAccessResult> => {
-    return syncPortalRecordsViewerEmails({ forceStaffDir: opts?.forceStaffDir ?? true });
+  const resyncPortalAccess = async (opts?: {
+    forceStaffDir?: boolean;
+    staffList?: StaffMember[];
+    studentsList?: Student[];
+  }): Promise<ResyncPortalAccessResult> => {
+    return syncPortalRecordsViewerEmails({
+      forceStaffDir: opts?.forceStaffDir ?? true,
+      staffList: opts?.staffList,
+      studentsList: opts?.studentsList,
+    });
   };
 
-  // Automatically repair /staff_directory & allowedViewerEmails once per Admin session
+  // Automatically repair /staff_directory, counselor foreign keys, & allowedViewerEmails once per Admin / Global Manager session
   useEffect(() => {
-    if (!isAuthenticated || !firebaseUser || !isUserAdmin(currentUser)) return;
+    if (!isAuthenticated || !firebaseUser || !hasGlobalPortalAccess) return;
     if (autoRepairedSessionRef.current === firebaseUser.uid) return;
     if (staff.length === 0 && students.length === 0) return;
 
@@ -1977,7 +2221,71 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     }, 1200);
 
     return () => clearTimeout(timer);
-  }, [isAuthenticated, firebaseUser?.uid, currentUser?.role, currentUser?.email, staff.length, students.length]);
+  }, [isAuthenticated, firebaseUser?.uid, hasGlobalPortalAccess, staff.length, students.length]);
+
+  // Self-heal counselor foreign keys & allowedViewerEmails when an Assigned-Scope Counselor signs in directly
+  useEffect(() => {
+    if (!isAuthenticated || !firebaseUser || !currentUser || hasGlobalPortalAccess) return;
+    if ((currentUser.role || '').toUpperCase() === 'STUDENT') return;
+    if (students.length === 0) return;
+
+    const authEmail = normalizeEmail(firebaseUser.email || currentUser.email);
+    const cleanStaffId = String(currentUser.id || '').trim();
+    const cleanStaffName = String(currentUser.name || '').trim();
+    if (!authEmail || !cleanStaffId || !cleanStaffName) return;
+
+    const timer = setTimeout(() => {
+      const now = new Date().toISOString();
+      students.forEach((stu) => {
+        if (!stu?.id || counselorRepairedIdsRef.current.has(stu.id)) return;
+        const sAny = stu as Record<string, any>;
+        const isPrimaryCounselorMatch =
+          isStaffCounselor(currentUser) &&
+          (doesValueMatchStaffMember(stu.counselor, currentUser) ||
+            doesValueMatchStaffMember(sAny.counselorId, currentUser) ||
+            doesValueMatchStaffMember(sAny.counselorEmail, currentUser) ||
+            doesValueMatchStaffMember(sAny.counsellor, currentUser) ||
+            doesValueMatchStaffMember(sAny.mentor, currentUser));
+
+        const existingViewers = Array.isArray(stu.allowedViewerEmails)
+          ? stu.allowedViewerEmails.map((e) => normalizeEmail(e)).filter(Boolean)
+          : [];
+        const missingSelfViewer = !existingViewers.includes(authEmail);
+        const missingForeignKey =
+          isPrimaryCounselorMatch &&
+          (stu.counselor !== cleanStaffName ||
+            stu.counselorId !== cleanStaffId ||
+            normalizeEmail(stu.counselorEmail) !== authEmail);
+
+        if (!missingSelfViewer && !missingForeignKey) {
+          counselorRepairedIdsRef.current.add(stu.id);
+          return;
+        }
+
+        counselorRepairedIdsRef.current.add(stu.id);
+        const mergedViewers = Array.from(
+          new Set([BOOTSTRAP_ADMIN_EMAIL, ...existingViewers, authEmail, normalizeEmail(stu.email)].filter(Boolean))
+        ).slice(0, 200);
+
+        const patch: Record<string, any> = {
+          allowedViewerEmails: mergedViewers,
+          updatedAt: now,
+        };
+        if (isPrimaryCounselorMatch) {
+          patch.counselor = cleanStaffName.slice(0, 160);
+          patch.counselorId = cleanStaffId.slice(0, 128);
+          patch.counselorEmail = authEmail.slice(0, 200);
+        }
+
+        const safeId = toValidDocId(stu.id, 'STU');
+        if (safeId === stu.id) {
+          void updateDoc(doc(db, 'students', stu.id), patch).catch(() => {});
+        }
+      });
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [isAuthenticated, firebaseUser?.uid, currentUser?.id, hasGlobalPortalAccess, students]);
 
   const restoreLegacySqlToFirestore = async (opts?: {
     includeDemo?: boolean;
@@ -2079,9 +2387,10 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             staffMerged++;
 
             const dirId = normalizeEmailKey(em);
+            const cleanFirst = extractStaffFirstName(cleanSt.name);
             await setDoc(doc(db, 'staff', safeId), stripUndefinedAndNulls({
               ...cleanSt,
-              allowedViewerEmails: Array.from(new Set([...allViewerEmails, em])).slice(0, 50),
+              allowedViewerEmails: Array.from(new Set([...allViewerEmails, em])).slice(0, 200),
               updatedAt: now,
             })).catch(() => {});
             await setDoc(doc(db, 'staff_directory', dirId), {
@@ -2089,6 +2398,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
               staffId: safeId,
               email: em,
               name: cleanSt.name,
+              ...(cleanFirst ? { firstName: cleanFirst } : {}),
               role: cleanSt.role,
               status: cleanSt.status || 'Active',
               students: cleanSt.students || 'Assigned Scope',
@@ -2229,16 +2539,22 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   };
 
   // Firestore Student sanitization & write helpers
-  const buildStudentDocPayload = (raw: Student, safeId: string): Record<string, any> => {
+  const buildStudentDocPayload = (
+    raw: Student,
+    safeId: string,
+    staffList: StaffMember[] = staff,
+    batchesList: Batch[] = batches
+  ): Record<string, any> => {
     const cleanEmail = normalizeEmail(raw.email) || 'student@uppseekers.com';
     const cleaned = stripUndefinedAndNulls(stripPasswordField(raw));
     const allowedKeys = [
       'id', 'name', 'email', 'phone', 'intake', 'school', 'counselor',
+      'counselorId', 'counselorEmail', 'counsellor', 'mentor', 'mentorId',
       'researchMentor', 'satMathMentor', 'satVerbalMentor', 'universityMentor',
       'readiness', 'countries', 'activities', 'operationalLogs',
       'shortlist', 'documents', 'essays', 'tasks', 'extracurriculars',
       'academicScores', 'credentials', 'conversations', 'taskSheetLink',
-      'major1', 'major2', 'targetDegree', 'targetCountry', 'uid', 'role', 'status',
+      'major1', 'major2', 'targetDegree', 'targetCountry', 'uid', 'role', 'status', 'createdAt',
     ];
     const out: Record<string, any> = {};
     for (const k of allowedKeys) {
@@ -2247,10 +2563,33 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     out.id = safeId;
     out.name = String(cleaned.name || 'Student').trim().slice(0, 200) || 'Student';
     out.email = cleanEmail.slice(0, 200);
+
+    // Resolve and persist canonical counselor foreign key (counselorId + counselorEmail + counselor name)
+    const rawCounselorTrimmed = typeof cleaned.counselor === 'string' ? cleaned.counselor.trim() : '';
+    if (!rawCounselorTrimmed || rawCounselorTrimmed.toLowerCase() === 'unassigned') {
+      if (typeof cleaned.counselor === 'string') {
+        out.counselor = rawCounselorTrimmed.slice(0, 160);
+      }
+      delete out.counselorId;
+      delete out.counselorEmail;
+    } else {
+      const matchedCounselor = resolveCounselorForStudent(raw, staffList);
+      if (matchedCounselor) {
+        out.counselor = String(matchedCounselor.name || rawCounselorTrimmed).trim().slice(0, 160);
+        if (matchedCounselor.id) out.counselorId = String(matchedCounselor.id).trim().slice(0, 128);
+        if (matchedCounselor.email) out.counselorEmail = normalizeEmail(matchedCounselor.email).slice(0, 200);
+      }
+    }
+
     if (typeof out.phone === 'string') out.phone = out.phone.slice(0, 60);
     if (typeof out.intake === 'string') out.intake = out.intake.slice(0, 60);
     if (typeof out.school === 'string') out.school = out.school.slice(0, 200);
     if (typeof out.counselor === 'string') out.counselor = out.counselor.slice(0, 160);
+    if (typeof out.counselorId === 'string') out.counselorId = out.counselorId.slice(0, 128);
+    if (typeof out.counselorEmail === 'string') out.counselorEmail = normalizeEmail(out.counselorEmail).slice(0, 200);
+    if (typeof out.counsellor === 'string') out.counsellor = out.counsellor.slice(0, 160);
+    if (typeof out.mentor === 'string') out.mentor = out.mentor.slice(0, 160);
+    if (typeof out.mentorId === 'string') out.mentorId = out.mentorId.slice(0, 128);
     if (typeof out.researchMentor === 'string') out.researchMentor = out.researchMentor.slice(0, 160);
     if (typeof out.satMathMentor === 'string') out.satMathMentor = out.satMathMentor.slice(0, 160);
     if (typeof out.satVerbalMentor === 'string') out.satVerbalMentor = out.satVerbalMentor.slice(0, 160);
@@ -2260,9 +2599,15 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     if (typeof out.major2 === 'string') out.major2 = out.major2.slice(0, 160);
     if (typeof out.targetDegree === 'string') out.targetDegree = out.targetDegree.slice(0, 120);
     if (typeof out.targetCountry === 'string') out.targetCountry = out.targetCountry.slice(0, 120);
+    if (typeof out.createdAt === 'string') out.createdAt = out.createdAt.slice(0, 64);
     out.readiness = Number.isFinite(Number(out.readiness)) ? Number(out.readiness) : 0;
     if (Array.isArray(out.countries)) out.countries = out.countries.slice(0, 20).map((c: any) => String(c));
-    out.allowedViewerEmails = computeStudentViewerEmails({ ...raw, id: safeId, email: cleanEmail });
+    out.allowedViewerEmails = computeStudentViewerEmails(
+      { ...(out as Student), id: safeId, email: cleanEmail },
+      staffList,
+      permissionsMatrixState,
+      batchesList
+    );
     out.updatedAt = new Date().toISOString();
     return out;
   };
@@ -2300,7 +2645,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         } else {
           // Staff updates only staff-mutable fields
           const staffMutableKeys = [
-            'name', 'phone', 'intake', 'school', 'counselor', 'researchMentor',
+            'name', 'phone', 'intake', 'school', 'counselor', 'counselorId', 'counselorEmail',
+            'counsellor', 'mentor', 'mentorId', 'researchMentor',
             'satMathMentor', 'satVerbalMentor', 'universityMentor', 'readiness',
             'countries', 'activities', 'operationalLogs', 'shortlist', 'documents',
             'essays', 'tasks', 'extracurriculars', 'academicScores', 'major1',
@@ -2382,7 +2728,11 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         (prev.id === clean.id ||
           (prev.email && clean.email && normalizeEmail(prev.email) === normalizeEmail(clean.email)))
       ) {
-        return { ...prev, ...clean };
+        return {
+          ...prev,
+          ...(clean as any),
+          status: prev.status || 'Active',
+        };
       }
       return prev;
     });
@@ -2428,17 +2778,19 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         if (!cleanEmail) return;
         const prev = staff.find((p) => p.id === st.id);
         const isModified = !prev || JSON.stringify(prev) !== JSON.stringify(st) || safeId !== rawId;
-        const expectedViewers = Array.from(new Set([...viewerEmails, cleanEmail])).slice(0, 50);
+        const expectedViewers = Array.from(new Set([...viewerEmails, cleanEmail])).slice(0, 200);
         const viewersChanged = !prev || !sameStringArray((prev as any).allowedViewerEmails, expectedViewers);
         if (!isModified && !viewersChanged) return;
         if (isModified) shouldResyncStudents = true;
 
         const statusNorm = String(st.status || 'Active').toLowerCase() === 'suspended' ? 'Suspended' : 'Active';
+        const cleanFullName = String(st.name || cleanEmail).trim().slice(0, 200);
+        const cleanFirstName = extractStaffFirstName(cleanFullName);
 
         const staffPayload = stripUndefinedAndNulls({
           id: safeId,
           uid: (st as any).uid,
-          name: String(st.name || cleanEmail).trim().slice(0, 200),
+          name: cleanFullName,
           email: cleanEmail.slice(0, 200),
           role: String(st.role || 'COUNSELOR').slice(0, 60),
           students: String(st.students || 'Assigned Scope').slice(0, 120),
@@ -2453,6 +2805,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
           staffId: safeId,
           email: cleanEmail,
           name: staffPayload.name,
+          ...(cleanFirstName ? { firstName: cleanFirstName } : {}),
           role: staffPayload.role,
           status: statusNorm,
           students: staffPayload.students,

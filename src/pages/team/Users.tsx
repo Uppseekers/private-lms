@@ -5,7 +5,18 @@ import { Button } from '@/components/ui/button';
 import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, ChevronUp, Video, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, SlidersHorizontal, Award, Sparkles, CheckSquare, KeyRound, Send } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage, DocumentInfo } from '@/types';
-import { canStaffAccessAllStudents, isStudentAssignedToStaff, isUserAdmin, isTaskVisibleToStaff, isTaskAssignedByStaff, isStaffMentorOrFaculty } from '@/lib/staffPermissions';
+import {
+  canStaffAccessAllStudents,
+  isStudentAssignedToStaff,
+  isStudentDirectlyAssignedToStaff,
+  getDirectAssignedStudentsForStaff,
+  resolveCounselorForStudent,
+  doesValueMatchStaffMember,
+  isUserAdmin,
+  isTaskVisibleToStaff,
+  isTaskAssignedByStaff,
+  isStaffMentorOrFaculty,
+} from '@/lib/staffPermissions';
 import DocumentPreviewModal from '@/components/DocumentPreviewModal';
 import CompetencyRadar from '@/pages/student/CompetencyRadar';
 import PortalCredentialsManager from '@/components/PortalCredentialsManager';
@@ -19,6 +30,7 @@ export default function TeamUsers() {
     updateStudent,
     staff,
     setStaff,
+    batches,
     currentUser,
     permissionsMatrix,
     provisionPortalUser,
@@ -80,24 +92,38 @@ export default function TeamUsers() {
   const filteredStudents = (students || []).filter(s => {
     if (!s) return false;
     if (!canStaffAccessAllStudents(currentUser, permissionsMatrix)) {
-      if (!isStudentAssignedToStaff(s, currentUser, permissionsMatrix)) return false;
+      if (!isStudentAssignedToStaff(s, currentUser, permissionsMatrix, batches)) return false;
     }
 
     if (staffFilter !== 'All') {
       if (staffFilter === 'Unassigned') {
-        const hasAssignment = s.counselor || s.researchMentor || s.satMathMentor || s.satVerbalMentor || (s as any).mentor;
-        if (hasAssignment) return false;
+        const hasAssignment =
+          s.counselor ||
+          s.counselorId ||
+          s.counselorEmail ||
+          s.researchMentor ||
+          s.satMathMentor ||
+          s.satVerbalMentor ||
+          (s as any).mentor;
+        if (hasAssignment && String(s.counselor || '').toLowerCase() !== 'unassigned') return false;
       } else {
-        const targetStaff = (staff || []).find(st => st && (st.id === staffFilter || (st.name || '').toLowerCase() === staffFilter.toLowerCase()));
+        const targetStaff = (staff || []).find(
+          st =>
+            st &&
+            (st.id === staffFilter ||
+              (st.email || '').toLowerCase() === staffFilter.toLowerCase() ||
+              (st.name || '').toLowerCase() === staffFilter.toLowerCase())
+        );
         if (targetStaff) {
-          if (!isStudentAssignedToStaff(s, targetStaff, permissionsMatrix)) return false;
+          if (!isStudentDirectlyAssignedToStaff(s, targetStaff, batches)) return false;
         } else {
           const staffName = staffFilter.toLowerCase().trim();
-          const matches = (s.counselor && s.counselor.toLowerCase().includes(staffName)) ||
-                          (s.researchMentor && s.researchMentor.toLowerCase().includes(staffName)) ||
-                          (s.satMathMentor && s.satMathMentor.toLowerCase().includes(staffName)) ||
-                          (s.satVerbalMentor && s.satVerbalMentor.toLowerCase().includes(staffName)) ||
-                          (Boolean((s as any).mentor) && String((s as any).mentor).toLowerCase().includes(staffName));
+          const matches =
+            (s.counselor && s.counselor.toLowerCase().includes(staffName)) ||
+            (s.researchMentor && s.researchMentor.toLowerCase().includes(staffName)) ||
+            (s.satMathMentor && s.satMathMentor.toLowerCase().includes(staffName)) ||
+            (s.satVerbalMentor && s.satVerbalMentor.toLowerCase().includes(staffName)) ||
+            (Boolean((s as any).mentor) && String((s as any).mentor).toLowerCase().includes(staffName));
           if (!matches) return false;
         }
       }
@@ -292,10 +318,10 @@ export default function TeamUsers() {
                 <optgroup label="Counselors & Mentors">
                   {(staff || []).map(st => {
                     if (!st) return null;
-                    const count = (students || []).filter(s => s && isStudentAssignedToStaff(s, st, permissionsMatrix)).length;
+                    const count = getDirectAssignedStudentsForStaff(students || [], st, batches).length;
                     const displayRole = (st.role || 'STAFF').replace(/_/g, ' ');
                     return (
-                      <option key={st.id || st.email} value={st.name || st.id}>
+                      <option key={st.id || st.email} value={st.id || st.name}>
                         {st.name || 'Staff'} ({displayRole}) — {count} student{count !== 1 ? 's' : ''}
                       </option>
                     );
@@ -607,7 +633,24 @@ export default function TeamUsers() {
                         {member.role}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-slate-600 text-xs">{member.students || 'All'}</td>
+                    <td className="px-6 py-4 text-slate-600 text-xs">
+                      {(() => {
+                        const directCount = getDirectAssignedStudentsForStaff(students || [], member, batches).length;
+                        const isGlobalMember = canStaffAccessAllStudents(member, permissionsMatrix);
+                        if (isGlobalMember) {
+                          return (
+                            <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
+                              Global Scope ({students.length} total{directCount > 0 ? ` · ${directCount} direct` : ''})
+                            </span>
+                          );
+                        }
+                        return (
+                          <span className="font-semibold text-slate-800">
+                            {directCount} Student{directCount !== 1 ? 's' : ''}
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="px-6 py-4 font-bold text-xs">
                       <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold uppercase">
                         {member.status || 'Active'}
@@ -3063,6 +3106,8 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
     
     const initialPassword = (formData.password || '').trim() || (Math.random().toString(36).slice(-8) + 'A1!');
 
+    const matchedCounselor = resolveCounselorForStudent({ counselor: formData.counselor }, staff);
+
     const newStudent: Student = {
       id: newId,
       name: formData.name,
@@ -3071,7 +3116,9 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
       intake: formData.intake,
       countries: formData.countries,
       school: formData.school,
-      counselor: formData.counselor,
+      counselor: matchedCounselor?.name || formData.counselor,
+      ...(matchedCounselor?.id ? { counselorId: matchedCounselor.id } : {}),
+      ...(matchedCounselor?.email ? { counselorEmail: matchedCounselor.email.trim().toLowerCase() } : {}),
       researchMentor: formData.researchMentor,
       satVerbalMentor: formData.satVerbalMentor,
       satMathMentor: formData.satMathMentor,
@@ -4214,6 +4261,10 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
       details: isTaskSheetChanged ? `Task Sheet Link set to: ${formData.taskSheetLink}` : undefined
     };
 
+    const matchedCounselor = formData.counselor
+      ? resolveCounselorForStudent({ counselor: formData.counselor }, staff)
+      : null;
+
     onUpdate({
       ...student,
       name: formData.name,
@@ -4222,7 +4273,11 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
       school: formData.school,
       intake: formData.intake,
       countries: formData.countries.split(',').map(s => s.trim()).filter(Boolean),
-      counselor: formData.counselor,
+      counselor: matchedCounselor?.name || formData.counselor,
+      counselorId: matchedCounselor?.id || (formData.counselor ? student.counselorId : undefined),
+      counselorEmail: matchedCounselor?.email
+        ? matchedCounselor.email.trim().toLowerCase()
+        : (formData.counselor ? student.counselorEmail : undefined),
       researchMentor: formData.researchMentor,
       satVerbalMentor: formData.satVerbalMentor,
       satMathMentor: formData.satMathMentor,
@@ -4697,24 +4752,145 @@ function StaffDetailDrawer({
   onClose: () => void; 
   onSelectStudent?: (student: Student) => void;
 }) {
-  const { students, events, updateStudent, permissionsMatrix, currentUser, staff, setStaff, resetPortalUserPassword } = useDatabase();
+  const { students, setStudents, events, batches, updateStudent, permissionsMatrix, currentUser, staff, setStaff, resetPortalUserPassword, resyncPortalAccess } = useDatabase();
   const [activeTab, setActiveTab] = useState<'students' | 'tasks' | 'logs'>('students');
   const [logSearchQuery, setLogSearchQuery] = useState('');
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isManageStudentsOpen, setIsManageStudentsOpen] = useState(false);
+  const [draftStudentIds, setDraftStudentIds] = useState<string[]>([]);
+  const [manageSearchQuery, setManageSearchQuery] = useState('');
+  const [manageFilterMode, setManageFilterMode] = useState<'all' | 'assigned' | 'unassigned' | 'activity'>('all');
+  const canManageRoster = isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix);
 
-  // 1. Assigned Students
+  const directAssignedStudents = React.useMemo(() => {
+    return getDirectAssignedStudentsForStaff(students, staffMember, batches);
+  }, [students, staffMember, batches]);
+
+  const historicalActivityMatchIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    students.forEach((s: any) => {
+      const acts = Array.isArray(s.activities) ? s.activities : [];
+      const logs = Array.isArray(s.operationalLogs) ? s.operationalLogs : [];
+      const tasks = Array.isArray(s.tasks) ? s.tasks : [];
+      const essays = Array.isArray(s.essays) ? s.essays : [];
+      const matched =
+        acts.some((a: any) => doesValueMatchStaffMember(a?.user, staffMember) || doesValueMatchStaffMember(a?.author, staffMember)) ||
+        logs.some((l: any) => doesValueMatchStaffMember(l?.performedBy, staffMember)) ||
+        tasks.some((t: any) => doesValueMatchStaffMember(t?.assignedBy, staffMember)) ||
+        essays.some(
+          (es: any) =>
+            doesValueMatchStaffMember(es?.counselor, staffMember) ||
+            (Array.isArray(es?.versions) && es.versions.some((v: any) => doesValueMatchStaffMember(v?.author, staffMember)))
+        );
+      if (matched) ids.add(s.id);
+    });
+    return ids;
+  }, [students, staffMember]);
+
+  const openManageStudentsModal = () => {
+    setDraftStudentIds(directAssignedStudents.map((s) => s.id));
+    setManageSearchQuery('');
+    setManageFilterMode('all');
+    setIsManageStudentsOpen(true);
+  };
+
+  const handleSaveManagedStudents = () => {
+    const roleUpper = (staffMember.role || '').toUpperCase().replace(/[\s-]+/g, '_');
+    const cleanMemberName = (staffMember.name || '').trim();
+    const cleanMemberEmail = (staffMember.email || '').trim().toLowerCase();
+
+    const updatedStudents = students.map((s) => {
+      if (draftStudentIds.includes(s.id)) {
+        if (roleUpper === 'RESEARCH_GUIDE' || roleUpper === 'RESEARCH_MENTOR' || roleUpper === 'RESEARCH_FACULTY') {
+          return { ...s, researchMentor: cleanMemberName };
+        } else if (roleUpper === 'SAT_MATH_FACULTY') {
+          return { ...s, satMathMentor: cleanMemberName };
+        } else if (roleUpper === 'SAT_VERBAL_FACULTY') {
+          return { ...s, satVerbalMentor: cleanMemberName };
+        } else {
+          return {
+            ...s,
+            counselor: cleanMemberName,
+            counselorId: staffMember.id,
+            counselorEmail: cleanMemberEmail,
+            counsellor: cleanMemberName,
+            mentor: cleanMemberName,
+          };
+        }
+      } else {
+        const updated = { ...s } as any;
+        if (
+          doesValueMatchStaffMember(updated.counselor, staffMember) ||
+          doesValueMatchStaffMember(updated.counselorId, staffMember) ||
+          doesValueMatchStaffMember(updated.counselorEmail, staffMember) ||
+          doesValueMatchStaffMember(updated.counsellor, staffMember)
+        ) {
+          updated.counselor = '';
+          delete updated.counselorId;
+          delete updated.counselorEmail;
+          delete updated.counsellor;
+        }
+        if (doesValueMatchStaffMember(updated.researchMentor, staffMember)) updated.researchMentor = '';
+        if (doesValueMatchStaffMember(updated.satMathMentor, staffMember)) updated.satMathMentor = '';
+        if (doesValueMatchStaffMember(updated.satVerbalMentor, staffMember)) updated.satVerbalMentor = '';
+        if (doesValueMatchStaffMember(updated.mentor, staffMember)) updated.mentor = '';
+        return updated;
+      }
+    });
+
+    setStudents(updatedStudents);
+
+    const updatedStaff = staff.map((st) =>
+      st.id === staffMember.id
+        ? {
+            ...st,
+            students: canStaffAccessAllStudents(st, permissionsMatrix)
+              ? 'All'
+              : `${draftStudentIds.length} Student${draftStudentIds.length !== 1 ? 's' : ''}`,
+          }
+        : st
+    );
+    setStaff(updatedStaff);
+
+    void resyncPortalAccess({
+      staffList: updatedStaff,
+      studentsList: updatedStudents,
+      forceStaffDir: false,
+    });
+
+    setIsManageStudentsOpen(false);
+  };
+
+  const memberHasGlobalScope = React.useMemo(() => {
+    return canStaffAccessAllStudents(staffMember, permissionsMatrix);
+  }, [staffMember, permissionsMatrix]);
+
+  const [scopeViewMode, setScopeViewMode] = useState<'direct' | 'global'>(
+    () => (canStaffAccessAllStudents(staffMember, permissionsMatrix) && getDirectAssignedStudentsForStaff(students, staffMember, batches).length === 0 ? 'global' : 'direct')
+  );
+
+  // 1. Assigned Students — unified relational mapping matching the summary counter
   const assignedStudents = React.useMemo(() => {
-    return students.filter(s => isStudentAssignedToStaff(s, staffMember, permissionsMatrix));
-  }, [students, staffMember, permissionsMatrix]);
+    if (memberHasGlobalScope && scopeViewMode === 'global') {
+      return students;
+    }
+    return directAssignedStudents;
+  }, [students, directAssignedStudents, memberHasGlobalScope, scopeViewMode]);
+
+  const directAssignedIds = React.useMemo(
+    () => new Set(directAssignedStudents.map((s) => s.id)),
+    [directAssignedStudents]
+  );
 
   // 2. Staff Task details
   const staffTasks = React.useMemo(() => {
     const list: any[] = [];
     students.forEach(student => {
+      const isDirectStu = directAssignedIds.has(student.id);
       (student.tasks || []).forEach((t: any) => {
         if (
-          (t.assignedBy && t.assignedBy.toLowerCase().includes(staffMember.name.toLowerCase())) ||
-          (student.counselor && student.counselor.toLowerCase().includes(staffMember.name.toLowerCase()))
+          doesValueMatchStaffMember(t.assignedBy, staffMember) ||
+          isDirectStu
         ) {
           list.push({
             id: t.id || Math.random().toString(),
@@ -4731,7 +4907,7 @@ function StaffDetailDrawer({
     });
 
     events.forEach(evt => {
-      if (evt.host && evt.host.toLowerCase().includes(staffMember.name.toLowerCase())) {
+      if (doesValueMatchStaffMember(evt.host, staffMember)) {
         (evt.tasks || []).forEach((mt: any) => {
           list.push({
             id: mt.id || Math.random().toString(),
@@ -4756,11 +4932,11 @@ function StaffDetailDrawer({
     students.forEach(student => {
       (student.activities || (student as any).activity || []).forEach((act: any) => {
         if (
-          (act.user && act.user.toLowerCase().includes(staffMember.name.toLowerCase())) ||
-          (act.author && act.author.toLowerCase().includes(staffMember.name.toLowerCase())) ||
+          doesValueMatchStaffMember(act.user, staffMember) ||
+          doesValueMatchStaffMember(act.author, staffMember) ||
           (act.description && act.description.toLowerCase().includes(staffMember.name.toLowerCase())) ||
           (act.text && act.text.toLowerCase().includes(staffMember.name.toLowerCase())) ||
-          (student.counselor && student.counselor.toLowerCase() === staffMember.name.toLowerCase())
+          directAssignedIds.has(student.id)
         ) {
           logs.push({
             id: act.id || Math.random().toString(),
@@ -4828,12 +5004,27 @@ function StaffDetailDrawer({
             <p className="text-xs text-slate-300 mt-1 flex items-center gap-3">
               <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" /> {staffMember.email}</span>
               <span>•</span>
-              <span className="flex items-center gap-1"><Shield className="w-3.5 h-3.5 text-emerald-400" /> Scope: {staffMember.students || 'Assigned'}</span>
+              <span className="flex items-center gap-1">
+                <Shield className="w-3.5 h-3.5 text-emerald-400" />
+                Scope: {memberHasGlobalScope ? `Global (${students.length} Students)` : `${directAssignedStudents.length} Assigned Students`}
+              </span>
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
+          {memberHasGlobalScope && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setScopeViewMode(prev => (prev === 'direct' ? 'global' : 'direct'))}
+              className="text-xs font-bold border-indigo-400/60 bg-indigo-500/20 text-indigo-100 hover:bg-indigo-500/30 hover:text-white"
+            >
+              {scopeViewMode === 'global'
+                ? `Showing Global (${students.length})`
+                : `Showing Direct (${directAssignedStudents.length})`}
+            </Button>
+          )}
           {isUserAdmin(currentUser) && (
             <Button
               size="sm"
@@ -4926,7 +5117,18 @@ function StaffDetailDrawer({
         {/* TAB 1: Assigned Students */}
         {activeTab === 'students' && (
           <div className="space-y-4">
-            <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Students Under Staff Management</h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Students Under Staff Management</h3>
+              {canManageRoster && !memberHasGlobalScope && (
+                <Button
+                  size="sm"
+                  onClick={openManageStudentsModal}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold h-8 px-3"
+                >
+                  <Plus className="w-3.5 h-3.5 mr-1.5" /> Assign / Manage Students
+                </Button>
+              )}
+            </div>
             {assignedStudents.length > 0 ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {assignedStudents.map(student => (
@@ -4971,10 +5173,25 @@ function StaffDetailDrawer({
                 ))}
               </div>
             ) : (
-              <div className="p-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200">
+              <div className="p-12 text-center text-slate-400 bg-white rounded-xl border border-slate-200 space-y-3">
                 <UsersIcon className="w-10 h-10 text-slate-300 mx-auto mb-2" />
-                <p className="font-semibold text-slate-700">No Direct Students Assigned</p>
-                <p className="text-xs">This staff user operates across global or unmapped scope.</p>
+                <div>
+                  <p className="font-semibold text-slate-700">No Direct Students Assigned</p>
+                  <p className="text-xs mt-0.5">
+                    {historicalActivityMatchIds.size > 0
+                      ? `Found ${historicalActivityMatchIds.size} student${historicalActivityMatchIds.size !== 1 ? 's' : ''} with historical updates by ${staffMember.name}.`
+                      : 'Click Assign / Manage Students to link students to this counselor or mentor.'}
+                  </p>
+                </div>
+                {canManageRoster && !memberHasGlobalScope && (
+                  <Button
+                    size="sm"
+                    onClick={openManageStudentsModal}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold"
+                  >
+                    Assign Students Now
+                  </Button>
+                )}
               </div>
             )}
           </div>
@@ -5087,6 +5304,164 @@ function StaffDetailDrawer({
         )}
 
       </div>
+
+      {/* Manage Student Assignments Modal inside StaffDetailDrawer */}
+      {isManageStudentsOpen && (() => {
+        const visibleModalStudents = students.filter((st) => {
+          const isChecked = draftStudentIds.includes(st.id);
+          const curCounselor = (st.counselor || '').trim();
+          const isUnassigned = !curCounselor || curCounselor.toLowerCase() === 'unassigned';
+          if (manageFilterMode === 'assigned' && !isChecked) return false;
+          if (manageFilterMode === 'unassigned' && !isUnassigned) return false;
+          if (manageFilterMode === 'activity' && !historicalActivityMatchIds.has(st.id)) return false;
+          if (manageSearchQuery.trim()) {
+            const q = manageSearchQuery.trim().toLowerCase();
+            return (
+              (st.name || '').toLowerCase().includes(q) ||
+              (st.email || '').toLowerCase().includes(q) ||
+              curCounselor.toLowerCase().includes(q) ||
+              (st.id || '').toLowerCase().includes(q)
+            );
+          }
+          return true;
+        });
+
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl border border-slate-200">
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <div>
+                  <h3 className="font-bold text-slate-900 uppercase tracking-wider text-sm">
+                    Assign Students • {staffMember.name}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {draftStudentIds.length} student{draftStudentIds.length !== 1 ? 's' : ''} selected
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsManageStudentsOpen(false)}
+                  className="text-slate-400 hover:text-slate-600"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="p-4 border-b border-slate-100 space-y-3 bg-white">
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={manageSearchQuery}
+                    onChange={(e) => setManageSearchQuery(e.target.value)}
+                    placeholder="Search student name, email, or current counselor..."
+                    className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { id: 'all', label: `All (${students.length})` },
+                      { id: 'assigned', label: `Selected (${draftStudentIds.length})` },
+                      {
+                        id: 'unassigned',
+                        label: `Unassigned (${students.filter(st => !(st.counselor || '').trim() || (st.counselor || '').trim().toLowerCase() === 'unassigned').length})`,
+                      },
+                      ...(historicalActivityMatchIds.size > 0
+                        ? [{ id: 'activity', label: `Past Updates (${historicalActivityMatchIds.size})` }]
+                        : []),
+                    ].map((tab) => (
+                      <button
+                        key={tab.id}
+                        type="button"
+                        onClick={() => setManageFilterMode(tab.id as any)}
+                        className={cn(
+                          'px-2.5 py-1 rounded-md text-[11px] font-semibold border transition-colors',
+                          manageFilterMode === tab.id
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                        )}
+                      >
+                        {tab.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px]">
+                    {historicalActivityMatchIds.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setDraftStudentIds((prev) =>
+                            Array.from(new Set([...prev, ...Array.from(historicalActivityMatchIds)]))
+                          )
+                        }
+                        className="font-semibold text-emerald-700 hover:underline"
+                      >
+                        + Add Past Activity ({historicalActivityMatchIds.size})
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftStudentIds((prev) =>
+                          Array.from(new Set([...prev, ...visibleModalStudents.map((st) => st.id)]))
+                        )
+                      }
+                      className="font-semibold text-indigo-600 hover:underline"
+                    >
+                      Select Visible
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div className="p-4 max-h-80 overflow-y-auto space-y-1.5">
+                {visibleModalStudents.map((st) => {
+                  const checked = draftStudentIds.includes(st.id);
+                  return (
+                    <div
+                      key={st.id}
+                      onClick={() =>
+                        setDraftStudentIds((prev) =>
+                          prev.includes(st.id) ? prev.filter((id) => id !== st.id) : [...prev, st.id]
+                        )
+                      }
+                      className="flex items-center justify-between gap-3 p-2.5 hover:bg-slate-50 rounded-lg border border-transparent hover:border-slate-100 transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {}}
+                          className="w-4 h-4 text-indigo-600 rounded border-slate-300 focus:ring-indigo-500 cursor-pointer shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-semibold text-slate-900 text-sm truncate">{st.name}</div>
+                          <div className="text-xs text-slate-500 truncate">{st.email}</div>
+                        </div>
+                      </div>
+                      <span className="text-[11px] font-medium text-slate-500 bg-slate-100 px-2 py-0.5 rounded shrink-0">
+                        {(st.counselor || '').trim() || 'Unassigned'}
+                      </span>
+                    </div>
+                  );
+                })}
+                {visibleModalStudents.length === 0 && (
+                  <div className="py-8 text-center text-xs text-slate-400">
+                    No students match the current filter.
+                  </div>
+                )}
+              </div>
+              <div className="p-4 border-t border-slate-100 bg-slate-50 flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setIsManageStudentsOpen(false)} className="bg-white">
+                  Cancel
+                </Button>
+                <Button onClick={handleSaveManagedStudents} className="bg-indigo-600 hover:bg-indigo-700 text-white">
+                  Save Assignments ({draftStudentIds.length})
+                </Button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Admin Change Password Modal in Staff Detail Drawer */}
       {isUserAdmin(currentUser) && isChangePasswordOpen && (

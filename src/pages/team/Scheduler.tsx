@@ -295,7 +295,7 @@ export default function TeamScheduler() {
 
   const assignedStudents = students.filter(s => {
     if (hasGlobalScope) return true;
-    return isStudentAssignedToStaff(s, currentUser, permissionsMatrix);
+    return isStudentAssignedToStaff(s, currentUser, permissionsMatrix, batches);
   });
 
   const visibleBatches = hasGlobalScope 

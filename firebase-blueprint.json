@@ -20,6 +20,7 @@
         "staffId": { "type": "string", "maxLength": 128 },
         "email": { "type": "string", "format": "email", "maxLength": 200 },
         "name": { "type": "string", "maxLength": 200 },
+        "firstName": { "type": "string", "maxLength": 80 },
         "role": { "type": "string", "maxLength": 60 },
         "status": { "type": "string", "enum": ["Active", "Suspended"], "maxLength": 40 },
         "students": { "type": "string", "maxLength": 120 },
@@ -56,6 +57,11 @@
         "intake": { "type": "string", "maxLength": 60 },
         "school": { "type": "string", "maxLength": 200 },
         "counselor": { "type": "string", "maxLength": 160 },
+        "counselorId": { "type": "string", "maxLength": 128 },
+        "counselorEmail": { "type": "string", "maxLength": 200 },
+        "counsellor": { "type": "string", "maxLength": 160 },
+        "mentor": { "type": "string", "maxLength": 160 },
+        "mentorId": { "type": "string", "maxLength": 128 },
         "researchMentor": { "type": "string", "maxLength": 160 },
         "satMathMentor": { "type": "string", "maxLength": 160 },
         "satVerbalMentor": { "type": "string", "maxLength": 160 },
@@ -81,6 +87,7 @@
         "role": { "type": "string", "maxLength": 40 },
         "status": { "type": "string", "maxLength": 40 },
         "allowedViewerEmails": { "type": "array", "description": "Team/student emails authorized to query this student" },
+        "createdAt": { "type": "string", "maxLength": 64 },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "name", "email"]

@@ -75,6 +75,7 @@ const ACCENT_PRESETS = [
 export default function TeamLaunchpad() {
   const {
     students,
+    batches,
     currentUser,
     permissionsMatrix,
     launchpadPermissions,
@@ -216,9 +217,9 @@ export default function TeamLaunchpad() {
       return students;
     }
     return students.filter((s) =>
-      isStudentAssignedToStaff(s, currentUser, permissionsMatrix)
+      isStudentAssignedToStaff(s, currentUser, permissionsMatrix, batches)
     );
-  }, [students, studentTabAccess, hasStudentTabAccess, currentUser, permissionsMatrix]);
+  }, [students, batches, studentTabAccess, hasStudentTabAccess, currentUser, permissionsMatrix]);
 
   const enrolledIdsSet = useMemo(() => {
     const set = new Set<string>();

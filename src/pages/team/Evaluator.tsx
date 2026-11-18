@@ -42,6 +42,7 @@ interface ExtendedSubmission {
 export default function Evaluator() {
   const {
     students,
+    batches,
     updateStudent,
     currentUser,
     permissionsMatrix,
@@ -81,7 +82,7 @@ export default function Evaluator() {
   const isLaunchpadReadOnly = reviewExerciseAccess === 'read_only' || reviewExerciseAccess === 'none';
 
   // Scoped student list based on staff permissions
-  const scopedStudents = getScopedStudentsForStaff(students, currentUser, permissionsMatrix);
+  const scopedStudents = getScopedStudentsForStaff(students, currentUser, permissionsMatrix, batches);
 
   // Scoped Launchpad evaluations based on Launchpad Review permission
   const scopedLaunchpadEvals = useMemo(() => {
@@ -91,9 +92,9 @@ export default function Evaluator() {
     }
     return launchpadEvaluations.filter((ev) => {
       const st = students.find((s) => s.id === ev.studentId);
-      return st ? isStudentAssignedToStaff(st, currentUser, permissionsMatrix) : false;
+      return st ? isStudentAssignedToStaff(st, currentUser, permissionsMatrix, batches) : false;
     });
-  }, [launchpadEvaluations, reviewExerciseAccess, students, currentUser, permissionsMatrix]);
+  }, [launchpadEvaluations, reviewExerciseAccess, students, batches, currentUser, permissionsMatrix]);
 
   // Handle deep-link URL params (?tab=LAUNCHPAD&evalId=...)
   useEffect(() => {

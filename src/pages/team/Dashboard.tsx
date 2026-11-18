@@ -28,8 +28,8 @@ export default function TeamDashboard() {
   const { students, batches, events, staff, updateStudent, currentUser, permissionsMatrix } = useDatabase();
 
   const scopedStudents = useMemo(() => {
-    return getScopedStudentsForStaff(students, currentUser, permissionsMatrix);
-  }, [students, currentUser, permissionsMatrix]);
+    return getScopedStudentsForStaff(students, currentUser, permissionsMatrix, batches);
+  }, [students, currentUser, permissionsMatrix, batches]);
 
   // Date & Timeframe Evaluation Filters for Tasks Chart
   const [dateEvalMode, setDateEvalMode] = useState<'DUE_DATE' | 'TASK_DATE'>('DUE_DATE');
@@ -291,13 +291,13 @@ export default function TeamDashboard() {
   // 3. Consolidated All Tasks from Students & Meeting Events
   const allSystemTasks = useMemo(() => {
     const taskList: any[] = [];
-    const canAccessAll = canStaffAccessAllStudents(currentUser);
+    const canAccessAll = canStaffAccessAllStudents(currentUser, permissionsMatrix);
     const scopedIds = new Set(scopedStudents.map(s => s.id));
 
     // From Student profile tasks
     scopedStudents.forEach(student => {
       (student.tasks || []).forEach((t: any) => {
-        if (!isTaskVisibleToStaff(t, student, currentUser)) return;
+        if (!isTaskVisibleToStaff(t, student, currentUser, permissionsMatrix)) return;
         taskList.push({
           id: t.id || Math.random().toString(),
           title: t.name || t.title || 'Untitled Task',
@@ -322,7 +322,7 @@ export default function TeamDashboard() {
         const targetStudentId = mt.assignedToStudentId || studentObj?.id;
 
         // Scope validation
-        if (!isTaskVisibleToStaff(mt, studentObj || ({} as any), currentUser)) return;
+        if (!isTaskVisibleToStaff(mt, studentObj || ({} as any), currentUser, permissionsMatrix)) return;
 
         if (!canAccessAll) {
           const isTargetScoped = targetStudentId && scopedIds.has(targetStudentId);
