@@ -11,7 +11,7 @@ import nodemailer from "nodemailer";
 import crypto from "crypto";
 import mammoth from "mammoth";
 import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
-import { adminAuth, adminDb, hasAdminServiceAccount } from "./src/lib/firebase-admin.ts";
+import { adminAuth, adminDb, hasAdminServiceAccount, firebaseWebApiKey } from "./src/lib/firebase-admin.ts";
 import { db, createPool } from "./src/db/index.ts";
 import {
   users,
@@ -1169,6 +1169,199 @@ async function startServer() {
 
   app.post("/api/firebase-admin/change-password", requireAuth, handleAdminChangeFirebasePassword);
   app.post("/api/admin/change-password", requireAuth, handleAdminChangeFirebasePassword);
+
+  // Admin-only: Migrate legacy Cloud SQL user passwords into Firebase Auth (never returns plaintext passwords)
+  // and optionally return sanitized non-password legacy students/staff/batches/events for Firestore merge.
+  const DEMO_LEGACY_EMAILS = new Set([
+    "sarah@uppseekers.com",
+    "vikram.roy@uppseekers.com",
+    "marcus@uppseekers.com",
+    "elena@uppseekers.com",
+    "rajesh.menon@uppseekers.com",
+    "test@counsellor.com",
+    "product@uppseekers.com",
+    "test@student.com",
+    "test1@student.com",
+    "aarav.sharma@example.com",
+    "ananya.iyer@example.com",
+    "qasim.khan@example.com",
+  ]);
+
+  app.post("/api/firebase-admin/sync-legacy-users", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const allowed = await isVerifiedFirebaseAdmin(req);
+      if (!allowed) {
+        return res.status(403).json({ error: "Forbidden: Only System Admins can restore legacy users." });
+      }
+      if (!hasSqlEnv()) {
+        return res.json({
+          ok: true,
+          hasLegacySql: false,
+          provisioned: 0,
+          alreadyExisted: 0,
+          skipped: 0,
+          failed: 0,
+          students: [],
+          staff: [],
+          batches: [],
+          events: [],
+        });
+      }
+
+      const includeDemo = Boolean(req.body?.includeDemo);
+      const includeData = Boolean(req.body?.includeData);
+      const allSqlUsers = await readAllUsersSafe();
+
+      let provisioned = 0;
+      let alreadyExisted = 0;
+      let skipped = 0;
+      let failed = 0;
+      const details: Array<{ email: string; role: string; status: string }> = [];
+
+      const isDemoEmail = (em: string) =>
+        DEMO_LEGACY_EMAILS.has(em) || em.endsWith("@example.com");
+
+      for (const u of allSqlUsers) {
+        const cleanEmail = normEmail(u?.email);
+        const roleUpper = String(u?.role || "").toUpperCase();
+        const rawPwd = typeof u?.password === "string" ? u.password.trim() : "";
+        if (!cleanEmail || !cleanEmail.includes("@") || cleanEmail.endsWith("@uppseekers.local")) {
+          skipped++;
+          continue;
+        }
+        if (!includeDemo && isDemoEmail(cleanEmail)) {
+          skipped++;
+          continue;
+        }
+        if (cleanEmail === "uppseekers@gmail.com") {
+          alreadyExisted++;
+          continue;
+        }
+        if (!rawPwd || rawPwd.length < 6) {
+          skipped++;
+          details.push({ email: cleanEmail, role: roleUpper, status: "skipped_short_or_empty_password" });
+          continue;
+        }
+
+        try {
+          if (hasAdminServiceAccount()) {
+            try {
+              await adminAuth.getUserByEmail(cleanEmail);
+              alreadyExisted++;
+              details.push({ email: cleanEmail, role: roleUpper, status: "already_exists" });
+            } catch (lookupErr: any) {
+              if (lookupErr?.code !== "auth/user-not-found") throw lookupErr;
+              await adminAuth.createUser({
+                email: cleanEmail,
+                password: rawPwd,
+                displayName: String(u?.name || cleanEmail.split("@")[0]).trim(),
+                emailVerified: true,
+              });
+              provisioned++;
+              details.push({ email: cleanEmail, role: roleUpper, status: "created_with_old_password" });
+            }
+          } else if (firebaseWebApiKey) {
+            const signUpRes = await fetch(
+              `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(firebaseWebApiKey)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  email: cleanEmail,
+                  password: rawPwd,
+                  displayName: String(u?.name || cleanEmail.split("@")[0]).trim(),
+                  returnSecureToken: false,
+                }),
+              }
+            );
+            const signUpJson: any = await signUpRes.json().catch(() => null);
+            if (signUpRes.ok) {
+              provisioned++;
+              details.push({ email: cleanEmail, role: roleUpper, status: "created_with_old_password" });
+            } else if (signUpJson?.error?.message === "EMAIL_EXISTS") {
+              alreadyExisted++;
+              details.push({ email: cleanEmail, role: roleUpper, status: "already_exists" });
+            } else {
+              failed++;
+              details.push({
+                email: cleanEmail,
+                role: roleUpper,
+                status: `failed:${signUpJson?.error?.message || signUpRes.status}`,
+              });
+            }
+          } else {
+            failed++;
+          }
+        } catch (err: any) {
+          failed++;
+          details.push({ email: cleanEmail, role: roleUpper, status: `error:${err?.code || err?.message || "unknown"}` });
+        }
+      }
+
+      let sanitizedStudents: any[] = [];
+      let sanitizedStaff: any[] = [];
+      let legacyBatches: any[] = [];
+      let legacyEvents: any[] = [];
+
+      if (includeData) {
+        const allSd = await readAllStudentsDataSafe();
+        const studentUsers = allSqlUsers.filter((u) => String(u?.role || "").toUpperCase() === "STUDENT");
+        sanitizedStudents = studentUsers
+          .filter((u) => includeDemo || !isDemoEmail(normEmail(u?.email)))
+          .map((u) => {
+            const sd = allSd.find((row) => row.userId === u.id);
+            const built = buildStudentFromRow(u, sd);
+            const { password: _removedPwd, ...cleanStudent } = built;
+            return cleanStudent;
+          });
+
+        const staffRows = hasTable("staff_data")
+          ? await safeDbQuery(() => db.select().from(staffData), [])
+          : [];
+        sanitizedStaff = allSqlUsers
+          .filter((u) => {
+            const r = String(u?.role || "").toUpperCase();
+            return r && r !== "STUDENT" && (includeDemo || !isDemoEmail(normEmail(u?.email)));
+          })
+          .map((u) => {
+            const sd = staffRows.find((sRow) => sRow.userId === u.id);
+            return {
+              id: u.uid || `STAFF-${u.id}`,
+              name: u.name || u.email,
+              email: normEmail(u.email),
+              role: u.role || "COUNSELOR",
+              students: sd?.students || "Assigned Scope",
+              status: sd?.status || "Active",
+            };
+          });
+
+        if (hasTable("batches_data")) {
+          const rawBatches = await safeDbQuery(() => db.select().from(batchesData), []);
+          legacyBatches = rawBatches.filter((b) => includeDemo || String(b?.id || "") !== "BATCH-7133");
+        }
+        if (hasTable("events_data")) {
+          legacyEvents = await safeDbQuery(() => db.select().from(eventsData), []);
+        }
+      }
+
+      return res.json({
+        ok: true,
+        hasLegacySql: true,
+        provisioned,
+        alreadyExisted,
+        skipped,
+        failed,
+        details,
+        students: sanitizedStudents,
+        staff: sanitizedStaff,
+        batches: legacyBatches,
+        events: legacyEvents,
+      });
+    } catch (e: any) {
+      console.error("Error in /api/firebase-admin/sync-legacy-users:", e);
+      return res.status(500).json({ ok: false, error: e?.message || "Failed to sync legacy users." });
+    }
+  });
 
   // Request Password Reset - Triggers email with reset link and 6-digit OTP code
   app.post("/api/auth/request-password-reset", async (req, res) => {

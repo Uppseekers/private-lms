@@ -44,6 +44,11 @@ export default function TeamUsers() {
   const [drawerActivityMode, setDrawerActivityMode] = useState<'extended' | 'mini'>('extended');
   const [selectedStaffMember, setSelectedStaffMember] = useState<StaffMember | null>(null);
   const [userForPasswordChange, setUserForPasswordChange] = useState<TargetUserForPassword | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<{
+    type: 'student' | 'staff';
+    ids: string[];
+    label: string;
+  } | null>(null);
 
   const handleSaveUserPassword = async (userId: string, userType: 'student' | 'staff', newPassword: string) => {
     const cleanPwd = newPassword.trim();
@@ -149,18 +154,21 @@ export default function TeamUsers() {
 
   const handleDeleteSelectedStudents = () => {
     if (selectedStudentIds.length === 0) return;
-    if (window.confirm(`Are you sure you want to permanently delete ${selectedStudentIds.length} selected student(s) from the database?`)) {
-      setStudents(students.filter(s => !selectedStudentIds.includes(s.id)));
-      setSelectedStudentIds([]);
-    }
+    setPendingDelete({
+      type: 'student',
+      ids: [...selectedStudentIds],
+      label: `${selectedStudentIds.length} selected student(s)`,
+    });
   };
 
   const handleDeleteSingleStudent = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm('Are you sure you want to delete this student from the database?')) {
-      setStudents(students.filter(s => s.id !== id));
-      if (selectedStudent?.id === id) setSelectedStudent(null);
-    }
+    const stu = students.find((s) => s.id === id);
+    setPendingDelete({
+      type: 'student',
+      ids: [id],
+      label: stu?.name || 'this student',
+    });
   };
 
   // Staff Selection logic
@@ -181,17 +189,47 @@ export default function TeamUsers() {
 
   const handleDeleteSelectedStaff = () => {
     if (selectedStaffIds.length === 0) return;
-    if (window.confirm(`Are you sure you want to permanently delete ${selectedStaffIds.length} selected staff member(s) from the database?`)) {
-      setStaff(staff.filter(s => !selectedStaffIds.includes(s.id)));
-      setSelectedStaffIds([]);
-    }
+    const deletableIds = selectedStaffIds.filter((id) => {
+      const m = staff.find((st) => st.id === id);
+      return m && (m.email || '').trim().toLowerCase() !== 'uppseekers@gmail.com';
+    });
+    if (deletableIds.length === 0) return;
+    setPendingDelete({
+      type: 'staff',
+      ids: deletableIds,
+      label: `${deletableIds.length} selected staff member(s)`,
+    });
   };
 
   const handleDeleteSingleStaff = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm('Are you sure you want to delete this staff user from the database?')) {
-      setStaff(staff.filter(s => s.id !== id));
+    const member = staff.find((s) => s.id === id);
+    if (member && (member.email || '').trim().toLowerCase() === 'uppseekers@gmail.com') {
+      return;
     }
+    setPendingDelete({
+      type: 'staff',
+      ids: [id],
+      label: member?.name || 'this staff member',
+    });
+  };
+
+  const confirmPendingDelete = () => {
+    if (!pendingDelete) return;
+    if (pendingDelete.type === 'student') {
+      const idSet = new Set(pendingDelete.ids);
+      setStudents(students.filter((s) => !idSet.has(s.id)));
+      setSelectedStudentIds((prev) => prev.filter((id) => !idSet.has(id)));
+      if (selectedStudent && idSet.has(selectedStudent.id)) setSelectedStudent(null);
+      setTransferSuccessMessage(`Deleted ${pendingDelete.label} from the portal database.`);
+    } else {
+      const idSet = new Set(pendingDelete.ids);
+      setStaff(staff.filter((s) => !idSet.has(s.id)));
+      setSelectedStaffIds((prev) => prev.filter((id) => !idSet.has(id)));
+      if (selectedStaffMember && idSet.has(selectedStaffMember.id)) setSelectedStaffMember(null);
+      setTransferSuccessMessage(`Deleted ${pendingDelete.label} from staff.`);
+    }
+    setPendingDelete(null);
   };
 
   return (
@@ -750,6 +788,57 @@ export default function TeamUsers() {
           setSelectedStudentIds([]);
         }}
       />
+
+      {/* In-App Delete Confirmation Modal (works inside iframes) */}
+      {pendingDelete && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs"
+          onClick={() => setPendingDelete(null)}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-md shadow-2xl border border-slate-200 p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-red-50 text-red-600 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">
+                    Confirm {pendingDelete.type === 'staff' ? 'Staff' : 'Student'} Deletion
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    This permanently removes the record from Cloud Firestore.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingDelete(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-xl p-3">
+              Are you sure you want to delete <span className="font-bold text-slate-900">{pendingDelete.label}</span>?
+            </p>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="outline" onClick={() => setPendingDelete(null)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={confirmPendingDelete}
+                className="bg-red-600 hover:bg-red-700 text-white font-bold"
+              >
+                <Trash2 className="w-4 h-4 mr-1.5" /> Delete Permanently
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -763,12 +852,13 @@ function AddStaffForm({ onClose, onAdd }: { onClose: () => void, onAdd: (s: Staf
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name || !email) return;
+    const isGlobalRole = role === 'SYSTEM_ADMIN' || role === 'CATEGORY_MANAGER' || role === 'OPERATIONS_LEAD';
     onAdd({
       id: `STAFF-${Math.floor(1000 + Math.random() * 9000)}`,
       name,
       email,
       role,
-      students: 'All',
+      students: isGlobalRole ? 'All' : 'Assigned Scope',
       status: 'Active',
     }, password.trim() || 'Uppseekers@123');
   };

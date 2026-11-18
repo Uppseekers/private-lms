@@ -104,9 +104,11 @@ export function isStudentAssignedToStaff(
   const staffId = (currentUser.id || '').trim().toLowerCase();
 
   const counselorName = (student.counselor || '').trim().toLowerCase();
+  const counselorEmail = ((student as any).counselorEmail || '').trim().toLowerCase();
   const researchMentor = (student.researchMentor || '').trim().toLowerCase();
   const satVerbalMentor = (student.satVerbalMentor || '').trim().toLowerCase();
   const satMathMentor = (student.satMathMentor || '').trim().toLowerCase();
+  const universityMentor = ((student as any).universityMentor || '').trim().toLowerCase();
   const anyMentor = ((student as any).mentor || '').trim().toLowerCase();
   const anyCounsellor = ((student as any).counsellor || '').trim().toLowerCase();
   const anyCounselorId = ((student as any).counselorId || '').trim().toLowerCase();
@@ -114,6 +116,7 @@ export function isStudentAssignedToStaff(
   const rawMentorsList = (student as any).mentors;
 
   // Helper for matching values against staff credentials
+  const staffFirst = staffName.split(/\s+/)[0] || '';
   const matchesStaff = (val: string) => {
     if (!val) return false;
     const cleanVal = val.toLowerCase().trim();
@@ -122,14 +125,17 @@ export function isStudentAssignedToStaff(
       cleanVal === staffEmail ||
       cleanVal === staffId ||
       (staffName.length > 2 && cleanVal.includes(staffName)) ||
-      (cleanVal.length > 2 && staffName.includes(cleanVal))
+      (cleanVal.length > 2 && staffName.includes(cleanVal)) ||
+      (cleanVal.length >= 3 && staffFirst === cleanVal)
     );
   };
 
   if (matchesStaff(counselorName)) return true;
+  if (matchesStaff(counselorEmail)) return true;
   if (matchesStaff(researchMentor)) return true;
   if (matchesStaff(satVerbalMentor)) return true;
   if (matchesStaff(satMathMentor)) return true;
+  if (matchesStaff(universityMentor)) return true;
   if (matchesStaff(anyMentor)) return true;
   if (matchesStaff(anyCounsellor)) return true;
   if (matchesStaff(anyCounselorId)) return true;

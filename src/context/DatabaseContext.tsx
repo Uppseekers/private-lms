@@ -432,6 +432,28 @@ export interface PasswordResetResult {
   error?: string;
 }
 
+export interface ResyncPortalAccessResult {
+  studentsUpdated: number;
+  staffSynced: number;
+  batchesUpdated: number;
+  eventsUpdated: number;
+}
+
+export interface RestoreLegacySqlResult {
+  ok: boolean;
+  hasLegacySql?: boolean;
+  provisioned: number;
+  alreadyExisted: number;
+  skipped: number;
+  failed: number;
+  studentsMerged: number;
+  staffMerged: number;
+  batchesMerged: number;
+  eventsMerged: number;
+  details?: Array<{ email: string; role: string; status: string }>;
+  error?: string;
+}
+
 interface DatabaseContextType {
   students: Student[];
   setStudents: (students: Student[]) => void;
@@ -522,6 +544,11 @@ interface DatabaseContextType {
     userType?: 'student' | 'staff';
   }) => Promise<PasswordResetResult>;
   signOutAll: () => Promise<void>;
+  resyncPortalAccess: (opts?: { forceStaffDir?: boolean }) => Promise<ResyncPortalAccessResult>;
+  restoreLegacySqlToFirestore: (opts?: {
+    includeDemo?: boolean;
+    importRecords?: boolean;
+  }) => Promise<RestoreLegacySqlResult>;
   conversations: Conversation[];
   sendConversationMessage: (params: {
     studentId: string;
@@ -629,6 +656,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   const [firestoreStatus, setFirestoreStatus] = useState<'idle' | 'connected' | 'permission-denied' | 'error'>('idle');
 
   const seededCatalogRef = useRef<boolean>(false);
+  const autoRepairedSessionRef = useRef<string | null>(null);
 
   const setCurrentUser = (
     userOrFn: StaffMember | null | ((prev: StaffMember | null) => StaffMember | null)
@@ -795,24 +823,39 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
     const assignedNamesOrIds = [
       student?.counselor,
+      (student as any)?.counsellor,
+      (student as any)?.counselorEmail,
+      (student as any)?.counselorId,
+      (student as any)?.mentor,
+      (student as any)?.mentorId,
       student?.researchMentor,
       student?.satMathMentor,
       student?.satVerbalMentor,
       (student as any)?.universityMentor,
+      ...(Array.isArray((student as any)?.mentors) ? (student as any).mentors : []),
     ]
       .map((v) => String(v || '').trim().toLowerCase())
       .filter(Boolean);
 
+    const matchesStaffValue = (st: StaffMember, val: string): boolean => {
+      const stEmail = normalizeEmail(st?.email);
+      const stName = String(st?.name || '').trim().toLowerCase();
+      const stId = String(st?.id || '').trim().toLowerCase();
+      const stFirst = stName.split(/\s+/)[0] || '';
+      return (
+        val === stName ||
+        (stEmail && val === stEmail) ||
+        (stId && val === stId) ||
+        (stName.length > 2 && val.includes(stName)) ||
+        (val.length >= 3 && stName.includes(val)) ||
+        (val.length >= 3 && stFirst === val)
+      );
+    };
+
     for (const st of staffList || []) {
       const stEmail = normalizeEmail(st?.email);
       if (!stEmail) continue;
-      const stName = String(st?.name || '').trim().toLowerCase();
-      const stId = String(st?.id || '').trim().toLowerCase();
-      if (
-        assignedNamesOrIds.some(
-          (val) => val === stName || val === stEmail || val === stId || (stName.length > 2 && val.includes(stName))
-        )
-      ) {
+      if (assignedNamesOrIds.some((val) => matchesStaffValue(st, val))) {
         emails.add(stEmail);
       }
     }
@@ -826,12 +869,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       if (inBatch && Array.isArray(b.mentors)) {
         for (const m of b.mentors) {
           const cleanM = String(m || '').trim().toLowerCase();
-          const matchedStaff = (staffList || []).find(
-            (st) =>
-              normalizeEmail(st.email) === cleanM ||
-              String(st.name || '').trim().toLowerCase() === cleanM ||
-              String(st.id || '').trim().toLowerCase() === cleanM
-          );
+          if (!cleanM) continue;
+          const matchedStaff = (staffList || []).find((st) => matchesStaffValue(st, cleanM));
           if (matchedStaff?.email) emails.add(normalizeEmail(matchedStaff.email));
         }
       }
@@ -1105,7 +1144,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
           return;
         }
 
-        // Non-bootstrapped user: check /admins/{uid} & /staff_directory/{emailKey}
+        // Non-bootstrapped user: check /admins/{uid}, /staff_directory/{emailKey}, and /staff before /students
         const emailKey = normalizeEmailKey(authEmail);
         const [adminSnap, dirSnap] = await Promise.all([
           getDoc(doc(db, 'admins', user.uid)).catch(() => null),
@@ -1114,16 +1153,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
         if (cancelled) return;
 
-        if ((adminSnap && adminSnap.exists()) || (dirSnap && dirSnap.exists())) {
-          const dirData = dirSnap?.exists() ? (dirSnap.data() as any) : null;
-          if (dirData && String(dirData.status || 'Active').toLowerCase() === 'suspended') {
-            setAuthError('Your staff account is suspended. Please contact your administrator.');
-            await signOut(auth).catch(() => {});
-            setIsFirebaseAuthReady(true);
-            return;
-          }
-
-          let matchedStaff: StaffMember | null = null;
+        let matchedStaff: StaffMember | null = null;
+        if (!(adminSnap && adminSnap.exists()) && !(dirSnap && dirSnap.exists())) {
           try {
             const staffQ = query(collection(db, 'staff'), where('email', '==', authEmail));
             const staffSnap = await getDocs(staffQ);
@@ -1133,7 +1164,32 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
               }
             });
           } catch {
-            // Fallback to staff_directory data if staff query fails
+            // Ignore if query fails
+          }
+          if (cancelled) return;
+        }
+
+        if ((adminSnap && adminSnap.exists()) || (dirSnap && dirSnap.exists()) || matchedStaff) {
+          const dirData = dirSnap?.exists() ? (dirSnap.data() as any) : null;
+          if (dirData && String(dirData.status || 'Active').toLowerCase() === 'suspended') {
+            setAuthError('Your staff account is suspended. Please contact your administrator.');
+            await signOut(auth).catch(() => {});
+            setIsFirebaseAuthReady(true);
+            return;
+          }
+
+          if (!matchedStaff) {
+            try {
+              const staffQ = query(collection(db, 'staff'), where('email', '==', authEmail));
+              const staffSnap = await getDocs(staffQ);
+              staffSnap.forEach((d) => {
+                if (!matchedStaff) {
+                  matchedStaff = stripPasswordField({ ...(d.data() as StaffMember), id: d.id });
+                }
+              });
+            } catch {
+              // Fallback to staff_directory data if staff query fails
+            }
           }
 
           if (cancelled) return;
@@ -1706,10 +1762,470 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const signOutAll = async (): Promise<void> => {
+    autoRepairedSessionRef.current = null;
     await signOut(auth).catch(() => {});
     setIsAuthenticatedState(false);
     setCurrentUserState(null);
     setFirestoreStatus('idle');
+  };
+
+  const sameStringArray = (a?: unknown, b?: string[]) => {
+    const arrA = Array.isArray(a) ? [...a].map(String).sort() : [];
+    const arrB = Array.isArray(b) ? [...b].map(String).sort() : [];
+    if (arrA.length !== arrB.length) return false;
+    return arrA.every((val, idx) => val === arrB[idx]);
+  };
+
+  const syncPortalRecordsViewerEmails = async (params?: {
+    staffList?: StaffMember[];
+    studentsList?: Student[];
+    batchesList?: Batch[];
+    eventsList?: EventItem[];
+    forceStaffDir?: boolean;
+  }): Promise<ResyncPortalAccessResult> => {
+    const fbUser = auth.currentUser;
+    if (!fbUser || !isUserAdmin(currentUser)) {
+      return { studentsUpdated: 0, staffSynced: 0, batchesUpdated: 0, eventsUpdated: 0 };
+    }
+
+    const isBootAdmin = normalizeEmail(fbUser.email) === BOOTSTRAP_ADMIN_EMAIL;
+    let staffList = params?.staffList;
+    let studentsList = params?.studentsList;
+    let batchesList = params?.batchesList;
+    let eventsList = params?.eventsList;
+
+    if (!staffList) {
+      if (isBootAdmin) {
+        const snap = await getDocs(collection(db, 'staff')).catch(() => null);
+        staffList = snap ? snap.docs.map((d) => stripPasswordField({ ...(d.data() as StaffMember), id: d.id })) : staff;
+      } else {
+        staffList = staff;
+      }
+    }
+    if (!studentsList) {
+      if (isBootAdmin) {
+        const snap = await getDocs(collection(db, 'students')).catch(() => null);
+        studentsList = snap ? snap.docs.map((d) => stripPasswordField({ ...(d.data() as Student), id: d.id })) : students;
+      } else {
+        studentsList = students;
+      }
+    }
+    if (!batchesList) {
+      if (isBootAdmin) {
+        const snap = await getDocs(collection(db, 'batches')).catch(() => null);
+        batchesList = snap ? snap.docs.map((d) => ({ ...(d.data() as Batch), id: d.id })) : batches;
+      } else {
+        batchesList = batches;
+      }
+    }
+    if (!eventsList) {
+      if (isBootAdmin) {
+        const snap = await getDocs(collection(db, 'events')).catch(() => null);
+        eventsList = snap ? snap.docs.map((d) => ({ ...(d.data() as EventItem), id: d.id })) : events;
+      } else {
+        eventsList = events;
+      }
+    }
+
+    const now = new Date().toISOString();
+    const validIdRegex = /^[a-zA-Z0-9_-]+$/;
+    const allStaffViewers = computeAllStaffViewerEmails(staffList);
+
+    let staffSynced = 0;
+    for (const st of staffList) {
+      const cleanEmail = normalizeEmail(st?.email);
+      if (!cleanEmail) continue;
+      const dirId = normalizeEmailKey(cleanEmail);
+      const safeStaffId = toValidDocId(st.id || `STAFF-${dirId}`, 'STAFF');
+      const statusNorm = String(st.status || 'Active').toLowerCase() === 'suspended' ? 'Suspended' : 'Active';
+      const dirRef = doc(db, 'staff_directory', dirId);
+      try {
+        const existingDir = params?.forceStaffDir ? null : await getDoc(dirRef).catch(() => null);
+        const dirData = existingDir?.exists() ? (existingDir.data() as any) : null;
+        if (
+          params?.forceStaffDir ||
+          !existingDir?.exists() ||
+          dirData?.status !== statusNorm ||
+          dirData?.role !== (st.role || 'COUNSELOR') ||
+          dirData?.name !== (st.name || cleanEmail)
+        ) {
+          await setDoc(dirRef, {
+            id: dirId,
+            staffId: safeStaffId,
+            email: cleanEmail,
+            name: String(st.name || cleanEmail).trim().slice(0, 200),
+            role: String(st.role || 'COUNSELOR').slice(0, 60),
+            status: statusNorm,
+            students: String(st.students || 'Assigned Scope').slice(0, 120),
+            updatedAt: now,
+          });
+          staffSynced++;
+        }
+
+        const expectedStaffViewers = Array.from(new Set([...allStaffViewers, cleanEmail])).slice(0, 50);
+        if (st.id && !validIdRegex.test(st.id)) {
+          const staffPayload = stripUndefinedAndNulls({
+            id: safeStaffId,
+            uid: (st as any).uid,
+            name: String(st.name || cleanEmail).trim().slice(0, 200),
+            email: cleanEmail.slice(0, 200),
+            role: String(st.role || 'COUNSELOR').slice(0, 60),
+            students: String(st.students || 'Assigned Scope').slice(0, 120),
+            status: statusNorm,
+            allowedViewerEmails: expectedStaffViewers,
+            updatedAt: now,
+          });
+          await setDoc(doc(db, 'staff', safeStaffId), staffPayload);
+          await deleteDoc(doc(db, 'staff', st.id)).catch(() => {});
+        } else if (
+          st.id &&
+          !sameStringArray((st as any).allowedViewerEmails, expectedStaffViewers)
+        ) {
+          await updateDoc(doc(db, 'staff', st.id), {
+            allowedViewerEmails: expectedStaffViewers,
+            updatedAt: now,
+          }).catch(() => {});
+        }
+      } catch (err) {
+        console.warn('Staff directory sync warning:', cleanEmail, err);
+      }
+    }
+
+    let studentsUpdated = 0;
+    for (const stu of studentsList) {
+      if (!stu?.id) continue;
+      const nextViewers = computeStudentViewerEmails(stu, staffList, permissionsMatrixState, batchesList);
+      const prevViewers = (stu as any).allowedViewerEmails;
+      const needsIdMigration = !validIdRegex.test(stu.id) || stu.id.length > 128;
+      if (!needsIdMigration && sameStringArray(prevViewers, nextViewers)) {
+        continue;
+      }
+      try {
+        if (needsIdMigration) {
+          const safeStuId = toValidDocId(stu.id, 'STU');
+          const payload = buildStudentDocPayload({ ...stu, id: safeStuId }, safeStuId);
+          payload.allowedViewerEmails = nextViewers;
+          await setDoc(doc(db, 'students', safeStuId), payload);
+          await deleteDoc(doc(db, 'students', stu.id)).catch(() => {});
+        } else {
+          await updateDoc(doc(db, 'students', stu.id), {
+            allowedViewerEmails: nextViewers,
+            updatedAt: now,
+          });
+        }
+        studentsUpdated++;
+      } catch (err) {
+        console.warn('Student viewer sync warning:', stu.id, err);
+      }
+    }
+
+    let batchesUpdated = 0;
+    for (const b of batchesList) {
+      if (!b?.id) continue;
+      const nextViewers = computeBatchViewerEmails(b, staffList, studentsList, permissionsMatrixState);
+      if (validIdRegex.test(b.id) && sameStringArray((b as any).allowedViewerEmails, nextViewers)) continue;
+      try {
+        const safeBatchId = toValidDocId(b.id, 'BATCH');
+        if (safeBatchId !== b.id) {
+          await setDoc(doc(db, 'batches', safeBatchId), stripUndefinedAndNulls({ ...b, id: safeBatchId, allowedViewerEmails: nextViewers, updatedAt: now }));
+          await deleteDoc(doc(db, 'batches', b.id)).catch(() => {});
+        } else {
+          await updateDoc(doc(db, 'batches', b.id), { allowedViewerEmails: nextViewers, updatedAt: now });
+        }
+        batchesUpdated++;
+      } catch (err) {
+        console.warn('Batch viewer sync warning:', b.id, err);
+      }
+    }
+
+    let eventsUpdated = 0;
+    for (const ev of eventsList) {
+      if (!ev?.id) continue;
+      const nextViewers = computeEventViewerEmails(ev, staffList, studentsList, batchesList, permissionsMatrixState);
+      if (validIdRegex.test(ev.id) && sameStringArray((ev as any).allowedViewerEmails, nextViewers)) continue;
+      try {
+        const safeEvId = toValidDocId(ev.id, 'EVT');
+        if (safeEvId !== ev.id) {
+          await setDoc(doc(db, 'events', safeEvId), stripUndefinedAndNulls({ ...ev, id: safeEvId, allowedViewerEmails: nextViewers, updatedAt: now }));
+          await deleteDoc(doc(db, 'events', ev.id)).catch(() => {});
+        } else {
+          await updateDoc(doc(db, 'events', ev.id), { allowedViewerEmails: nextViewers, updatedAt: now });
+        }
+        eventsUpdated++;
+      } catch (err) {
+        console.warn('Event viewer sync warning:', ev.id, err);
+      }
+    }
+
+    return { studentsUpdated, staffSynced, batchesUpdated, eventsUpdated };
+  };
+
+  const resyncPortalAccess = async (opts?: { forceStaffDir?: boolean }): Promise<ResyncPortalAccessResult> => {
+    return syncPortalRecordsViewerEmails({ forceStaffDir: opts?.forceStaffDir ?? true });
+  };
+
+  // Automatically repair /staff_directory & allowedViewerEmails once per Admin session
+  useEffect(() => {
+    if (!isAuthenticated || !firebaseUser || !isUserAdmin(currentUser)) return;
+    if (autoRepairedSessionRef.current === firebaseUser.uid) return;
+    if (staff.length === 0 && students.length === 0) return;
+
+    const timer = setTimeout(() => {
+      if (autoRepairedSessionRef.current === firebaseUser.uid) return;
+      autoRepairedSessionRef.current = firebaseUser.uid;
+      void syncPortalRecordsViewerEmails({ forceStaffDir: false });
+    }, 1200);
+
+    return () => clearTimeout(timer);
+  }, [isAuthenticated, firebaseUser?.uid, currentUser?.role, currentUser?.email, staff.length, students.length]);
+
+  const restoreLegacySqlToFirestore = async (opts?: {
+    includeDemo?: boolean;
+    importRecords?: boolean;
+  }): Promise<RestoreLegacySqlResult> => {
+    if (!isUserAdmin(currentUser)) {
+      return {
+        ok: false,
+        provisioned: 0,
+        alreadyExisted: 0,
+        skipped: 0,
+        failed: 0,
+        studentsMerged: 0,
+        staffMerged: 0,
+        batchesMerged: 0,
+        eventsMerged: 0,
+        error: 'Only System Administrators can run legacy password & record restoration.',
+      };
+    }
+
+    try {
+      const idToken = await getFirebaseIdToken();
+      if (!idToken) {
+        return {
+          ok: false,
+          provisioned: 0,
+          alreadyExisted: 0,
+          skipped: 0,
+          failed: 0,
+          studentsMerged: 0,
+          staffMerged: 0,
+          batchesMerged: 0,
+          eventsMerged: 0,
+          error: 'Missing Firebase session token. Please sign in again.',
+        };
+      }
+
+      const includeDemo = Boolean(opts?.includeDemo);
+      const importRecords = opts?.importRecords !== false;
+
+      const res = await fetch('/api/firebase-admin/sync-legacy-users', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${idToken}`,
+        },
+        body: JSON.stringify({ includeDemo, includeData: importRecords }),
+      });
+
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        return {
+          ok: false,
+          provisioned: 0,
+          alreadyExisted: 0,
+          skipped: 0,
+          failed: 0,
+          studentsMerged: 0,
+          staffMerged: 0,
+          batchesMerged: 0,
+          eventsMerged: 0,
+          error: json?.error || `Server returned status ${res.status}`,
+        };
+      }
+
+      let staffMerged = 0;
+      let studentsMerged = 0;
+      let batchesMerged = 0;
+      let eventsMerged = 0;
+
+      const nextStaff = [...staff];
+      const nextStudents = [...students];
+      const nextBatches = [...batches];
+      const nextEvents = [...events];
+      const now = new Date().toISOString();
+
+      if (importRecords) {
+        // 1. Merge missing legacy staff without overwriting existing Firestore staff
+        if (Array.isArray(json.staff)) {
+          const allViewerEmails = computeAllStaffViewerEmails(nextStaff);
+          for (const rawSt of json.staff) {
+            const em = normalizeEmail(rawSt?.email);
+            if (!em) continue;
+            const exists = nextStaff.some(
+              (cur) => cur.id === rawSt.id || normalizeEmail(cur.email) === em
+            );
+            if (exists) continue;
+
+            const safeId = toValidDocId(rawSt.id || `STAFF-${normalizeEmailKey(em)}`, 'STAFF');
+            const cleanSt: StaffMember = stripPasswordField({
+              id: safeId,
+              name: String(rawSt.name || em).trim().slice(0, 200),
+              email: em,
+              role: String(rawSt.role || 'COUNSELOR').slice(0, 60),
+              students: String(rawSt.students || 'Assigned Scope').slice(0, 120),
+              status: String(rawSt.status || 'Active').toLowerCase() === 'suspended' ? 'Suspended' : 'Active',
+            });
+            nextStaff.push(cleanSt);
+            staffMerged++;
+
+            const dirId = normalizeEmailKey(em);
+            await setDoc(doc(db, 'staff', safeId), stripUndefinedAndNulls({
+              ...cleanSt,
+              allowedViewerEmails: Array.from(new Set([...allViewerEmails, em])).slice(0, 50),
+              updatedAt: now,
+            })).catch(() => {});
+            await setDoc(doc(db, 'staff_directory', dirId), {
+              id: dirId,
+              staffId: safeId,
+              email: em,
+              name: cleanSt.name,
+              role: cleanSt.role,
+              status: cleanSt.status || 'Active',
+              students: cleanSt.students || 'Assigned Scope',
+              updatedAt: now,
+            }).catch(() => {});
+          }
+          if (staffMerged > 0) setStaffState(nextStaff);
+        }
+
+        // 2. Merge missing legacy students (or backfill missing counselor without overwriting existing records)
+        if (Array.isArray(json.students)) {
+          for (const rawStu of json.students) {
+            const em = normalizeEmail(rawStu?.email);
+            const cleanRaw = stripPasswordField(rawStu) as Student;
+            const existingIdx = nextStudents.findIndex(
+              (cur) => cur.id === cleanRaw.id || (em && normalizeEmail(cur.email) === em)
+            );
+            if (existingIdx === -1) {
+              const safeStuId = toValidDocId(cleanRaw.id || `STU-${Date.now()}`, 'STU');
+              const studentToSave: Student = { ...cleanRaw, id: safeStuId };
+              nextStudents.push(studentToSave);
+              await writeStudentToFirestore(studentToSave);
+              studentsMerged++;
+            } else {
+              const cur = nextStudents[existingIdx];
+              const patched: Student = { ...cur };
+              let changed = false;
+              if (!cur.counselor && cleanRaw.counselor) {
+                patched.counselor = cleanRaw.counselor;
+                changed = true;
+              }
+              if (!cur.researchMentor && cleanRaw.researchMentor) {
+                patched.researchMentor = cleanRaw.researchMentor;
+                changed = true;
+              }
+              if (!cur.satMathMentor && cleanRaw.satMathMentor) {
+                patched.satMathMentor = cleanRaw.satMathMentor;
+                changed = true;
+              }
+              if (!cur.satVerbalMentor && cleanRaw.satVerbalMentor) {
+                patched.satVerbalMentor = cleanRaw.satVerbalMentor;
+                changed = true;
+              }
+              if (changed) {
+                nextStudents[existingIdx] = patched;
+                await writeStudentToFirestore(patched);
+                studentsMerged++;
+              }
+            }
+          }
+          if (studentsMerged > 0) setStudentsState(nextStudents);
+        }
+
+        // 3. Merge missing batches & events
+        if (Array.isArray(json.batches)) {
+          for (const rawB of json.batches) {
+            if (!rawB?.id) continue;
+            const safeBId = toValidDocId(rawB.id, 'BATCH');
+            if (nextBatches.some((b) => b.id === rawB.id || b.id === safeBId)) continue;
+            const bObj: Batch = { ...rawB, id: safeBId };
+            nextBatches.push(bObj);
+            await setDoc(
+              doc(db, 'batches', safeBId),
+              stripUndefinedAndNulls({
+                ...bObj,
+                allowedViewerEmails: computeBatchViewerEmails(bObj, nextStaff, nextStudents, permissionsMatrixState),
+                updatedAt: now,
+              })
+            ).catch(() => {});
+            batchesMerged++;
+          }
+          if (batchesMerged > 0) setBatchesState(nextBatches);
+        }
+
+        if (Array.isArray(json.events)) {
+          for (const rawE of json.events) {
+            if (!rawE?.id) continue;
+            const safeEId = toValidDocId(rawE.id, 'EVT');
+            if (nextEvents.some((e) => e.id === rawE.id || e.id === safeEId)) continue;
+            const eObj: EventItem = { ...rawE, id: safeEId };
+            nextEvents.push(eObj);
+            await setDoc(
+              doc(db, 'events', safeEId),
+              stripUndefinedAndNulls({
+                ...eObj,
+                allowedViewerEmails: computeEventViewerEmails(
+                  eObj,
+                  nextStaff,
+                  nextStudents,
+                  nextBatches,
+                  permissionsMatrixState
+                ),
+                updatedAt: now,
+              })
+            ).catch(() => {});
+            eventsMerged++;
+          }
+          if (eventsMerged > 0) setEventsState(nextEvents);
+        }
+      }
+
+      // Always re-sync portal viewer emails after legacy merge
+      await syncPortalRecordsViewerEmails({
+        staffList: nextStaff,
+        studentsList: nextStudents,
+        batchesList: nextBatches,
+        eventsList: nextEvents,
+        forceStaffDir: true,
+      });
+
+      return {
+        ok: true,
+        hasLegacySql: Boolean(json.hasLegacySql),
+        provisioned: Number(json.provisioned || 0),
+        alreadyExisted: Number(json.alreadyExisted || 0),
+        skipped: Number(json.skipped || 0),
+        failed: Number(json.failed || 0),
+        studentsMerged,
+        staffMerged,
+        batchesMerged,
+        eventsMerged,
+        details: Array.isArray(json.details) ? json.details : [],
+      };
+    } catch (err: any) {
+      return {
+        ok: false,
+        provisioned: 0,
+        alreadyExisted: 0,
+        skipped: 0,
+        failed: 0,
+        studentsMerged: 0,
+        staffMerged: 0,
+        batchesMerged: 0,
+        eventsMerged: 0,
+        error: err?.message || 'Failed to restore legacy data.',
+      };
+    }
   };
 
   // Firestore Student sanitization & write helpers
@@ -1810,9 +2326,14 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     deleted.forEach((d) => {
       if (d.id && isUserAdmin(currentUser)) {
         const safeId = toValidDocId(d.id, 'STU');
-        void deleteDoc(doc(db, 'students', safeId)).catch((err) =>
+        void deleteDoc(doc(db, 'students', d.id)).catch((err) =>
           console.error('Delete student error:', err)
         );
+        if (safeId !== d.id) {
+          void deleteDoc(doc(db, 'students', safeId)).catch((err) =>
+            console.error('Delete student safeId error:', err)
+          );
+        }
       }
     });
 
@@ -1878,14 +2399,20 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
     const viewerEmails = computeAllStaffViewerEmails(cleanList);
     const now = new Date().toISOString();
+    let shouldResyncStudents = deleted.length > 0;
 
     if (isUserAdmin(currentUser)) {
       deleted.forEach((d) => {
         if (d.id && normalizeEmail(d.email) !== BOOTSTRAP_ADMIN_EMAIL) {
           const safeId = toValidDocId(d.id, 'STAFF');
-          void deleteDoc(doc(db, 'staff', safeId)).catch((err) =>
+          void deleteDoc(doc(db, 'staff', d.id)).catch((err) =>
             console.error('Delete staff error:', err)
           );
+          if (safeId !== d.id) {
+            void deleteDoc(doc(db, 'staff', safeId)).catch((err) =>
+              console.error('Delete staff safeId error:', err)
+            );
+          }
           if (d.email) {
             void deleteDoc(doc(db, 'staff_directory', normalizeEmailKey(d.email))).catch((err) =>
               console.error('Delete staff_directory error:', err)
@@ -1895,9 +2422,17 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       });
 
       cleanList.forEach((st) => {
-        const safeId = toValidDocId(st.id || `STAFF-${Date.now()}`, 'STAFF');
+        const rawId = st.id || `STAFF-${Date.now()}`;
+        const safeId = toValidDocId(rawId, 'STAFF');
         const cleanEmail = normalizeEmail(st.email);
         if (!cleanEmail) return;
+        const prev = staff.find((p) => p.id === st.id);
+        const isModified = !prev || JSON.stringify(prev) !== JSON.stringify(st) || safeId !== rawId;
+        const expectedViewers = Array.from(new Set([...viewerEmails, cleanEmail])).slice(0, 50);
+        const viewersChanged = !prev || !sameStringArray((prev as any).allowedViewerEmails, expectedViewers);
+        if (!isModified && !viewersChanged) return;
+        if (isModified) shouldResyncStudents = true;
+
         const statusNorm = String(st.status || 'Active').toLowerCase() === 'suspended' ? 'Suspended' : 'Active';
 
         const staffPayload = stripUndefinedAndNulls({
@@ -1906,9 +2441,9 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
           name: String(st.name || cleanEmail).trim().slice(0, 200),
           email: cleanEmail.slice(0, 200),
           role: String(st.role || 'COUNSELOR').slice(0, 60),
-          students: String(st.students || 'All').slice(0, 120),
+          students: String(st.students || 'Assigned Scope').slice(0, 120),
           status: statusNorm,
-          allowedViewerEmails: Array.from(new Set([...viewerEmails, cleanEmail])).slice(0, 50),
+          allowedViewerEmails: expectedViewers,
           updatedAt: now,
         });
 
@@ -1924,13 +2459,23 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
           updatedAt: now,
         };
 
-        void setDoc(doc(db, 'staff', safeId), staffPayload).catch((err) =>
-          console.error('Firestore staff write error:', buildFirestoreErrorInfo(err, OperationType.WRITE, `staff/${safeId}`))
-        );
+        void setDoc(doc(db, 'staff', safeId), staffPayload)
+          .then(() => {
+            if (st.id && safeId !== st.id) {
+              return deleteDoc(doc(db, 'staff', st.id)).catch(() => {});
+            }
+          })
+          .catch((err) =>
+            console.error('Firestore staff write error:', buildFirestoreErrorInfo(err, OperationType.WRITE, `staff/${safeId}`))
+          );
         void setDoc(doc(db, 'staff_directory', dirId), dirPayload).catch((err) =>
           console.error('Firestore staff_directory write error:', buildFirestoreErrorInfo(err, OperationType.WRITE, `staff_directory/${dirId}`))
         );
       });
+
+      if (shouldResyncStudents) {
+        void syncPortalRecordsViewerEmails({ staffList: cleanList, forceStaffDir: false });
+      }
     }
   };
 
@@ -3065,6 +3610,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         provisionPortalUser,
         resetPortalUserPassword,
         signOutAll,
+        resyncPortalAccess,
+        restoreLegacySqlToFirestore,
         conversations,
         sendConversationMessage,
       }}

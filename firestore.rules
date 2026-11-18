@@ -407,7 +407,7 @@ service cloud.firestore {
       allow get: if isVerified() && isValidId(emailKey) && (isAdmin() || emailKey == authEmailKey() || ('email' in existing() && existing().email == authEmailLower()));
       allow list: if isBootstrappedAdmin() || (isVerified() && existing().email == authEmailLower());
       allow create, update: if isAdmin() && isValidId(emailKey) && isValidStaffDirectory(incoming()) && incoming().id == emailKey;
-      allow delete: if isAdmin() && isValidId(emailKey);
+      allow delete: if isAdmin() && emailKey is string && emailKey.size() >= 1 && emailKey.size() <= 128;
     }
 
     match /staff/{staffId} {
@@ -425,7 +425,7 @@ service cloud.firestore {
           incoming().role == existing().role &&
           incoming().diff(existing()).affectedKeys().hasOnly(['name', 'uid', 'updatedAt']))
       );
-      allow delete: if isAdmin() && isValidId(staffId);
+      allow delete: if isAdmin() && staffId is string && staffId.size() >= 1 && staffId.size() <= 128;
     }
 
     match /students/{studentId} {
@@ -453,7 +453,7 @@ service cloud.firestore {
             'phone', 'school', 'major1', 'major2', 'targetDegree', 'targetCountry', 'uid', 'updatedAt'
           ]))
       );
-      allow delete: if isAdmin() && isValidId(studentId);
+      allow delete: if isAdmin() && studentId is string && studentId.size() >= 1 && studentId.size() <= 128;
     }
 
     match /portal_settings/{settingId} {

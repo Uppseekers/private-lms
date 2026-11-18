@@ -36,7 +36,7 @@ import {
 import { cn } from '@/lib/utils';
 import { useDatabase, PermissionCategory } from '@/context/DatabaseContext';
 import { StaffMember } from '@/types';
-import { isUserAdmin } from '@/lib/staffPermissions';
+import { isUserAdmin, isStudentAssignedToStaff } from '@/lib/staffPermissions';
 import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
 import ZohoSetupDiagnosticsPanel from '@/components/ZohoSetupDiagnosticsPanel';
 
@@ -52,11 +52,14 @@ export default function TeamSettings() {
     setCurrentUser,
     students,
     setStudents,
+    batches,
     permissionsMatrix,
     setPermissionsMatrix,
     roles,
     provisionPortalUser,
     resetPortalUserPassword,
+    resyncPortalAccess,
+    restoreLegacySqlToFirestore,
   } = useDatabase();
   const isAdmin = isUserAdmin(currentUser);
   const [activeTab, setActiveTab] = useState<TabType>('permissions');
@@ -99,6 +102,11 @@ export default function TeamSettings() {
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
   const [assignTargetId, setAssignTargetId] = useState<string | null>(null);
   const [assignedStudentIds, setAssignedStudentIds] = useState<string[]>([]);
+
+  // Recovery & Access Sync state
+  const [isSyncingAccess, setIsSyncingAccess] = useState(false);
+  const [isRestoringLegacy, setIsRestoringLegacy] = useState(false);
+  const [recoveryFeedback, setRecoveryFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Permissions State
   const [selectedRoleForPerms, setSelectedRoleForPerms] = useState('COUNSELOR');
@@ -246,16 +254,72 @@ export default function TeamSettings() {
     setIsModalOpen(false);
   };
 
+  const handleSyncPortalAccess = async () => {
+    setIsSyncingAccess(true);
+    setRecoveryFeedback(null);
+    try {
+      const result = await resyncPortalAccess({ forceStaffDir: true });
+      addAuditLog(
+        `Synced staff directory (${result.staffSynced}) and student access (${result.studentsUpdated} students, ${result.batchesUpdated} batches, ${result.eventsUpdated} events)`
+      );
+      setRecoveryFeedback({
+        type: 'success',
+        text: `Access synced: ${result.staffSynced} staff directory entries verified, ${result.studentsUpdated} student records updated, ${result.batchesUpdated} batches and ${result.eventsUpdated} sessions refreshed.`,
+      });
+    } catch (err: any) {
+      setRecoveryFeedback({
+        type: 'error',
+        text: err?.message || 'Failed to sync staff and student access.',
+      });
+    } finally {
+      setIsSyncingAccess(false);
+    }
+  };
+
+  const handleRestoreLegacyPasswordsAndData = async () => {
+    setIsRestoringLegacy(true);
+    setRecoveryFeedback(null);
+    try {
+      const result = await restoreLegacySqlToFirestore({ includeDemo: false, importRecords: true });
+      if (!result.ok) {
+        setRecoveryFeedback({
+          type: 'error',
+          text: result.error || 'Legacy restoration failed.',
+        });
+        return;
+      }
+      addAuditLog(
+        `Legacy restore: ${result.provisioned} Auth accounts created with original passwords, ${result.alreadyExisted} already existed, ${result.staffMerged} staff & ${result.studentsMerged} students merged`
+      );
+      const summaryParts = [
+        `${result.provisioned} account(s) restored with original passwords`,
+        `${result.alreadyExisted} already existed in Firebase Auth`,
+      ];
+      if (result.staffMerged > 0 || result.studentsMerged > 0 || result.batchesMerged > 0 || result.eventsMerged > 0) {
+        summaryParts.push(
+          `merged ${result.staffMerged} staff, ${result.studentsMerged} students, ${result.batchesMerged} batches, ${result.eventsMerged} sessions`
+        );
+      }
+      setRecoveryFeedback({
+        type: 'success',
+        text: `Legacy restore complete: ${summaryParts.join(' • ')}.`,
+      });
+    } catch (err: any) {
+      setRecoveryFeedback({
+        type: 'error',
+        text: err?.message || 'Legacy restoration failed.',
+      });
+    } finally {
+      setIsRestoringLegacy(false);
+    }
+  };
+
   const openAssignModal = (member: StaffMember) => {
     setAssignTargetId(member.id);
-    const assigned = students.filter(s => 
-      s.counselor === member.name || 
-      s.researchMentor === member.name || 
-      s.satMathMentor === member.name || 
-      s.satVerbalMentor === member.name ||
-      (s as any).mentor === member.name ||
-      (s as any).counsellor === member.name
-    ).map(s => s.id);
+    const scopedMember: StaffMember = { ...member, students: 'Assigned Scope' };
+    const assigned = students
+      .filter((s) => isStudentAssignedToStaff(s, scopedMember, undefined, batches))
+      .map((s) => s.id);
     setAssignedStudentIds(assigned);
     setIsAssignModalOpen(true);
   };
@@ -274,6 +338,18 @@ export default function TeamSettings() {
     if (!member) return;
 
     const roleUpper = (member.role || '').toUpperCase().replace(/[\s-]+/g, '_');
+    const memberNameLower = (member.name || '').trim().toLowerCase();
+    const memberEmailLower = (member.email || '').trim().toLowerCase();
+    const memberFirstLower = memberNameLower.split(/\s+/)[0] || '';
+    const matchesMemberVal = (val?: string) => {
+      const clean = (val || '').trim().toLowerCase();
+      if (!clean) return false;
+      return (
+        clean === memberNameLower ||
+        (memberEmailLower && clean === memberEmailLower) ||
+        (memberFirstLower.length >= 3 && clean === memberFirstLower)
+      );
+    };
 
     const updatedStudents = students.map(s => {
       if (assignedStudentIds.includes(s.id)) {
@@ -288,11 +364,12 @@ export default function TeamSettings() {
         }
       } else {
         const updated = { ...s } as any;
-        if (updated.counselor === member.name) updated.counselor = '';
-        if (updated.researchMentor === member.name) updated.researchMentor = '';
-        if (updated.satMathMentor === member.name) updated.satMathMentor = '';
-        if (updated.satVerbalMentor === member.name) updated.satVerbalMentor = '';
-        if (updated.mentor === member.name) updated.mentor = '';
+        if (matchesMemberVal(updated.counselor)) updated.counselor = '';
+        if (matchesMemberVal(updated.counselorEmail)) updated.counselorEmail = '';
+        if (matchesMemberVal(updated.researchMentor)) updated.researchMentor = '';
+        if (matchesMemberVal(updated.satMathMentor)) updated.satMathMentor = '';
+        if (matchesMemberVal(updated.satVerbalMentor)) updated.satVerbalMentor = '';
+        if (matchesMemberVal(updated.mentor)) updated.mentor = '';
         return updated;
       }
     });
@@ -320,7 +397,7 @@ export default function TeamSettings() {
 
   const deleteStaff = (id: string) => {
     const member = staff.find(s => s.id === id);
-    if (member) {
+    if (member && (member.email || '').trim().toLowerCase() !== 'uppseekers@gmail.com') {
       setStaff(staff.filter(s => s.id !== id));
       addAuditLog(`Deleted user ${member.name}`);
     }
@@ -546,9 +623,10 @@ export default function TeamSettings() {
 
       {activeTab === 'staff' && (
         <Card className="border-slate-200 shadow-sm overflow-hidden">
-          <div className="p-6 bg-white border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-             <div className="flex-1 w-full flex items-center gap-4">
-               <div className="relative max-w-sm w-full">
+          <div className="p-6 bg-white border-b border-slate-100 flex flex-col gap-4">
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
+              <div className="flex-1 w-full flex flex-wrap items-center gap-3">
+                <div className="relative max-w-sm w-full">
                   <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
@@ -557,20 +635,62 @@ export default function TeamSettings() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-shadow"
                   />
-               </div>
-               <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                 <option value="All">Role: All Roles</option>
-                 {roles.map(r => <option key={r} value={r}>{r}</option>)}
-               </select>
-               <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                 <option value="All">Status: All</option>
-                 <option value="Active">Status: Active</option>
-                 <option value="Suspended">Status: Suspended</option>
-               </select>
-             </div>
-             <Button onClick={openAddModal} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm shrink-0">
-               <Plus className="w-4 h-4 mr-2" /> Add Team Member
-             </Button>
+                </div>
+                <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  <option value="All">Role: All Roles</option>
+                  {roles.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className="bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                  <option value="All">Status: All</option>
+                  <option value="Active">Status: Active</option>
+                  <option value="Suspended">Status: Suspended</option>
+                </select>
+              </div>
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleSyncPortalAccess}
+                  disabled={isSyncingAccess}
+                  className="bg-white border-slate-200 text-slate-700 hover:bg-slate-50"
+                >
+                  <RefreshCw className={cn("w-4 h-4 mr-2", isSyncingAccess && "animate-spin")} />
+                  {isSyncingAccess ? 'Syncing Access...' : 'Sync Staff & Student Access'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleRestoreLegacyPasswordsAndData}
+                  disabled={isRestoringLegacy}
+                  className="bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100"
+                >
+                  <KeyRound className="w-4 h-4 mr-2" />
+                  {isRestoringLegacy ? 'Restoring Legacy Accounts...' : 'Restore Old Passwords & Records'}
+                </Button>
+                <Button onClick={openAddModal} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm">
+                  <Plus className="w-4 h-4 mr-2" /> Add Team Member
+                </Button>
+              </div>
+            </div>
+            {recoveryFeedback && (
+              <div
+                className={cn(
+                  "rounded-xl px-4 py-3 text-xs font-semibold flex items-center justify-between gap-3 border",
+                  recoveryFeedback.type === 'success'
+                    ? "bg-emerald-50 border-emerald-200 text-emerald-900"
+                    : "bg-red-50 border-red-200 text-red-900"
+                )}
+              >
+                <span>{recoveryFeedback.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setRecoveryFeedback(null)}
+                  className="text-current opacity-70 hover:opacity-100 font-bold"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm whitespace-nowrap">

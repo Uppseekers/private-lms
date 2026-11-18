@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, OperationalLog, Activity } from '@/types';
+import { isStudentAssignedToStaff } from '@/lib/staffPermissions';
 
 interface BulkCounselorTransferModalProps {
   isOpen: boolean;
@@ -48,49 +49,65 @@ export default function BulkCounselorTransferModal({
   const [transferReason, setTransferReason] = useState('Bulk counselor transfer in student database');
   const [recordLog, setRecordLog] = useState(true);
   const [isExpandedList, setIsExpandedList] = useState(false);
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   if (!isOpen || selectedStudentIds.length === 0) return null;
 
   const selectedStudents = students.filter(s => selectedStudentIds.includes(s.id));
 
   // Categorize staff members
-  const counselors = (staff || []).filter(s => 
-    s.role === 'COUNSELOR' || 
-    s.role === 'LEAD_COUNSELOR' || 
-    s.role === 'ADMIN' || 
-    s.role === 'OPS_LEAD' || 
-    s.role === 'APPLICATION_SPECIALIST'
-  );
+  const counselors = (staff || []).filter(s => {
+    const r = (s.role || '').toUpperCase();
+    return (
+      r === 'COUNSELOR' ||
+      r === 'LEAD_COUNSELOR' ||
+      r === 'HEAD_COUNSELOR' ||
+      r === 'COLLEGE_COUNSELOR' ||
+      r === 'SYSTEM_ADMIN' ||
+      r === 'ADMIN' ||
+      r === 'CATEGORY_MANAGER' ||
+      r === 'OPERATIONS_LEAD' ||
+      r === 'OPS_LEAD' ||
+      r === 'APPLICATION_SPECIALIST'
+    );
+  });
 
-  const researchMentors = (staff || []).filter(s => 
-    s.role === 'RESEARCH_MENTOR' || 
-    s.role === 'COUNSELOR' || 
-    s.role === 'LEAD_COUNSELOR' || 
-    s.role === 'ADMIN'
-  );
+  const researchMentors = (staff || []).filter(s => {
+    const r = (s.role || '').toUpperCase();
+    return (
+      r === 'RESEARCH_GUIDE' ||
+      r === 'RESEARCH_MENTOR' ||
+      r === 'COUNSELOR' ||
+      r === 'LEAD_COUNSELOR' ||
+      r === 'SYSTEM_ADMIN' ||
+      r === 'ADMIN'
+    );
+  });
 
-  const satFaculty = (staff || []).filter(s => 
-    s.role === 'SAT_FACULTY' || 
-    s.role === 'TEACHER' || 
-    s.role === 'ADMIN' || 
-    s.role === 'COUNSELOR'
-  );
+  const satFaculty = (staff || []).filter(s => {
+    const r = (s.role || '').toUpperCase();
+    return (
+      r === 'SAT_MATH_FACULTY' ||
+      r === 'SAT_VERBAL_FACULTY' ||
+      r === 'SAT_FACULTY' ||
+      r === 'TEACHER' ||
+      r === 'SYSTEM_ADMIN' ||
+      r === 'ADMIN' ||
+      r === 'COUNSELOR'
+    );
+  });
 
   // Helper to count active students per staff member
-  const getStudentCount = (staffName: string) => {
-    return students.filter(s => 
-      s.counselor?.toLowerCase() === staffName.toLowerCase() ||
-      s.researchMentor?.toLowerCase() === staffName.toLowerCase() ||
-      s.satVerbalMentor?.toLowerCase() === staffName.toLowerCase() ||
-      s.satMathMentor?.toLowerCase() === staffName.toLowerCase()
-    ).length;
+  const getStudentCount = (staffMember: StaffMember) => {
+    return students.filter(s => isStudentAssignedToStaff(s, staffMember)).length;
   };
 
   const handleConfirm = () => {
     if (updateCounselor && !targetCounselor) {
-      alert('Please select a target counselor to transfer these students to.');
+      setValidationError('Please select a target counselor to transfer these students to.');
       return;
     }
+    setValidationError(null);
 
     const nowStr = new Date().toLocaleDateString('en-US', { 
       month: 'short', 
@@ -255,7 +272,7 @@ export default function BulkCounselorTransferModal({
                   <option value="">-- Choose Target Counselor --</option>
                   <optgroup label="Active Counselors & Leadership">
                     {(counselors.length > 0 ? counselors : staff).map(st => {
-                      const count = getStudentCount(st.name);
+                      const count = getStudentCount(st);
                       return (
                         <option key={st.id || st.email} value={st.name}>
                           {st.name} ({st.role?.replace(/_/g, ' ') || 'Counselor'}) — {count} student{count !== 1 ? 's' : ''} currently
@@ -265,7 +282,7 @@ export default function BulkCounselorTransferModal({
                   </optgroup>
                   <optgroup label="Other Mentors & Faculty">
                     {staff.filter(st => !counselors.some(c => c.id === st.id)).map(st => {
-                      const count = getStudentCount(st.name);
+                      const count = getStudentCount(st);
                       return (
                         <option key={st.id || st.email} value={st.name}>
                           {st.name} ({st.role?.replace(/_/g, ' ') || 'Staff'}) — {count} student{count !== 1 ? 's' : ''}
@@ -390,6 +407,12 @@ export default function BulkCounselorTransferModal({
               Record this transfer event in each student's operational logs & activity trail
             </span>
           </label>
+          {validationError && (
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs font-semibold text-red-700 flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{validationError}</span>
+            </div>
+          )}
         </div>
 
         {/* Footer */}

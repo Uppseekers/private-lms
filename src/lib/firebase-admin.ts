@@ -51,6 +51,8 @@ const adminApp: App = getApps().length
       projectId: firebaseConfig.projectId,
     });
 
+export const firebaseWebApiKey: string = String((firebaseConfig as { apiKey?: string }).apiKey || '');
+
 export const adminAuth: Auth = getAuth(adminApp);
 export const adminDb: Firestore = getFirestore(
   adminApp,
