@@ -173,23 +173,24 @@ export interface SessionRating {
 
 export interface EventItem {
   id: string;
-  title?: string;
-  stream?: string;
+  title: string;
+  stream: string;
   type?: string;
   category?: string;
   date?: string;
-  day?: string;
-  time?: string;
+  day: string;
+  time: string;
   duration?: string;
   host?: string;
   organiser?: string;
   attendees?: any;
-  students?: any;
+  students: string;
   studentId?: string;
+  studentIds?: string[];
   batch?: string;
-  status?: string;
+  status?: 'Scheduled' | 'Completed' | 'Cancelled' | string;
   link?: string;
-  location?: string;
+  location: string;
   isRecurring?: boolean;
   seriesId?: string;
   sessionNumber?: number;
@@ -279,6 +280,8 @@ export interface Student {
   major2?: string;
   targetDegree?: string;
   targetCountry?: string;
+  grade?: string;
+  studentAvailability?: StudentAvailability;
   taskSheetLink?: string;
   activities: Activity[];
   extracurriculars?: ExtracurricularActivity[];
@@ -374,6 +377,67 @@ export interface Batch {
   description?: string;
 }
 
+export type DayOfWeekName =
+  | 'Monday'
+  | 'Tuesday'
+  | 'Wednesday'
+  | 'Thursday'
+  | 'Friday'
+  | 'Saturday'
+  | 'Sunday';
+
+export interface DayAvailabilityTiming {
+  enabled: boolean;
+  startTime: string; // "HH:mm" 24-hour format, e.g. "10:00"
+  endTime: string;   // "HH:mm" 24-hour format, e.g. "18:00"
+  breakStart?: string; // Optional "HH:mm", e.g. "13:00"
+  breakEnd?: string;   // Optional "HH:mm", e.g. "14:00"
+  maxHours?: number;   // Optional Admin per-day hourly counselling bandwidth (1..12)
+}
+
+export interface CounsellorPrimaryAvailability {
+  mode: 'uniform' | 'custom';
+  selectedDays: DayOfWeekName[];
+  uniformStartTime: string;
+  uniformEndTime: string;
+  uniformBreakStart?: string;
+  uniformBreakEnd?: string;
+  daySchedules: Record<DayOfWeekName, DayAvailabilityTiming>;
+  updatedAt?: string;
+}
+
+export interface StudentDateAvailabilityOverride {
+  date: string; // "YYYY-MM-DD"
+  startTime: string; // "HH:mm"
+  endTime: string;   // "HH:mm"
+  unavailable?: boolean;
+}
+
+export interface StudentAvailability {
+  mode: 'uniform' | 'custom';
+  selectedDays: DayOfWeekName[];
+  uniformStartTime: string;
+  uniformEndTime: string;
+  daySchedules: Record<DayOfWeekName, DayAvailabilityTiming>;
+  dateOverrides?: StudentDateAvailabilityOverride[];
+  updatedAt?: string;
+}
+
+export type CounsellingGradeKey = '7' | '8' | '9' | '10' | '11' | '12';
+
+export interface GradeCounsellingRule {
+  durationMinutes: 30 | 45 | 60;
+  frequencyPerMonth: 1 | 2 | 3 | 4;
+}
+
+export interface CounsellingSchedulerSettings {
+  id: string;
+  gradeRules: Record<CounsellingGradeKey, GradeCounsellingRule>;
+  bufferMinutes: number;
+  updatedBy?: string;
+  updatedAt?: string;
+}
+
 export interface StaffMember {
   id: string;
   name: string;
@@ -382,6 +446,10 @@ export interface StaffMember {
   students: string;
   status: 'Active' | 'Suspended';
   password?: string;
+  uid?: string;
+  primaryAvailability?: CounsellorPrimaryAvailability;
+  dailyMaxCounsellingHours?: number;
+  updatedAt?: string;
 }
 
 export type LaunchpadAccessScope = 'none' | 'assigned' | 'global' | 'read_only';

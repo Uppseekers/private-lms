@@ -1,6 +1,6 @@
 import { Pool } from "pg";
 import { eq } from "drizzle-orm";
-import { db, createPool } from "./index.ts";
+import { db, createPool } from "./index";
 import {
   users,
   studentsData,
@@ -9,12 +9,12 @@ import {
   launchpadSubjects,
   launchpadChapters,
   launchpadCertificationQuestions,
-} from "./schema.ts";
+} from "./schema";
 import {
   buildDefaultLaunchpadSubjects,
   buildDefaultLaunchpadChapters,
   buildDefaultCertQuestions,
-} from "../data/launchpadData.ts";
+} from "../data/launchpadData";
 
 export const SYS_KV_PREFIX = "__SYS_KV__";
 

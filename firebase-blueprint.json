@@ -40,6 +40,8 @@
         "students": { "type": "string", "maxLength": 120 },
         "status": { "type": "string", "enum": ["Active", "Suspended"], "maxLength": 40 },
         "uid": { "type": "string", "maxLength": 128 },
+        "primaryAvailability": { "type": "object", "description": "Admin-configured counsellor working days, uniform or custom day-wise timings, breaks, and optional per-day hourly bandwidth (maxHours)" },
+        "dailyMaxCounsellingHours": { "type": "number", "description": "Admin-configured daily max counselling bandwidth cap in hours (1 to 12)" },
         "allowedViewerEmails": { "type": "array", "description": "Emails authorized to view this staff record" },
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
@@ -83,6 +85,8 @@
         "major2": { "type": "string", "maxLength": 160 },
         "targetDegree": { "type": "string", "maxLength": 120 },
         "targetCountry": { "type": "string", "maxLength": 120 },
+        "grade": { "type": "string", "maxLength": 20 },
+        "studentAvailability": { "type": "object", "description": "Student preferred counselling availability (days of week, uniform or day-wise timings, and optional date-wise overrides)" },
         "uid": { "type": "string", "maxLength": 128 },
         "role": { "type": "string", "maxLength": 40 },
         "status": { "type": "string", "maxLength": 40 },
@@ -103,6 +107,19 @@
         "updatedAt": { "type": "string", "maxLength": 64 }
       },
       "required": ["id", "matrix"]
+    },
+    "SchedulerSetting": {
+      "title": "SchedulerSetting",
+      "description": "Class-wise suggested counselling scheduler rules (Grades 7 to 12) and session buffer time",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "gradeRules": { "type": "object", "description": "Per-grade durationMinutes and frequencyPerMonth map" },
+        "bufferMinutes": { "type": "number", "description": "Buffer minutes between sessions" },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "gradeRules", "bufferMinutes"]
     },
     "Batch": {
       "title": "Batch",
@@ -383,6 +400,41 @@
         "allowedViewerEmails": { "type": "array" }
       },
       "required": ["id", "recipientType", "recipientId", "title"]
+    },
+    "AdminStudentCredential": {
+      "title": "AdminStudentCredential",
+      "description": "System Admin-only isolated vault storing student portal passwords (inaccessible to counsellors and students)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "studentName": { "type": "string", "maxLength": 200 },
+        "password": { "type": "string", "minLength": 1, "maxLength": 200 },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "email", "password"]
+    },
+    "StaffZohoVault": {
+      "title": "StaffZohoVault",
+      "description": "Per-counsellor AES-256-GCM server-sealed Zoho Meeting OAuth vault keyed by normalized staff email",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "staffEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "staffName": { "type": "string", "maxLength": 200 },
+        "zohoEmail": { "type": "string", "maxLength": 200 },
+        "zohoDisplayName": { "type": "string", "maxLength": 200 },
+        "zsoid": { "type": "string", "maxLength": 120 },
+        "zuid": { "type": "string", "maxLength": 120 },
+        "accountsServer": { "type": "string", "maxLength": 200 },
+        "meetingBase": { "type": "string", "maxLength": 200 },
+        "sealedVault": { "type": "string", "minLength": 10, "maxLength": 8000 },
+        "connectedAt": { "type": "string", "maxLength": 80 },
+        "updatedAt": { "type": "string", "maxLength": 80 }
+      },
+      "required": ["id", "staffEmail", "sealedVault"]
     }
   },
   "firestore": {
@@ -405,6 +457,10 @@
     "/portal_settings/{settingId}": {
       "schema": { "$ref": "#/entities/PortalSetting" },
       "description": "Global portal settings and permissions matrix"
+    },
+    "/scheduler_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/SchedulerSetting" },
+      "description": "Global class-wise suggested scheduler rules and buffer configuration for counselling"
     },
     "/batches/{batchId}": {
       "schema": { "$ref": "#/entities/Batch" },
@@ -457,6 +513,14 @@
     "/notifications/{notifId}": {
       "schema": { "$ref": "#/entities/AppNotification" },
       "description": "Student and staff notifications"
+    },
+    "/admin_student_credentials/{credId}": {
+      "schema": { "$ref": "#/entities/AdminStudentCredential" },
+      "description": "Admin-only isolated collection for student portal login credentials"
+    },
+    "/staff_zoho_vault/{emailKey}": {
+      "schema": { "$ref": "#/entities/StaffZohoVault" },
+      "description": "Server-sealed Zoho OAuth token vault per counsellor"
     }
   }
 }

@@ -10,7 +10,14 @@ service cloud.firestore {
     }
 
     function isVerified() {
-      return isSignedIn() && 'email' in request.auth.token && request.auth.token.email is string && request.auth.token.email.size() >= 3;
+      return isSignedIn()
+        && 'email' in request.auth.token
+        && request.auth.token.email is string
+        && request.auth.token.email.size() >= 3;
+    }
+
+    function isPortalAuthenticated() {
+      return isVerified();
     }
 
     function isValidId(id) {
@@ -39,7 +46,7 @@ service cloud.firestore {
 
     function isAdmin() {
       return isBootstrappedAdmin()
-        || (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+        || (isPortalAuthenticated() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
     }
 
     function hasStaffDir() {
@@ -52,7 +59,7 @@ service cloud.firestore {
 
     function isActiveStaff() {
       return isAdmin() || (
-        isVerified() &&
+        isPortalAuthenticated() &&
         hasStaffDir() &&
         staffDirData().status == 'Active'
       );
@@ -60,7 +67,7 @@ service cloud.firestore {
 
     function hasGlobalStaffAccess() {
       return isAdmin() || (
-        isVerified() &&
+        isPortalAuthenticated() &&
         hasStaffDir() &&
         staffDirData().status == 'Active' && (
           staffDirData().role in [
@@ -75,7 +82,7 @@ service cloud.firestore {
     }
 
     function canSelfSyncStaffDirectory(emailKey, data) {
-      return isVerified()
+      return isPortalAuthenticated()
         && emailKey == authEmailKey()
         && data.id == emailKey
         && data.email == authEmailLower()
@@ -101,17 +108,31 @@ service cloud.firestore {
     function isAssignedCounselorOnDoc(docData) {
       return isActiveStaff() && (
         ('counselorId' in docData && docData.counselorId == staffDirData().staffId) ||
+        ('mentorId' in docData && docData.mentorId == staffDirData().staffId) ||
         ('name' in staffDirData() && (
           ('counselor' in docData && docData.counselor == staffDirData().name) ||
           ('counsellor' in docData && docData.counsellor == staffDirData().name) ||
-          ('mentor' in docData && docData.mentor == staffDirData().name)
+          ('mentor' in docData && docData.mentor == staffDirData().name) ||
+          ('universityMentor' in docData && docData.universityMentor == staffDirData().name) ||
+          ('researchMentor' in docData && docData.researchMentor == staffDirData().name) ||
+          ('satMathMentor' in docData && docData.satMathMentor == staffDirData().name) ||
+          ('satVerbalMentor' in docData && docData.satVerbalMentor == staffDirData().name)
         )) ||
         ('firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && (
           ('counselor' in docData && docData.counselor == staffDirData().firstName) ||
           ('counsellor' in docData && docData.counsellor == staffDirData().firstName) ||
-          ('mentor' in docData && docData.mentor == staffDirData().firstName)
+          ('mentor' in docData && docData.mentor == staffDirData().firstName) ||
+          ('universityMentor' in docData && docData.universityMentor == staffDirData().firstName) ||
+          ('researchMentor' in docData && docData.researchMentor == staffDirData().firstName) ||
+          ('satMathMentor' in docData && docData.satMathMentor == staffDirData().firstName) ||
+          ('satVerbalMentor' in docData && docData.satVerbalMentor == staffDirData().firstName)
         ))
       );
+    }
+
+    function hasUnchangedOrInitializedDocId(docId) {
+      return ('id' in existing() && incoming().id == existing().id)
+        || (!('id' in existing()) && incoming().id == docId);
     }
 
     function isValidAdmin(data) {
@@ -120,6 +141,39 @@ service cloud.firestore {
         && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid.matches('^[a-zA-Z0-9_\\-]+$')
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
         && data.role is string && data.role.size() >= 1 && data.role.size() <= 40;
+    }
+
+    function isValidAdminStudentCredential(data) {
+      return data.keys().hasAll(['id', 'email', 'password'])
+        && data.keys().hasOnly(['id', 'studentId', 'email', 'studentName', 'password', 'updatedBy', 'updatedAt'])
+        && isValidId(data.id)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.password is string && data.password.size() >= 1 && data.password.size() <= 200
+        && (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 128))
+        && (!('studentName' in data) || (data.studentName is string && data.studentName.size() <= 200))
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 200))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidStaffZohoVault(data) {
+      return data.keys().hasAll(['id', 'staffEmail', 'sealedVault'])
+        && data.keys().hasOnly([
+          'id', 'staffEmail', 'staffName', 'zohoEmail', 'zohoDisplayName',
+          'zsoid', 'zuid', 'accountsServer', 'meetingBase', 'sealedVault',
+          'connectedAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.staffEmail is string && data.staffEmail.size() >= 3 && data.staffEmail.size() <= 200
+        && data.sealedVault is string && data.sealedVault.size() >= 10 && data.sealedVault.size() <= 8000
+        && (!('staffName' in data) || (data.staffName is string && data.staffName.size() <= 200))
+        && (!('zohoEmail' in data) || (data.zohoEmail is string && data.zohoEmail.size() <= 200))
+        && (!('zohoDisplayName' in data) || (data.zohoDisplayName is string && data.zohoDisplayName.size() <= 200))
+        && (!('zsoid' in data) || (data.zsoid is string && data.zsoid.size() <= 120))
+        && (!('zuid' in data) || (data.zuid is string && data.zuid.size() <= 120))
+        && (!('accountsServer' in data) || (data.accountsServer is string && data.accountsServer.size() <= 200))
+        && (!('meetingBase' in data) || (data.meetingBase is string && data.meetingBase.size() <= 200))
+        && (!('connectedAt' in data) || (data.connectedAt is string && data.connectedAt.size() <= 80))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 80));
     }
 
     function isValidStaffDirectory(data) {
@@ -136,10 +190,44 @@ service cloud.firestore {
         && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
 
+    function isValidPrimaryAvailability(avail) {
+      return avail is map
+        && avail.keys().hasOnly([
+          'mode', 'selectedDays', 'uniformStartTime', 'uniformEndTime',
+          'uniformBreakStart', 'uniformBreakEnd', 'daySchedules', 'updatedAt'
+        ])
+        && (!('mode' in avail) || (avail.mode is string && avail.mode in ['uniform', 'custom']))
+        && (!('selectedDays' in avail) || (avail.selectedDays is list && avail.selectedDays.size() <= 7 && (avail.selectedDays.size() == 0 || avail.selectedDays[0] is string)))
+        && (!('uniformStartTime' in avail) || (avail.uniformStartTime is string && avail.uniformStartTime.size() <= 16))
+        && (!('uniformEndTime' in avail) || (avail.uniformEndTime is string && avail.uniformEndTime.size() <= 16))
+        && (!('uniformBreakStart' in avail) || (avail.uniformBreakStart is string && avail.uniformBreakStart.size() <= 16))
+        && (!('uniformBreakEnd' in avail) || (avail.uniformBreakEnd is string && avail.uniformBreakEnd.size() <= 16))
+        && (!('daySchedules' in avail) || avail.daySchedules is map)
+        && (!('updatedAt' in avail) || (avail.updatedAt is string && avail.updatedAt.size() <= 64));
+    }
+
+    function isValidStudentAvailability(avail) {
+      return avail is map
+        && avail.keys().hasOnly([
+          'mode', 'selectedDays', 'uniformStartTime', 'uniformEndTime',
+          'daySchedules', 'dateOverrides', 'updatedAt'
+        ])
+        && (!('mode' in avail) || (avail.mode is string && avail.mode in ['uniform', 'custom']))
+        && (!('selectedDays' in avail) || (avail.selectedDays is list && avail.selectedDays.size() <= 7 && (avail.selectedDays.size() == 0 || avail.selectedDays[0] is string)))
+        && (!('uniformStartTime' in avail) || (avail.uniformStartTime is string && avail.uniformStartTime.size() <= 16))
+        && (!('uniformEndTime' in avail) || (avail.uniformEndTime is string && avail.uniformEndTime.size() <= 16))
+        && (!('daySchedules' in avail) || avail.daySchedules is map)
+        && (!('dateOverrides' in avail) || (avail.dateOverrides is list && avail.dateOverrides.size() <= 30 && (avail.dateOverrides.size() == 0 || avail.dateOverrides[0] is map)))
+        && (!('updatedAt' in avail) || (avail.updatedAt is string && avail.updatedAt.size() <= 64));
+    }
+
     function isValidStaff(data) {
       return !('password' in data)
         && data.keys().hasAll(['id', 'name', 'email'])
-        && data.keys().hasOnly(['id', 'name', 'email', 'role', 'students', 'status', 'uid', 'allowedViewerEmails', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'name', 'email', 'role', 'students', 'status', 'uid',
+          'primaryAvailability', 'dailyMaxCounsellingHours', 'allowedViewerEmails', 'updatedAt'
+        ])
         && isValidId(data.id)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
@@ -147,6 +235,8 @@ service cloud.firestore {
         && (!('status' in data) || (data.status is string && data.status.size() <= 40))
         && (!('students' in data) || (data.students is string && data.students.size() <= 120))
         && (!('uid' in data) || (data.uid is string && data.uid.size() <= 128))
+        && (!('primaryAvailability' in data) || isValidPrimaryAvailability(data.primaryAvailability))
+        && (!('dailyMaxCounsellingHours' in data) || (data.dailyMaxCounsellingHours is number && data.dailyMaxCounsellingHours >= 1 && data.dailyMaxCounsellingHours <= 12))
         && (!('allowedViewerEmails' in data) || (data.allowedViewerEmails is list && data.allowedViewerEmails.size() <= 200 && (data.allowedViewerEmails.size() == 0 || data.allowedViewerEmails[0] is string)))
         && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
@@ -161,8 +251,8 @@ service cloud.firestore {
           'readiness', 'countries', 'activities', 'operationalLogs',
           'shortlist', 'documents', 'essays', 'tasks', 'extracurriculars',
           'academicScores', 'credentials', 'conversations', 'taskSheetLink',
-          'major1', 'major2', 'targetDegree',
-          'targetCountry', 'uid', 'role', 'status', 'allowedViewerEmails', 'createdAt', 'updatedAt'
+          'major1', 'major2', 'targetDegree', 'targetCountry', 'grade', 'studentAvailability',
+          'uid', 'role', 'status', 'allowedViewerEmails', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 200
@@ -197,6 +287,8 @@ service cloud.firestore {
         && (!('major2' in data) || (data.major2 is string && data.major2.size() <= 160))
         && (!('targetDegree' in data) || (data.targetDegree is string && data.targetDegree.size() <= 120))
         && (!('targetCountry' in data) || (data.targetCountry is string && data.targetCountry.size() <= 120))
+        && (!('grade' in data) || (data.grade is string && data.grade.size() <= 20))
+        && (!('studentAvailability' in data) || isValidStudentAvailability(data.studentAvailability))
         && (!('uid' in data) || (data.uid is string && data.uid.size() <= 128))
         && (!('role' in data) || (data.role is string && data.role.size() <= 40))
         && (!('status' in data) || (data.status is string && data.status.size() <= 40))
@@ -210,6 +302,17 @@ service cloud.firestore {
         && data.keys().hasOnly(['id', 'matrix', 'updatedBy', 'updatedAt'])
         && isValidId(data.id)
         && data.matrix is map
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 200))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidSchedulerSetting(data) {
+      return data.keys().hasAll(['id', 'gradeRules', 'bufferMinutes'])
+        && data.keys().hasOnly(['id', 'gradeRules', 'bufferMinutes', 'updatedBy', 'updatedAt'])
+        && isValidId(data.id)
+        && data.gradeRules is map
+        && data.gradeRules.keys().hasOnly(['7', '8', '9', '10', '11', '12'])
+        && data.bufferMinutes is number && data.bufferMinutes >= 0 && data.bufferMinutes <= 60
         && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 200))
         && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
@@ -457,24 +560,53 @@ service cloud.firestore {
     }
 
     match /test/{docId} {
-      allow get: if isVerified() && isValidId(docId);
+      allow get: if isPortalAuthenticated() && isValidId(docId);
       allow list, write: if false;
     }
 
     match /admins/{adminId} {
-      allow get: if isVerified() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
+      allow get: if isPortalAuthenticated() && isValidId(adminId) && (request.auth.uid == adminId || isAdmin());
       allow list: if isBootstrappedAdmin();
       allow create, update: if isBootstrappedAdmin() && isValidId(adminId) && isValidAdmin(incoming()) && incoming().uid == adminId;
       allow delete: if isBootstrappedAdmin() && isValidId(adminId);
     }
 
+    match /admin_student_credentials/{credId} {
+      allow get: if isAdmin() && isValidId(credId);
+      allow list: if isAdmin() && existing().email is string && existing().email.size() >= 3;
+      allow create: if isAdmin() && isValidId(credId) && isValidAdminStudentCredential(incoming()) && incoming().id == credId;
+      allow update: if isAdmin() && isValidId(credId) && isValidAdminStudentCredential(incoming()) && hasUnchangedOrInitializedDocId(credId);
+      allow delete: if isAdmin() && isValidId(credId);
+    }
+
+    match /staff_zoho_vault/{emailKey} {
+      allow get: if isPortalAuthenticated() && isValidId(emailKey) && (
+        isAdmin() || (isActiveStaff() && emailKey == authEmailKey())
+      );
+      allow list: if isAdmin() && existing().staffEmail is string && existing().staffEmail.size() >= 3;
+      allow create: if isPortalAuthenticated() && isValidId(emailKey) && isValidStaffZohoVault(incoming()) && incoming().id == emailKey && (
+        isAdmin() || (isActiveStaff() && emailKey == authEmailKey() && incoming().staffEmail == authEmailLower())
+      );
+      allow update: if isPortalAuthenticated() && isValidId(emailKey) && isValidStaffZohoVault(incoming()) && incoming().id == emailKey && (
+        isAdmin() || (
+          isActiveStaff() &&
+          emailKey == authEmailKey() &&
+          incoming().staffEmail == authEmailLower() &&
+          incoming().staffEmail == existing().staffEmail
+        )
+      );
+      allow delete: if isPortalAuthenticated() && isValidId(emailKey) && (
+        isAdmin() || (isActiveStaff() && emailKey == authEmailKey())
+      );
+    }
+
     match /staff_directory/{emailKey} {
-      allow get: if isVerified() && isValidId(emailKey) && (
+      allow get: if isPortalAuthenticated() && isValidId(emailKey) && (
         hasGlobalStaffAccess() ||
         emailKey == authEmailKey() ||
         ('email' in existing() && existing().email == authEmailLower())
       );
-      allow list: if hasGlobalStaffAccess() || (isVerified() && existing().email == authEmailLower());
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && existing().email == authEmailLower());
       allow create, update: if isValidId(emailKey) && isValidStaffDirectory(incoming()) && incoming().id == emailKey && (
         isAdmin() || canSelfSyncStaffDirectory(emailKey, incoming())
       );
@@ -482,88 +614,115 @@ service cloud.firestore {
     }
 
     match /staff/{staffId} {
-      allow get: if isVerified() && isValidId(staffId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
-      allow list: if hasGlobalStaffAccess() || (isVerified() && (
+      allow get: if isPortalAuthenticated() && isValidId(staffId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().email == authEmailLower()
       ));
       allow create: if isAdmin() && isValidId(staffId) && isValidStaff(incoming()) && incoming().id == staffId;
-      allow update: if isVerified() && isValidId(staffId) && isValidStaff(incoming()) && (
+      allow update: if isPortalAuthenticated() && isValidId(staffId) && isValidStaff(incoming()) && hasUnchangedOrInitializedDocId(staffId) && (
         isAdmin() ||
-        ('email' in existing() && existing().email == authEmailLower() &&
-          incoming().id == existing().id &&
+        (hasGlobalStaffAccess() &&
           incoming().email == existing().email &&
           incoming().role == existing().role &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['name', 'uid', 'updatedAt']))
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'id', 'students', 'allowedViewerEmails', 'updatedAt'
+          ])) ||
+        ('email' in existing() && existing().email.lower() == authEmailLower() &&
+          incoming().email == existing().email &&
+          incoming().role == existing().role &&
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'id', 'name', 'uid', 'updatedAt'
+          ]))
       );
       allow delete: if isAdmin() && staffId is string && staffId.size() >= 1 && staffId.size() <= 128;
     }
 
     match /students/{studentId} {
-      allow get: if isVerified() && isValidId(studentId) && (
+      allow get: if isPortalAuthenticated() && isValidId(studentId) && (
         hasGlobalStaffAccess() ||
         isEmailAuthorizedInDoc(existing()) ||
         isAssignedCounselorOnDoc(existing())
       );
-      allow list: if hasGlobalStaffAccess() || (isVerified() && (
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().email == authEmailLower() ||
         existing().counselorEmail == authEmailLower() ||
         (isActiveStaff() && existing().counselorId == staffDirData().staffId) ||
+        (isActiveStaff() && existing().mentorId == staffDirData().staffId) ||
         (isActiveStaff() && 'name' in staffDirData() && existing().counselor == staffDirData().name) ||
         (isActiveStaff() && 'name' in staffDirData() && existing().counsellor == staffDirData().name) ||
         (isActiveStaff() && 'name' in staffDirData() && existing().mentor == staffDirData().name) ||
+        (isActiveStaff() && 'name' in staffDirData() && existing().universityMentor == staffDirData().name) ||
+        (isActiveStaff() && 'name' in staffDirData() && existing().researchMentor == staffDirData().name) ||
+        (isActiveStaff() && 'name' in staffDirData() && existing().satMathMentor == staffDirData().name) ||
+        (isActiveStaff() && 'name' in staffDirData() && existing().satVerbalMentor == staffDirData().name) ||
         (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().counselor == staffDirData().firstName) ||
         (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().counsellor == staffDirData().firstName) ||
-        (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().mentor == staffDirData().firstName)
+        (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().mentor == staffDirData().firstName) ||
+        (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().universityMentor == staffDirData().firstName) ||
+        (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().researchMentor == staffDirData().firstName) ||
+        (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().satMathMentor == staffDirData().firstName) ||
+        (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().satVerbalMentor == staffDirData().firstName)
       ));
       allow create: if (isAdmin() || isActiveStaff()) && isValidId(studentId) && isValidStudent(incoming()) && incoming().id == studentId;
-      allow update: if isVerified() && isValidId(studentId) && isValidStudent(incoming()) && incoming().id == existing().id && (
+      allow update: if isPortalAuthenticated() && isValidId(studentId) && isValidStudent(incoming()) && hasUnchangedOrInitializedDocId(studentId) && (
         hasGlobalStaffAccess() ||
         (isActiveStaff() && (
           isEmailAuthorizedInDoc(existing()) ||
           isAssignedCounselorOnDoc(existing())
         ) &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'name', 'phone', 'intake', 'school', 'counselor', 'counselorId', 'counselorEmail',
+            'id', 'name', 'phone', 'intake', 'school', 'grade', 'studentAvailability',
+            'counselor', 'counselorId', 'counselorEmail',
             'counsellor', 'mentor', 'mentorId', 'researchMentor',
             'satMathMentor', 'satVerbalMentor', 'universityMentor', 'readiness',
             'countries', 'activities', 'operationalLogs', 'shortlist', 'documents',
-            'essays', 'tasks', 'extracurriculars', 'academicScores', 'major1',
-            'major2', 'targetDegree', 'targetCountry', 'allowedViewerEmails', 'updatedAt'
+            'essays', 'tasks', 'extracurriculars', 'academicScores', 'conversations',
+            'taskSheetLink', 'major1', 'major2', 'targetDegree', 'targetCountry',
+            'allowedViewerEmails', 'updatedAt'
           ])) ||
         ('email' in existing() && existing().email.lower() == authEmailLower() &&
           incoming().email == existing().email &&
+          (!('shortlist' in incoming()) || ('shortlist' in existing() && incoming().shortlist.size() == existing().shortlist.size())) &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'tasks', 'essays', 'documents', 'activities', 'shortlist',
+            'id', 'tasks', 'essays', 'documents', 'activities', 'shortlist',
             'extracurriculars', 'academicScores', 'credentials', 'operationalLogs',
-            'phone', 'school', 'major1', 'major2', 'targetDegree', 'targetCountry', 'uid', 'updatedAt'
+            'phone', 'school', 'grade', 'studentAvailability',
+            'major1', 'major2', 'targetDegree', 'targetCountry', 'uid', 'updatedAt'
           ]))
       );
       allow delete: if isAdmin() && studentId is string && studentId.size() >= 1 && studentId.size() <= 128;
     }
 
     match /portal_settings/{settingId} {
-      allow get: if isVerified() && isValidId(settingId) && (isAdmin() || isActiveStaff());
+      allow get: if isPortalAuthenticated() && isValidId(settingId) && (isAdmin() || isActiveStaff());
       allow list: if hasGlobalStaffAccess();
       allow create, update: if isAdmin() && isValidId(settingId) && isValidPortalSetting(incoming()) && incoming().id == settingId;
       allow delete: if isBootstrappedAdmin() && isValidId(settingId);
     }
 
+    match /scheduler_settings/{settingId} {
+      allow get: if isPortalAuthenticated() && isValidId(settingId) && (isAdmin() || isActiveStaff());
+      allow list: if isBootstrappedAdmin() && existing().id == 'counselling_rules';
+      allow create, update: if isAdmin() && isValidId(settingId) && isValidSchedulerSetting(incoming()) && incoming().id == settingId;
+      allow delete: if isBootstrappedAdmin() && isValidId(settingId);
+    }
+
     match /batches/{batchId} {
-      allow get: if isVerified() && isValidId(batchId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
-      allow list: if hasGlobalStaffAccess() || (isVerified() && authEmailLower() in existing().allowedViewerEmails);
+      allow get: if isPortalAuthenticated() && isValidId(batchId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && authEmailLower() in existing().allowedViewerEmails);
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(batchId) && isValidBatch(incoming()) && incoming().id == batchId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(batchId);
     }
 
     match /events/{eventId} {
-      allow get: if isVerified() && isValidId(eventId) && (
+      allow get: if isPortalAuthenticated() && isValidId(eventId) && (
         hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()) ||
         ('participantEmails' in existing() && existing().participantEmails is list && authEmailLower() in existing().participantEmails)
       );
       allow list: if hasGlobalStaffAccess() || (
-        isVerified() && (
+        isPortalAuthenticated() && (
           authEmailLower() in existing().allowedViewerEmails ||
           authEmailLower() in existing().participantEmails
         )
@@ -573,46 +732,46 @@ service cloud.firestore {
     }
 
     match /conversations/{conversationId} {
-      allow get: if isVerified() && isValidId(conversationId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
-      allow list: if hasGlobalStaffAccess() || (isVerified() && (
+      allow get: if isPortalAuthenticated() && isValidId(conversationId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().studentEmail == authEmailLower()
       ));
-      allow create, update: if isVerified() && isValidId(conversationId) && isValidConversation(incoming()) && incoming().id == conversationId && (
+      allow create, update: if isPortalAuthenticated() && isValidId(conversationId) && isValidConversation(incoming()) && incoming().id == conversationId && (
         isAdmin() || isActiveStaff() || ('studentEmail' in incoming() && incoming().studentEmail == authEmailLower())
       );
       allow delete: if isAdmin() && isValidId(conversationId);
     }
 
     match /launchpad_subjects/{subjectId} {
-      allow get: if isVerified() && isValidId(subjectId);
-      allow list: if hasGlobalStaffAccess() || (isVerified() && existing().portalScope == 'verified_portal');
+      allow get: if isPortalAuthenticated() && isValidId(subjectId);
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && existing().portalScope == 'verified_portal');
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(subjectId) && isValidLaunchpadSubject(incoming()) && incoming().id == subjectId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(subjectId);
     }
 
     match /launchpad_chapters/{chapterId} {
-      allow get: if isVerified() && isValidId(chapterId);
-      allow list: if hasGlobalStaffAccess() || (isVerified() && existing().portalScope == 'verified_portal');
+      allow get: if isPortalAuthenticated() && isValidId(chapterId);
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && existing().portalScope == 'verified_portal');
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(chapterId) && isValidLaunchpadChapter(incoming()) && incoming().id == chapterId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(chapterId);
     }
 
     match /launchpad_cert_questions/{questionId} {
-      allow get: if isVerified() && isValidId(questionId);
-      allow list: if hasGlobalStaffAccess() || (isVerified() && existing().portalScope == 'verified_portal');
+      allow get: if isPortalAuthenticated() && isValidId(questionId);
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && existing().portalScope == 'verified_portal');
       allow create, update: if (isAdmin() || isActiveStaff()) && isValidId(questionId) && isValidLaunchpadCertQuestion(incoming()) && incoming().id == questionId;
       allow delete: if (isAdmin() || isActiveStaff()) && isValidId(questionId);
     }
 
     match /launchpad_team_permissions/{permId} {
-      allow get: if isVerified() && isValidId(permId) && (
+      allow get: if isPortalAuthenticated() && isValidId(permId) && (
         hasGlobalStaffAccess() ||
         ('userEmail' in existing() && existing().userEmail == authEmailLower()) ||
         existing().userId == request.auth.uid
       );
       allow list: if hasGlobalStaffAccess() || (
-        isVerified() && (
+        isPortalAuthenticated() && (
           existing().userEmail == authEmailLower() ||
           existing().userId == request.auth.uid
         )
@@ -622,8 +781,8 @@ service cloud.firestore {
     }
 
     match /launchpad_enrollments/{studentId} {
-      allow get: if isVerified() && isValidId(studentId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
-      allow list: if hasGlobalStaffAccess() || (isVerified() && (
+      allow get: if isPortalAuthenticated() && isValidId(studentId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().studentEmail == authEmailLower()
       ));
@@ -632,8 +791,8 @@ service cloud.firestore {
     }
 
     match /launchpad_releases/{releaseId} {
-      allow get: if isVerified() && isValidId(releaseId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
-      allow list: if hasGlobalStaffAccess() || (isVerified() && (
+      allow get: if isPortalAuthenticated() && isValidId(releaseId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().studentEmail == authEmailLower()
       ));
@@ -642,15 +801,15 @@ service cloud.firestore {
     }
 
     match /launchpad_progress/{progressId} {
-      allow get: if isVerified() && isValidId(progressId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
-      allow list: if hasGlobalStaffAccess() || (isVerified() && (
+      allow get: if isPortalAuthenticated() && isValidId(progressId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().studentEmail == authEmailLower()
       ));
-      allow create: if isVerified() && isValidId(progressId) && isValidLaunchpadProgress(incoming()) && incoming().id == progressId && (
+      allow create: if isPortalAuthenticated() && isValidId(progressId) && isValidLaunchpadProgress(incoming()) && incoming().id == progressId && (
         isAdmin() || isActiveStaff() || ('studentEmail' in incoming() && incoming().studentEmail == authEmailLower())
       );
-      allow update: if isVerified() && isValidId(progressId) && isValidLaunchpadProgress(incoming()) && incoming().id == existing().id && (
+      allow update: if isPortalAuthenticated() && isValidId(progressId) && isValidLaunchpadProgress(incoming()) && hasUnchangedOrInitializedDocId(progressId) && (
         isAdmin() ||
         isActiveStaff() ||
         ('studentEmail' in existing() && existing().studentEmail == authEmailLower() &&
@@ -658,7 +817,7 @@ service cloud.firestore {
           incoming().subjectId == existing().subjectId &&
           incoming().weekNumber == existing().weekNumber &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'lectureCompleted', 'readingCompleted', 'exerciseSubmissionJson',
+            'id', 'lectureCompleted', 'readingCompleted', 'exerciseSubmissionJson',
             'exerciseCompleted', 'evaluationStatus', 'updatedAt'
           ]))
       );
@@ -666,28 +825,28 @@ service cloud.firestore {
     }
 
     match /launchpad_certifications/{certId} {
-      allow get: if isVerified() && isValidId(certId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
-      allow list: if hasGlobalStaffAccess() || (isVerified() && (
+      allow get: if isPortalAuthenticated() && isValidId(certId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().studentEmail == authEmailLower()
       ));
-      allow create, update: if isVerified() && isValidId(certId) && isValidLaunchpadCertification(incoming()) && incoming().id == certId && (
+      allow create, update: if isPortalAuthenticated() && isValidId(certId) && isValidLaunchpadCertification(incoming()) && incoming().id == certId && (
         isAdmin() || isActiveStaff() || ('studentEmail' in incoming() && incoming().studentEmail == authEmailLower())
       );
       allow delete: if isAdmin() && isValidId(certId);
     }
 
     match /assignment_evaluations/{evalId} {
-      allow get: if isVerified() && isValidId(evalId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
-      allow list: if hasGlobalStaffAccess() || (isVerified() && (
+      allow get: if isPortalAuthenticated() && isValidId(evalId) && (hasGlobalStaffAccess() || isEmailAuthorizedInDoc(existing()));
+      allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().studentEmail == authEmailLower()
       ));
-      allow create: if isVerified() && isValidId(evalId) && isValidEvaluation(incoming()) && incoming().id == evalId && (
+      allow create: if isPortalAuthenticated() && isValidId(evalId) && isValidEvaluation(incoming()) && incoming().id == evalId && (
         isAdmin() || isActiveStaff() ||
         ('studentEmail' in incoming() && incoming().studentEmail == authEmailLower() && incoming().status == 'Submitted')
       );
-      allow update: if isVerified() && isValidId(evalId) && isValidEvaluation(incoming()) && incoming().id == existing().id && (
+      allow update: if isPortalAuthenticated() && isValidId(evalId) && isValidEvaluation(incoming()) && hasUnchangedOrInitializedDocId(evalId) && (
         isAdmin() ||
         isActiveStaff() ||
         ('studentEmail' in existing() && existing().studentEmail == authEmailLower() &&
@@ -695,26 +854,26 @@ service cloud.firestore {
           incoming().subjectId == existing().subjectId &&
           incoming().status == 'Submitted' &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'submissionJson', 'status', 'submittedAt', 'chapterTitle', 'taskId'
+            'id', 'submissionJson', 'status', 'submittedAt', 'chapterTitle', 'taskId'
           ]))
       );
       allow delete: if isAdmin() && isValidId(evalId);
     }
 
     match /notifications/{notifId} {
-      allow get: if isVerified() && isValidId(notifId) && (isAdmin() || isEmailAuthorizedInDoc(existing()) || existing().recipientId == request.auth.uid);
-      allow list: if isBootstrappedAdmin() || (isVerified() && (
+      allow get: if isPortalAuthenticated() && isValidId(notifId) && (isAdmin() || isEmailAuthorizedInDoc(existing()) || existing().recipientId == request.auth.uid);
+      allow list: if isBootstrappedAdmin() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
         existing().recipientEmail == authEmailLower() ||
         existing().recipientId == request.auth.uid
       ));
-      allow create: if isVerified() && isValidId(notifId) && isValidNotification(incoming()) && incoming().id == notifId && (
+      allow create: if isPortalAuthenticated() && isValidId(notifId) && isValidNotification(incoming()) && incoming().id == notifId && (
         isAdmin() || isActiveStaff() || (incoming().category == 'LAUNCHPAD' && incoming().recipientType == 'staff')
       );
-      allow update: if isVerified() && isValidId(notifId) && isValidNotification(incoming()) && incoming().id == existing().id && (
+      allow update: if isPortalAuthenticated() && isValidId(notifId) && isValidNotification(incoming()) && hasUnchangedOrInitializedDocId(notifId) && (
         isAdmin() || isActiveStaff() ||
         ((isEmailAuthorizedInDoc(existing()) || existing().recipientId == request.auth.uid) &&
-          incoming().diff(existing()).affectedKeys().hasOnly(['isRead']))
+          incoming().diff(existing()).affectedKeys().hasOnly(['id', 'isRead']))
       );
       allow delete: if isAdmin() && isValidId(notifId);
     }

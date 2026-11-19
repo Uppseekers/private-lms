@@ -30,7 +30,8 @@ import {
   KeyRound,
   ShieldAlert,
   Compass,
-  Lock
+  Lock,
+  SlidersHorizontal
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getScopedStudentsForStaff, isUserAdmin, canStaffAccessReports, getStaffLaunchpadPermissions } from '@/lib/staffPermissions';
@@ -75,6 +76,7 @@ const teamNavigation: SidebarItem[] = [
   { name: 'Launchpad', href: '/team/launchpad', icon: Compass, tabKey: 'tab_launchpad' },
   { name: 'Batches & Cohorts', href: '/team/batches', icon: BookOpen, tabKey: 'tab_batches', permissionKey: 'view_past', categoryKey: 'batch' },
   { name: 'Class Scheduler', href: '/team/scheduler', icon: CalendarDays, tabKey: 'tab_scheduler', permissionKey: 'create_class', categoryKey: 'schedule' },
+  { name: 'Capacity Scheduler', href: '/team/capacity-scheduler', icon: SlidersHorizontal, tabKey: 'tab_capacity_scheduler' },
   { name: 'Document Center', href: '/team/vault', icon: FolderLock, tabKey: 'tab_vault', permissionKey: 'view_vault', categoryKey: 'vault' },
   { name: 'Assignment Evaluator', href: '/team/evaluator', icon: CheckSquare, tabKey: 'tab_evaluator', permissionKey: 'assign_tasks', categoryKey: 'tasks' },
   { name: 'Student Database', href: '/team/users', icon: Users, tabKey: 'tab_users', permissionKey: 'view_roster', categoryKey: 'profile' },

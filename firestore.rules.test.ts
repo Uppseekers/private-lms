@@ -22,10 +22,10 @@ export const DIRTY_DOZEN_PAYLOADS: DirtyDozenCase[] = [
   },
   {
     id: 'P2',
-    description: 'Unverified admin email spoof on /students/STU-101',
+    description: 'Malformed empty email spoof on /students/STU-101',
     collection: 'students',
     operation: 'get',
-    auth: { uid: 'spoof-uid', email: 'uppseekers@gmail.com', email_verified: false },
+    auth: { uid: 'spoof-uid', email: '', email_verified: false },
     payload: {},
     expectedResult: 'PERMISSION_DENIED',
   },
@@ -40,17 +40,11 @@ export const DIRTY_DOZEN_PAYLOADS: DirtyDozenCase[] = [
   },
   {
     id: 'P4',
-    description: 'Shadow ghost field on /launchpad_releases',
-    collection: 'launchpad_releases',
-    operation: 'create',
-    auth: { uid: 'admin-uid', email: 'uppseekers@gmail.com', email_verified: true },
-    payload: {
-      id: 'STU-101__comm',
-      studentId: 'STU-101',
-      subjectId: 'comm',
-      isUnlocked: true,
-      shadowBypass: true,
-    },
+    description: 'Non-admin counsellor reading /admin_student_credentials vault',
+    collection: 'admin_student_credentials',
+    operation: 'get',
+    auth: { uid: 'staff-uid-1', email: 'sarah@uppseekers.com', email_verified: true },
+    payload: { id: 'aarav_uppseekers_com' },
     expectedResult: 'PERMISSION_DENIED',
   },
   {
@@ -79,16 +73,15 @@ export const DIRTY_DOZEN_PAYLOADS: DirtyDozenCase[] = [
   },
   {
     id: 'P7',
-    description: 'Student attempting to self-unlock a Launchpad subject',
-    collection: 'launchpad_releases',
-    operation: 'create',
+    description: 'Student attempting to add or delete a university in own shortlist',
+    collection: 'students',
+    operation: 'update',
     auth: { uid: 'stu-uid-1', email: 'aarav@uppseekers.com', email_verified: true },
     payload: {
-      id: 'STU-101__comm',
-      studentId: 'STU-101',
-      studentEmail: 'aarav@uppseekers.com',
-      subjectId: 'comm',
-      isUnlocked: true,
+      id: 'STU-101',
+      name: 'Aarav',
+      email: 'aarav@uppseekers.com',
+      shortlist: [],
     },
     expectedResult: 'PERMISSION_DENIED',
   },
@@ -121,11 +114,11 @@ export const DIRTY_DOZEN_PAYLOADS: DirtyDozenCase[] = [
   },
   {
     id: 'P11',
-    description: 'Student setting own assignment_evaluation status to Approved',
-    collection: 'assignment_evaluations',
-    operation: 'update',
-    auth: { uid: 'stu-uid-1', email: 'aarav@uppseekers.com', email_verified: true },
-    payload: { id: 'STU-101__comm__w1', studentId: 'STU-101', subjectId: 'comm', status: 'Approved' },
+    description: 'Counsellor reading another counsellor Zoho sealed vault',
+    collection: 'staff_zoho_vault',
+    operation: 'get',
+    auth: { uid: 'staff-uid-1', email: 'sarah@uppseekers.com', email_verified: true },
+    payload: { targetKey: 'david_uppseekers_com' },
     expectedResult: 'PERMISSION_DENIED',
   },
   {
@@ -143,6 +136,9 @@ export function verifyDirtyDozenSpec(): void {
   assert.equal(DIRTY_DOZEN_PAYLOADS.length, 12);
   for (const testCase of DIRTY_DOZEN_PAYLOADS) {
     assert.equal(testCase.expectedResult, 'PERMISSION_DENIED');
-    assert.equal('password' in (testCase.collection === 'students' && testCase.id === 'P3' ? testCase.payload : {}), testCase.id === 'P3');
+    assert.equal(
+      'password' in (testCase.collection === 'students' && testCase.id === 'P3' ? testCase.payload : {}),
+      testCase.id === 'P3'
+    );
   }
 }

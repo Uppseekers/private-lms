@@ -1,7 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { DecodedIdToken } from 'firebase-admin/auth';
-import { adminAuth, hasAdminServiceAccount } from '../lib/firebase-admin.ts';
-import firebaseConfig from '../../firebase-applet-config.json' with { type: 'json' };
+import { adminAuth, firebaseWebApiKey } from '../lib/firebase-admin';
 
 export interface AuthRequest extends Request {
   user?: Partial<DecodedIdToken> & {
@@ -13,7 +12,7 @@ export interface AuthRequest extends Request {
 }
 
 async function verifyViaIdentityToolkitRest(idToken: string): Promise<AuthRequest['user'] | null> {
-  const apiKey = firebaseConfig.apiKey;
+  const apiKey = firebaseWebApiKey;
   if (!apiKey) return null;
 
   try {
@@ -68,25 +67,23 @@ export const requireAuth = async (
     return;
   }
 
-  if (hasAdminServiceAccount()) {
-    try {
-      const decodedToken = await adminAuth.verifyIdToken(token);
-      req.user = {
-        ...decodedToken,
-        uid: decodedToken.uid,
-        email: (decodedToken.email || '').toLowerCase(),
-        email_verified: Boolean(decodedToken.email_verified),
-        name: decodedToken.name,
-      };
-      next();
-      return;
-    } catch {
-      res.status(401).json({ error: 'Unauthorized: Invalid or expired Firebase ID token.' });
-      return;
-    }
+  // Primary path: verifyIdToken(token) verifies JWT signatures against Google's public certs
+  // and needs NO IAM or service account, nor is it blocked by browser API key HTTP referrer restrictions.
+  try {
+    const decodedToken = await adminAuth.verifyIdToken(token);
+    req.user = {
+      ...decodedToken,
+      uid: decodedToken.uid,
+      email: (decodedToken.email || '').toLowerCase(),
+      email_verified: Boolean(decodedToken.email_verified),
+      name: decodedToken.name,
+    };
+    next();
+    return;
+  } catch {
+    // Fallback to Identity Toolkit REST lookup if public cert fetch fails in restricted network
   }
 
-  // When FIREBASE_SERVICE_ACCOUNT_JSON is not set, cryptographically validate the Firebase ID token via Identity Toolkit
   const verifiedUser = await verifyViaIdentityToolkitRest(token);
   if (!verifiedUser) {
     res.status(401).json({ error: 'Unauthorized: Invalid or expired Firebase ID token.' });

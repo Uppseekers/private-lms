@@ -6,6 +6,7 @@ import { CheckCircle2, Upload, Plus, ShieldCheck, Clock, FileText, AlertCircle, 
 import { INDIAN_CITIES, WORLD_COUNTRIES } from '@/data/locationAndUniData';
 import { cn } from '@/lib/utils';
 import ChangePasswordModal from '@/components/ChangePasswordModal';
+import StudentAvailabilityEditor from '@/components/StudentAvailabilityEditor';
 
 const ALL_CLASSES = ['Class 9', 'Class 10', 'Class 11', 'Class 12'];
 
@@ -455,6 +456,16 @@ export default function StudentProfile() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Student Counselling Availability Section */}
+      {student && (
+        <Section
+          title="Counselling Availability — Preferred Days & Time Slots"
+          description="Select the days and time windows when you are available for 1-on-1 counselling sessions (choose one time slot for all days, day-wise timings, or date-specific overrides)."
+        >
+          <StudentAvailabilityEditor student={student} canEdit={true} compact={true} />
+        </Section>
+      )}
 
       <Section title="1. Basic Personal & Contact Information" description="Your primary identity and contact channels.">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

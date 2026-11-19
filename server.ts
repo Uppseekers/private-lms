@@ -10,9 +10,9 @@ import { google } from "googleapis";
 import nodemailer from "nodemailer";
 import crypto from "crypto";
 import mammoth from "mammoth";
-import { requireAuth, AuthRequest } from "./src/middleware/auth.ts";
-import { adminAuth, adminDb, hasAdminServiceAccount, firebaseWebApiKey } from "./src/lib/firebase-admin.ts";
-import { db, createPool } from "./src/db/index.ts";
+import { requireAuth, AuthRequest } from "./src/middleware/auth";
+import { adminAuth, adminDb, hasAdminServiceAccount, firebaseWebApiKey } from "./src/lib/firebase-admin";
+import { db, createPool } from "./src/db/index";
 import {
   users,
   studentsData,
@@ -31,13 +31,13 @@ import {
   assignmentEvaluations,
   zohoConnections,
   portalSettings
-} from "./src/db/schema.ts";
+} from "./src/db/schema";
 import { eq, or, asc, desc, sql } from "drizzle-orm";
 import {
   buildDefaultLaunchpadSubjects,
   buildDefaultLaunchpadChapters,
   buildDefaultCertQuestions,
-} from "./src/data/launchpadData.ts";
+} from "./src/data/launchpadData";
 import {
   ensureProductionReady,
   hasSqlEnv,
@@ -47,7 +47,7 @@ import {
   sysKvSet,
   mergeRecordsById,
   isSysKvUid,
-} from "./src/db/productionVault.ts";
+} from "./src/db/productionVault";
 
 interface PasswordResetItem {
   token: string;
@@ -1072,23 +1072,28 @@ async function startServer() {
       if (!allowed) {
         return res.status(403).json({ error: "Forbidden: Only System Admins can provision portal users." });
       }
-      if (!hasAdminServiceAccount()) {
-        return res.json({
-          ok: false,
-          fallbackToClient: true,
-          message: "FIREBASE_SERVICE_ACCOUNT_JSON is not configured on the server; falling back to client provisioner.",
-        });
-      }
-
       const cleanEmail = normEmail(req.body?.email);
       const displayName = String(req.body?.name || "").trim();
       const password = typeof req.body?.password === "string" ? req.body.password.trim() : "";
+      const userType = String(req.body?.userType || "student").trim().toLowerCase();
 
       if (!cleanEmail) {
         return res.status(400).json({ error: "Valid email is required." });
       }
       if (!password || password.length < 6) {
         return res.status(400).json({ error: "Password must be at least 6 characters." });
+      }
+
+      if (userType !== "staff") {
+        await saveUserPasswordMirror(cleanEmail, cleanEmail, password);
+      }
+
+      if (!hasAdminServiceAccount()) {
+        return res.json({
+          ok: false,
+          fallbackToClient: true,
+          message: "FIREBASE_SERVICE_ACCOUNT_JSON is not configured on the server; falling back to client provisioner.",
+        });
       }
 
       try {
@@ -1098,6 +1103,9 @@ async function startServer() {
           password,
           emailVerified: true,
         });
+        if (userType !== "staff") {
+          await saveUserPasswordMirror(existing.uid, cleanEmail, password);
+        }
         return res.json({ ok: true, uid: existing.uid, created: false });
       } catch (lookupErr: any) {
         if (lookupErr?.code !== "auth/user-not-found") {
@@ -1109,6 +1117,9 @@ async function startServer() {
           displayName: displayName || cleanEmail.split("@")[0],
           emailVerified: true,
         });
+        if (userType !== "staff") {
+          await saveUserPasswordMirror(created.uid, cleanEmail, password);
+        }
         return res.json({ ok: true, uid: created.uid, created: true });
       }
     } catch (err: any) {
@@ -1127,11 +1138,16 @@ async function startServer() {
 
       const cleanEmail = normEmail(req.body?.email);
       const cleanNewPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword.trim() : "";
+      const userType = String(req.body?.userType || "").trim().toLowerCase();
       if (!cleanEmail) {
         return res.status(400).json({ error: "Target user email is required." });
       }
       if (!cleanNewPassword || cleanNewPassword.length < 6) {
         return res.status(400).json({ error: "New password must be at least 6 characters." });
+      }
+
+      if (userType !== "staff") {
+        await saveUserPasswordMirror(cleanEmail, cleanEmail, cleanNewPassword);
       }
 
       if (!hasAdminServiceAccount()) {
@@ -1148,6 +1164,9 @@ async function startServer() {
           password: cleanNewPassword,
           emailVerified: true,
         });
+        if (userType !== "staff") {
+          await saveUserPasswordMirror(userRecord.uid, cleanEmail, cleanNewPassword);
+        }
         return res.json({ ok: true, success: true, uid: userRecord.uid, message: "Firebase password updated successfully." });
       } catch (err: any) {
         if (err?.code === "auth/user-not-found") {
@@ -1157,6 +1176,9 @@ async function startServer() {
             displayName: String(req.body?.name || cleanEmail.split("@")[0]).trim(),
             emailVerified: true,
           });
+          if (userType !== "staff") {
+            await saveUserPasswordMirror(created.uid, cleanEmail, cleanNewPassword);
+          }
           return res.json({ ok: true, success: true, uid: created.uid, message: "Firebase Auth account created with the new password." });
         }
         throw err;
@@ -1169,6 +1191,61 @@ async function startServer() {
 
   app.post("/api/firebase-admin/change-password", requireAuth, handleAdminChangeFirebasePassword);
   app.post("/api/admin/change-password", requireAuth, handleAdminChangeFirebasePassword);
+
+  // Admin-only: Read stored student portal passwords (never staff passwords, never accessible to non-admins)
+  app.get("/api/firebase-admin/student-passwords", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const allowed = await isVerifiedFirebaseAdmin(req);
+      if (!allowed) {
+        return res.status(403).json({ error: "Forbidden: Only System Admins can view student portal passwords." });
+      }
+      const passwordsByEmail: Record<string, string> = {};
+      const passwordsByUid: Record<string, string> = {};
+      const staffEmails = new Set<string>(["uppseekers@gmail.com"]);
+
+      const allUsers = await readAllUsersSafe();
+      for (const u of allUsers) {
+        const em = normEmail(u?.email);
+        const roleUpper = String(u?.role || "").toUpperCase();
+        if (roleUpper && roleUpper !== "STUDENT") {
+          if (em) staffEmails.add(em);
+          continue;
+        }
+        const pwd = typeof u?.password === "string" ? u.password.trim() : "";
+        if (!pwd) continue;
+        if (em && !em.endsWith("@uppseekers.local")) {
+          passwordsByEmail[em] = pwd;
+        }
+        if (u?.uid) {
+          passwordsByUid[String(u.uid)] = pwd;
+        }
+      }
+
+      const kvMap = await sysKvGet<Record<string, string>>("user_passwords", {});
+      if (kvMap && typeof kvMap === "object") {
+        for (const [rawKey, rawVal] of Object.entries(kvMap)) {
+          const pwd = typeof rawVal === "string" ? rawVal.trim() : "";
+          if (!pwd) continue;
+          if (rawKey.startsWith("email:")) {
+            const em = normEmail(rawKey.slice("email:".length));
+            if (em && !staffEmails.has(em) && !passwordsByEmail[em]) {
+              passwordsByEmail[em] = pwd;
+            }
+          } else if (rawKey.startsWith("uid:")) {
+            const uid = rawKey.slice("uid:".length).trim();
+            if (uid && !passwordsByUid[uid]) {
+              passwordsByUid[uid] = pwd;
+            }
+          }
+        }
+      }
+
+      return res.json({ ok: true, passwordsByEmail, passwordsByUid });
+    } catch (err: any) {
+      console.error("Error in /api/firebase-admin/student-passwords:", err);
+      return res.status(500).json({ ok: false, error: err?.message || "Failed to load student passwords." });
+    }
+  });
 
   // Admin-only: Migrate legacy Cloud SQL user passwords into Firebase Auth (never returns plaintext passwords)
   // and optionally return sanitized non-password legacy students/staff/batches/events for Firestore merge.
@@ -3871,14 +3948,81 @@ Preserve the author's exact wording wherever present in the document. If a list 
     return { accounts: ZOHO_ACCOUNTS_BASE, meeting: ZOHO_MEETING_BASE };
   };
 
-  const ZOHO_OAUTH_SCOPES = [
+  const DEFAULT_ZOHO_SCOPES = [
+    'AaaServer.profile.Read',
     'ZohoMeeting.manageOrg.READ',
+    'ZohoMeeting.meeting.READ',
     'ZohoMeeting.meeting.CREATE',
     'ZohoMeeting.meeting.UPDATE',
     'ZohoMeeting.meeting.DELETE',
-  ].join(',');
+  ];
+
+  const getZohoOAuthScopes = () => {
+    const rawEnvScopes = cleanEnvSecret(process.env.ZOHO_SCOPES);
+    if (!rawEnvScopes) {
+      return DEFAULT_ZOHO_SCOPES.join(',');
+    }
+    const merged = new Set<string>(
+      rawEnvScopes
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    );
+    // Ensure core profile & meeting creation scopes are always present for non-admin employees
+    merged.add('AaaServer.profile.Read');
+    merged.add('ZohoMeeting.meeting.READ');
+    merged.add('ZohoMeeting.meeting.CREATE');
+    merged.add('ZohoMeeting.meeting.UPDATE');
+    merged.add('ZohoMeeting.meeting.DELETE');
+    return Array.from(merged).join(',');
+  };
 
   const zohoConnectionsMemory = new Map<string, any>();
+  let zohoKvHydrated = false;
+
+  const hydrateZohoConnectionsFromKv = async () => {
+    if (zohoKvHydrated) return;
+    try {
+      const kvMap = await sysKvGet<Record<string, any>>('zoho_connections_vault', {});
+      if (kvMap && typeof kvMap === 'object') {
+        for (const [k, rawVal] of Object.entries(kvMap)) {
+          if (!rawVal || typeof rawVal !== 'object') continue;
+          if (!zohoConnectionsMemory.has(k)) {
+            zohoConnectionsMemory.set(k, {
+              ...rawVal,
+              tokenExpiresAt: rawVal.tokenExpiresAt ? new Date(rawVal.tokenExpiresAt) : new Date(0),
+              connectedAt: rawVal.connectedAt ? new Date(rawVal.connectedAt) : new Date(),
+              updatedAt: rawVal.updatedAt ? new Date(rawVal.updatedAt) : new Date(),
+            });
+          }
+        }
+      }
+      zohoKvHydrated = true;
+    } catch {
+      // Ignore KV hydration errors
+    }
+  };
+
+  const persistZohoConnectionsToKv = async () => {
+    try {
+      const serializedMap: Record<string, any> = {};
+      for (const [k, row] of zohoConnectionsMemory.entries()) {
+        if (!row) continue;
+        serializedMap[k] = {
+          ...row,
+          tokenExpiresAt:
+            row.tokenExpiresAt instanceof Date ? row.tokenExpiresAt.toISOString() : String(row.tokenExpiresAt || ''),
+          connectedAt:
+            row.connectedAt instanceof Date ? row.connectedAt.toISOString() : String(row.connectedAt || ''),
+          updatedAt:
+            row.updatedAt instanceof Date ? row.updatedAt.toISOString() : String(row.updatedAt || ''),
+        };
+      }
+      await sysKvSet('zoho_connections_vault', serializedMap);
+    } catch {
+      // Non-fatal if SQL KV is unavailable
+    }
+  };
 
   const getZohoStateSecret = () => {
     const { clientSecret } = getZohoCreds();
@@ -3893,32 +4037,188 @@ Preserve the author's exact wording wherever present in the document. If a list 
     return cleaned;
   };
 
-  const getZohoRedirectUri = (req: express.Request) => {
-    const envBase = getValidAppUrl();
-    if (envBase) {
-      return `${envBase}/api/zoho/oauth/callback`;
+  const getConfiguredZohoRedirectUriEnv = () => {
+    const raw = cleanEnvSecret(process.env.ZOHO_REDIRECT_URI).replace(/\/+$/, '');
+    if (!raw || raw.includes('MY_APP_URL') || !/^https?:\/\//i.test(raw)) {
+      return '';
     }
-    const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim() || req.protocol || 'https';
-    const host = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim() || req.get('host') || 'localhost:3000';
-    return `${proto}://${host}/api/zoho/oauth/callback`;
+    try {
+      const parsed = new URL(raw);
+      if (!parsed.pathname || parsed.pathname === '/') {
+        return `${parsed.protocol}//${parsed.host}/api/zoho/oauth/callback`;
+      }
+      return `${parsed.protocol}//${parsed.host}${parsed.pathname.replace(/\/+$/, '')}`;
+    } catch {
+      return '';
+    }
   };
 
-  const resolveStaffIdentity = (req: AuthRequest) => {
+  const sanitizeOriginForZoho = (rawOrigin?: string, reqHost?: string): string => {
+    const trimmed = (rawOrigin || '').trim().replace(/\/+$/, '');
+    if (!trimmed) return '';
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return '';
+      const host = parsed.host.toLowerCase();
+      const hostname = parsed.hostname.toLowerCase();
+      if (
+        hostname.endsWith('.run.app') ||
+        hostname.endsWith('.vercel.app') ||
+        hostname === 'localhost' ||
+        hostname === '127.0.0.1' ||
+        (reqHost && host === reqHost.toLowerCase())
+      ) {
+        return `${parsed.protocol}//${parsed.host}`;
+      }
+    } catch {
+      return '';
+    }
+    return '';
+  };
+
+  const getZohoRedirectUriInfo = (req: express.Request): { redirectUri: string; source: 'ZOHO_REDIRECT_URI' | 'APP_URL' | 'VERCEL_URL' | 'CLIENT_ORIGIN' | 'HOST_FALLBACK' } => {
+    // 1. Explicit ZOHO_REDIRECT_URI environment variable always wins
+    const explicitRedirectEnv = getConfiguredZohoRedirectUriEnv();
+    if (explicitRedirectEnv) {
+      return { redirectUri: explicitRedirectEnv, source: 'ZOHO_REDIRECT_URI' };
+    }
+
+    const reqHost = (req.headers['x-forwarded-host'] as string)?.split(',')[0]?.trim() || req.get('host') || '';
+    const rawClientOrigin =
+      (typeof req.query?.clientOrigin === 'string' ? req.query.clientOrigin : '') ||
+      (typeof req.headers['x-client-origin'] === 'string' ? req.headers['x-client-origin'] : '') ||
+      (typeof req.headers.origin === 'string' ? req.headers.origin : '');
+    const safeClientOrigin = sanitizeOriginForZoho(rawClientOrigin, reqHost);
+
+    // 2. Configured APP_URL environment variable (standard AI Studio & Cloud Run container URL)
+    const envBase = getValidAppUrl();
+    if (envBase) {
+      // Guard only against the case where a user opened the Shared/Published Cloud Run URL (ais-pre-*)
+      // or a Vercel custom domain while APP_URL was accidentally hardcoded to a dev-only origin (ais-dev-*).
+      if (safeClientOrigin) {
+        try {
+          const envHost = new URL(envBase).hostname.toLowerCase();
+          const clientHost = new URL(safeClientOrigin).hostname.toLowerCase();
+          if (envHost.startsWith('ais-dev-') && (clientHost.startsWith('ais-pre-') || clientHost.endsWith('.vercel.app'))) {
+            return { redirectUri: `${safeClientOrigin}/api/zoho/oauth/callback`, source: 'CLIENT_ORIGIN' };
+          }
+        } catch {
+          // Use APP_URL below
+        }
+      }
+      return { redirectUri: `${envBase}/api/zoho/oauth/callback`, source: 'APP_URL' };
+    }
+
+    // 3. Vercel runtime environment variables if deployed on Vercel without APP_URL
+    const vercelProdHost = cleanEnvSecret(process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL).replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    if (vercelProdHost && !safeClientOrigin) {
+      return { redirectUri: `https://${vercelProdHost}/api/zoho/oauth/callback`, source: 'VERCEL_URL' };
+    }
+
+    // 4. Verified client origin or request host fallback
+    if (safeClientOrigin) {
+      return { redirectUri: `${safeClientOrigin}/api/zoho/oauth/callback`, source: 'CLIENT_ORIGIN' };
+    }
+
+    const proto = (req.headers['x-forwarded-proto'] as string)?.split(',')[0]?.trim() || req.protocol || 'https';
+    const host = reqHost || 'localhost:3000';
+    return { redirectUri: `${proto}://${host}/api/zoho/oauth/callback`, source: 'HOST_FALLBACK' };
+  };
+
+  const getZohoRedirectUri = (req: express.Request) => getZohoRedirectUriInfo(req).redirectUri;
+
+  const getZohoVaultKey = (): Buffer => {
+    return crypto.createHash('sha256').update(getZohoStateSecret()).digest();
+  };
+
+  const sealZohoVault = (record: Record<string, any>): string => {
+    try {
+      const iv = crypto.randomBytes(12);
+      const cipher = crypto.createCipheriv('aes-256-gcm', getZohoVaultKey(), iv);
+      const serialized = JSON.stringify({
+        staffKey: record.staffKey,
+        staffUid: record.staffUid || record.staffKey,
+        staffEmail: record.staffEmail || '',
+        staffName: record.staffName || '',
+        zohoEmail: record.zohoEmail || '',
+        zohoDisplayName: record.zohoDisplayName || '',
+        zsoid: String(record.zsoid || ''),
+        zuid: String(record.zuid || ''),
+        accessToken: record.accessToken || '',
+        refreshToken: record.refreshToken || '',
+        tokenExpiresAt:
+          record.tokenExpiresAt instanceof Date
+            ? record.tokenExpiresAt.toISOString()
+            : String(record.tokenExpiresAt || ''),
+        accountsServer: record.accountsServer || ZOHO_ACCOUNTS_BASE,
+        meetingBase: record.meetingBase || ZOHO_MEETING_BASE,
+        connectedAt:
+          record.connectedAt instanceof Date
+            ? record.connectedAt.toISOString()
+            : String(record.connectedAt || new Date().toISOString()),
+        updatedAt: new Date().toISOString(),
+      });
+      const encrypted = Buffer.concat([cipher.update(serialized, 'utf8'), cipher.final()]);
+      const tag = cipher.getAuthTag();
+      return `${iv.toString('base64url')}.${tag.toString('base64url')}.${encrypted.toString('base64url')}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const unsealZohoVault = (sealed?: string | null): Record<string, any> | null => {
+    if (!sealed || typeof sealed !== 'string') return null;
+    const parts = sealed.trim().split('.');
+    if (parts.length !== 3) return null;
+    try {
+      const iv = Buffer.from(parts[0], 'base64url');
+      const tag = Buffer.from(parts[1], 'base64url');
+      const ciphertext = Buffer.from(parts[2], 'base64url');
+      const decipher = crypto.createDecipheriv('aes-256-gcm', getZohoVaultKey(), iv);
+      decipher.setAuthTag(tag);
+      const jsonStr = Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
+      const parsed = JSON.parse(jsonStr);
+      if (!parsed?.staffKey || !parsed?.refreshToken || !parsed?.zsoid) return null;
+      return {
+        ...parsed,
+        tokenExpiresAt: parsed.tokenExpiresAt ? new Date(parsed.tokenExpiresAt) : new Date(0),
+        connectedAt: parsed.connectedAt ? new Date(parsed.connectedAt) : new Date(),
+        updatedAt: parsed.updatedAt ? new Date(parsed.updatedAt) : new Date(),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const resolveStaffIdentity = async (req: AuthRequest) => {
     const rawEmail = (req.user?.email || '').trim().toLowerCase();
     const rawUid = (req.user?.uid || '').trim();
     const headerEmail = (typeof req.headers['x-staff-email'] === 'string' ? req.headers['x-staff-email'] : '').trim().toLowerCase();
     const headerName = (typeof req.headers['x-staff-name'] === 'string' ? req.headers['x-staff-name'] : '').trim();
 
-    const effectiveEmail = rawEmail && rawEmail !== 'guest@app.com' ? rawEmail : headerEmail;
-    const effectiveUid = rawUid && rawUid !== 'guest' ? rawUid : '';
-    const staffKey = effectiveEmail || effectiveUid;
+    let effectiveEmail = rawEmail && rawEmail !== 'guest@app.com' ? rawEmail : headerEmail;
+    let effectiveUid = rawUid && rawUid !== 'guest' ? rawUid : '';
+    let effectiveName = req.user?.name || headerName || effectiveEmail;
 
+    // Allow verified System Admins to target a specific team member when using "Test as" / Connect For in Settings
+    if (headerEmail && rawEmail && headerEmail !== rawEmail) {
+      const adminVerified = await isVerifiedFirebaseAdmin(req);
+      if (adminVerified) {
+        effectiveEmail = headerEmail;
+        effectiveUid = headerEmail;
+        effectiveName = headerName || headerEmail;
+      }
+    } else if (headerName && (!req.user?.name || effectiveEmail === headerEmail)) {
+      effectiveName = headerName;
+    }
+
+    const staffKey = effectiveEmail || effectiveUid;
     if (!staffKey) return null;
     return {
       staffKey,
       staffUid: effectiveUid || staffKey,
       staffEmail: effectiveEmail || '',
-      staffName: req.user?.name || headerName || effectiveEmail || staffKey,
+      staffName: effectiveName || staffKey,
     };
   };
 
@@ -3948,8 +4248,91 @@ Preserve the author's exact wording wherever present in the document. If a list 
     }
   };
 
-  const getZohoConnectionByKey = async (staffKey: string) => {
+  const findSharedOrgZsoid = async (preferredMeetingBase?: string, stateSharedZsoid?: string): Promise<string> => {
+    const envOrgId = cleanEnvSecret(process.env.ZOHO_ORG_ID);
+    if (envOrgId) return envOrgId;
+    if (stateSharedZsoid && String(stateSharedZsoid).trim()) {
+      return String(stateSharedZsoid).trim();
+    }
+
+    await hydrateZohoConnectionsFromKv();
+
+    // Check in-memory / KV hydrated connections (preferring Admin's org or matching DC)
+    const adminCandidate = zohoConnectionsMemory.get('uppseekers@gmail.com');
+    if (adminCandidate?.zsoid && (!preferredMeetingBase || !adminCandidate.meetingBase || adminCandidate.meetingBase === preferredMeetingBase)) {
+      return String(adminCandidate.zsoid);
+    }
+    for (const row of zohoConnectionsMemory.values()) {
+      if (row?.zsoid && (!preferredMeetingBase || !row.meetingBase || row.meetingBase === preferredMeetingBase)) {
+        return String(row.zsoid);
+      }
+    }
+
+    if (hasAdminServiceAccount()) {
+      try {
+        const snap = await adminDb.collection('zoho_connections').limit(10).get();
+        for (const d of snap.docs) {
+          const data = d.data();
+          if (data?.zsoid && (!preferredMeetingBase || !data.meetingBase || data.meetingBase === preferredMeetingBase)) {
+            return String(data.zsoid);
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    const dbRows = await safeDbQuery(
+      () => db.select().from(zohoConnections).orderBy(desc(zohoConnections.connectedAt)),
+      [] as any[]
+    );
+    for (const row of dbRows) {
+      if (row?.zsoid && (!preferredMeetingBase || !row.meetingBase || row.meetingBase === preferredMeetingBase)) {
+        return String(row.zsoid);
+      }
+    }
+
+    return '';
+  };
+
+  const fetchZohoOAuthUserInfo = async (accountsBase: string, accessToken: string): Promise<{
+    zuid: string;
+    email: string;
+    displayName: string;
+  } | null> => {
+    try {
+      const infoRes = await fetch(`${accountsBase}/oauth/user/info`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Zoho-oauthtoken ${accessToken}`,
+        },
+      });
+      if (!infoRes.ok) return null;
+      const infoJson: any = await infoRes.json().catch(() => null);
+      if (!infoJson || typeof infoJson !== 'object') return null;
+      const zuid = String(infoJson.ZUID || infoJson.zuid || '').trim();
+      const email = String(infoJson.Email || infoJson.email || '').trim().toLowerCase();
+      const fullName = [infoJson.First_Name, infoJson.Last_Name].filter(Boolean).join(' ').trim();
+      const displayName = String(infoJson.Display_Name || fullName || email || '').trim();
+      if (!zuid && !email) return null;
+      return { zuid, email, displayName };
+    } catch {
+      return null;
+    }
+  };
+
+  const getZohoConnectionByKey = async (staffKey: string, req?: express.Request) => {
+    await hydrateZohoConnectionsFromKv();
     const safeKey = normEmailKey(staffKey);
+
+    if (req) {
+      const headerSealed = typeof req.headers['x-zoho-sealed-vault'] === 'string' ? req.headers['x-zoho-sealed-vault'] : '';
+      const unsealed = unsealZohoVault(headerSealed);
+      if (unsealed && unsealed.staffKey === staffKey) {
+        zohoConnectionsMemory.set(staffKey, unsealed);
+      }
+    }
+
     if (hasAdminServiceAccount()) {
       try {
         const snap = await adminDb.collection('zoho_connections').doc(safeKey).get();
@@ -3971,7 +4354,11 @@ Preserve the author's exact wording wherever present in the document. If a list 
       zohoConnectionsMemory.set(staffKey, dbRow);
       return dbRow;
     }
-    return zohoConnectionsMemory.get(staffKey) || null;
+
+    const memRow = zohoConnectionsMemory.get(staffKey);
+    if (memRow) return memRow;
+
+    return null;
   };
 
   const upsertZohoConnectionRecord = async (record: {
@@ -3989,11 +4376,13 @@ Preserve the author's exact wording wherever present in the document. If a list 
     accountsServer?: string;
     meetingBase?: string;
   }) => {
+    await hydrateZohoConnectionsFromKv();
     const now = new Date();
     const accountsServer = record.accountsServer || ZOHO_ACCOUNTS_BASE;
     const meetingBase = record.meetingBase || ZOHO_MEETING_BASE;
     const memoryRow = { ...record, accountsServer, meetingBase, connectedAt: now, updatedAt: now };
     zohoConnectionsMemory.set(record.staffKey, memoryRow);
+    await persistZohoConnectionsToKv();
 
     if (hasAdminServiceAccount()) {
       try {
@@ -4045,7 +4434,9 @@ Preserve the author's exact wording wherever present in the document. If a list 
   };
 
   const deleteZohoConnectionByKey = async (staffKey: string) => {
+    await hydrateZohoConnectionsFromKv();
     zohoConnectionsMemory.delete(staffKey);
+    await persistZohoConnectionsToKv();
     if (hasAdminServiceAccount()) {
       try {
         await adminDb.collection('zoho_connections').doc(normEmailKey(staffKey)).delete();
@@ -4135,7 +4526,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
   };
 
   const renderZohoPopupHtml = (payload: Record<string, any>, isSuccess: boolean, headline: string, detail: string) => {
-    const safeJson = JSON.stringify(payload).replace(/</g, '\\u003c');
+    const safeJson = JSON.stringify({ ...payload, _ts: Date.now() }).replace(/</g, '\\u003c');
     const safeHeadline = headline.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const safeDetail = detail.replace(/</g, '&lt;').replace(/>/g, '&gt;');
     return `<!DOCTYPE html>
@@ -4145,10 +4536,10 @@ Preserve the author's exact wording wherever present in the document. If a list 
   <title>Zoho Meeting Connection</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px 32px; max-width: 420px; text-align: center; box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08); }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 16px; padding: 28px 32px; max-width: 440px; text-align: center; box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.08); }
     .badge { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; margin-bottom: 12px; background: ${isSuccess ? '#dcfce7' : '#fee2e2'}; color: ${isSuccess ? '#166534' : '#991b1b'}; }
     h1 { font-size: 18px; margin: 0 0 8px; }
-    p { font-size: 13px; color: #475569; margin: 0 0 16px; line-height: 1.5; }
+    p { font-size: 13px; color: #475569; margin: 0 0 16px; line-height: 1.5; word-break: break-word; }
     button { background: #0f172a; color: #fff; border: 0; border-radius: 8px; padding: 9px 18px; font-size: 12px; font-weight: 600; cursor: pointer; }
   </style>
 </head>
@@ -4167,7 +4558,19 @@ Preserve the author's exact wording wherever present in the document. If a list 
           window.opener.postMessage(data, '*');
         }
       } catch (e) {}
-      ${isSuccess ? 'setTimeout(function() { window.close(); }, 600);' : ''}
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          var bc = new BroadcastChannel('uppseekers_zoho_oauth');
+          bc.postMessage(data);
+          setTimeout(function() { try { bc.close(); } catch (e) {} }, 400);
+        }
+      } catch (e) {}
+      try {
+        if (window.localStorage) {
+          window.localStorage.setItem('uppseekers_zoho_oauth_event', JSON.stringify(data));
+        }
+      } catch (e) {}
+      ${isSuccess ? 'setTimeout(function() { window.close(); }, 650);' : ''}
     })();
   </script>
 </body>
@@ -4179,15 +4582,23 @@ Preserve the author's exact wording wherever present in the document. If a list 
     try {
       const { clientId, clientSecret } = getZohoCreds();
       const configured = Boolean(clientId && clientSecret);
-      const redirectUri = getZohoRedirectUri(req);
-      const staff = resolveStaffIdentity(req);
+      const { redirectUri, source: redirectUriSource } = getZohoRedirectUriInfo(req);
+      const staff = await resolveStaffIdentity(req);
       if (!staff) {
-        return res.json({ configured, connected: false, redirectUri });
+        return res.json({ configured, connected: false, redirectUri, redirectUriSource });
       }
 
-      const conn = await getZohoConnectionByKey(staff.staffKey);
+      const conn = await getZohoConnectionByKey(staff.staffKey, req);
+      const sharedOrgZsoid = await findSharedOrgZsoid();
       if (!conn) {
-        return res.json({ configured, connected: false, staffKey: staff.staffKey, redirectUri });
+        return res.json({
+          configured,
+          connected: false,
+          staffKey: staff.staffKey,
+          redirectUri,
+          redirectUriSource,
+          sharedOrgZsoid: sharedOrgZsoid || undefined,
+        });
       }
 
       res.json({
@@ -4197,8 +4608,12 @@ Preserve the author's exact wording wherever present in the document. If a list 
         zohoEmail: conn.zohoEmail || '',
         zohoDisplayName: conn.zohoDisplayName || '',
         zsoid: conn.zsoid,
+        zuid: conn.zuid,
         connectedAt: conn.connectedAt,
         redirectUri,
+        redirectUriSource,
+        sharedOrgZsoid: conn.zsoid || sharedOrgZsoid || undefined,
+        sealedVault: sealZohoVault(conn),
       });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to check Zoho status' });
@@ -4209,20 +4624,25 @@ Preserve the author's exact wording wherever present in the document. If a list 
   app.get("/api/zoho/auth/url", requireAuth, async (req: AuthRequest, res) => {
     try {
       const { clientId, clientSecret } = getZohoCreds();
-      const redirectUri = getZohoRedirectUri(req);
+      const { redirectUri, source: redirectUriSource } = getZohoRedirectUriInfo(req);
 
       if (!clientId || !clientSecret) {
         return res.status(400).json({
           configured: false,
           redirectUri,
+          redirectUriSource,
           error: 'Zoho OAuth credentials (ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET) are not configured in server environment variables.',
         });
       }
 
-      const staff = resolveStaffIdentity(req);
+      const staff = await resolveStaffIdentity(req);
       if (!staff) {
         return res.status(401).json({ error: 'Unable to identify signed-in counselor. Please sign in again.' });
       }
+
+      const clientSharedZsoid =
+        typeof req.query.sharedOrgZsoid === 'string' ? req.query.sharedOrgZsoid.trim() : '';
+      const sharedOrgZsoid = await findSharedOrgZsoid(undefined, clientSharedZsoid);
 
       const state = signZohoState({
         staffKey: staff.staffKey,
@@ -4230,13 +4650,14 @@ Preserve the author's exact wording wherever present in the document. If a list 
         staffEmail: staff.staffEmail,
         staffName: staff.staffName,
         redirectUri,
+        sharedOrgZsoid: sharedOrgZsoid || '',
         ts: Date.now(),
       });
 
       const authParams = new URLSearchParams({
         response_type: 'code',
         client_id: clientId,
-        scope: ZOHO_OAUTH_SCOPES,
+        scope: getZohoOAuthScopes(),
         redirect_uri: redirectUri,
         access_type: 'offline',
         prompt: 'consent',
@@ -4244,7 +4665,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
       });
 
       const url = `${ZOHO_ACCOUNTS_BASE}/oauth/v2/auth?${authParams.toString()}`;
-      res.json({ url, redirectUri });
+      res.json({ url, redirectUri, redirectUriSource });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to build Zoho OAuth URL' });
     }
@@ -4334,13 +4755,17 @@ Preserve the author's exact wording wherever present in the document. If a list 
         if (tokenJson?.error === 'invalid_client') {
           if (secretLooksLikeClientId) {
             detailMsg = `invalid_client: ZOHO_CLIENT_SECRET currently contains a Client ID (${clientIdPreview}) instead of the Client Secret. Copy the value from the "Client Secret" tab in Zoho API Console.`;
+          } else if (activeDc.accounts !== ZOHO_ACCOUNTS_BASE) {
+            detailMsg = `Regional Data Center mismatch: this employee's Zoho account is hosted at ${activeDc.accounts} (location=${queryLocation || 'regional'}), while your Zoho OAuth Client is configured for ${ZOHO_ACCOUNTS_BASE}. Open Zoho API Console -> your Server-based Application -> Settings -> enable "Use the same OAuth credentials for all data centers" (Multi-DC), or sign in with an account in your shared ${ZOHO_ACCOUNTS_BASE} organization.`;
           } else {
-            detailMsg = `invalid_client at ${activeDc.accounts} (location=${queryLocation || 'default'}, Client ID=${clientIdPreview}, Secret length=${clientSecretLength} chars). Verify ZOHO_CLIENT_SECRET matches the Client Secret tab for this Client ID in Zoho API Console (Server-based Applications), and enable Multi-DC in Zoho API Console Settings if your account is in another region.`;
+            detailMsg = `invalid_client at ${activeDc.accounts} (Client ID=${clientIdPreview}, Secret length=${clientSecretLength} chars). Verify ZOHO_CLIENT_SECRET matches the Client Secret tab in Zoho API Console.`;
           }
+        } else if (String(tokenJson?.error || '').toLowerCase().includes('redirect')) {
+          detailMsg = `Redirect URI mismatch (${rawErr}). Add this exact Authorized Redirect URI in Zoho API Console: ${redirectUri}`;
         }
         return res.status(400).send(
           renderZohoPopupHtml(
-            { type: 'ZOHO_OAUTH_ERROR', error: detailMsg },
+            { type: 'ZOHO_OAUTH_ERROR', error: detailMsg, redirectUri },
             false,
             'Token Exchange Failed',
             detailMsg
@@ -4348,24 +4773,50 @@ Preserve the author's exact wording wherever present in the document. If a list 
         );
       }
 
-      // Fetch counselor's Zoho Meeting profile (zsoid, zuid, primaryEmail) from matching regional Meeting domain
-      const userRes = await fetch(`${activeDc.meeting}/api/v2/user.json`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Zoho-oauthtoken ${tokenJson.access_token}`,
-        },
-      });
-      const userJson: any = await userRes.json().catch(() => ({}));
-      const userDetails = userJson?.userDetails || userJson;
+      // Fetch both Zoho Meeting org user details (/api/v2/user.json) AND universal OAuth profile (/oauth/user/info).
+      // Non-admin employees/presenters in Zoho Meeting can receive HTTP 403 ("Invalid Org Admin") or lack zsoid
+      // on /api/v2/user.json even when their OAuth grant is valid — /oauth/user/info + shared org zsoid handles them cleanly.
+      const [meetingUserOutcome, oauthUserInfo] = await Promise.all([
+        fetch(`${activeDc.meeting}/api/v2/user.json`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Zoho-oauthtoken ${tokenJson.access_token}`,
+          },
+        })
+          .then(async (r) => ({ ok: r.ok, status: r.status, json: await r.json().catch(() => ({})) }))
+          .catch(() => ({ ok: false, status: 0, json: {} as any })),
+        fetchZohoOAuthUserInfo(activeDc.accounts, tokenJson.access_token),
+      ]);
 
-      if (!userRes.ok || !userDetails?.zsoid || !userDetails?.zuid) {
-        const msg = userJson?.message || userJson?.error?.message || `Could not retrieve Zoho Meeting organization (zsoid) from ${activeDc.meeting} for this Zoho account.`;
+      const userJson = meetingUserOutcome.json || {};
+      const userDetails = userJson?.userDetails || userJson || {};
+
+      const resolvedZuid = String(userDetails?.zuid || oauthUserInfo?.zuid || '').trim();
+      const resolvedZohoEmail = String(
+        userDetails?.primaryEmail || userDetails?.email || oauthUserInfo?.email || ''
+      ).trim();
+      const resolvedDisplayName = String(
+        userDetails?.displayName || userDetails?.firstName || oauthUserInfo?.displayName || resolvedZohoEmail
+      ).trim();
+
+      let resolvedZsoid = String(userDetails?.zsoid || '').trim();
+      if (!resolvedZsoid) {
+        resolvedZsoid = await findSharedOrgZsoid(activeDc.meeting, verifiedState.sharedOrgZsoid);
+      }
+
+      if (!resolvedZsoid || !resolvedZuid) {
+        const apiMsg =
+          userJson?.message ||
+          userJson?.error?.message ||
+          (!resolvedZsoid
+            ? `Your Zoho account (${resolvedZohoEmail || 'non-admin member'}) authorized successfully, but Zoho did not return an Organization ID (zsoid) from ${activeDc.meeting}. Make sure this email is invited to your Zoho Meeting organization (Manage Organization -> Users) and that the Zoho Organization Admin has connected their account once in Admin Settings (or set ZOHO_ORG_ID).`
+            : `Could not retrieve Zoho User ID (ZUID) from ${activeDc.accounts}.`);
         return res.status(400).send(
           renderZohoPopupHtml(
-            { type: 'ZOHO_OAUTH_ERROR', error: msg },
+            { type: 'ZOHO_OAUTH_ERROR', error: apiMsg },
             false,
-            'Zoho Meeting Account Lookup Failed',
-            msg
+            'Zoho Meeting Organization Lookup',
+            apiMsg
           )
         );
       }
@@ -4373,7 +4824,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
       const existing = await getZohoConnectionByKey(verifiedState.staffKey);
       const refreshToken = tokenJson.refresh_token || existing?.refreshToken || '';
       if (!refreshToken) {
-        const msg = 'Zoho did not issue a refresh token. Please revoke existing access in Zoho Accounts or retry with consent.';
+        const msg = 'Zoho did not issue a refresh token. Please retry and click Accept on the Zoho consent prompt.';
         return res.status(400).send(
           renderZohoPopupHtml(
             { type: 'ZOHO_OAUTH_ERROR', error: msg },
@@ -4386,36 +4837,45 @@ Preserve the author's exact wording wherever present in the document. If a list 
 
       const expiresInSec = Number(tokenJson.expires_in) || 3600;
       const tokenExpiresAt = new Date(Date.now() + expiresInSec * 1000);
-      const zohoEmail = userDetails.primaryEmail || userDetails.email || '';
-      const zohoDisplayName = userDetails.displayName || userDetails.firstName || zohoEmail;
 
-      await upsertZohoConnectionRecord({
+      const connectionPayload = {
         staffKey: verifiedState.staffKey,
         staffUid: verifiedState.staffUid || verifiedState.staffKey,
         staffEmail: verifiedState.staffEmail || '',
         staffName: verifiedState.staffName || '',
-        zohoEmail,
-        zohoDisplayName,
-        zsoid: String(userDetails.zsoid),
-        zuid: String(userDetails.zuid),
+        zohoEmail: resolvedZohoEmail,
+        zohoDisplayName: resolvedDisplayName,
+        zsoid: resolvedZsoid,
+        zuid: resolvedZuid,
         accessToken: tokenJson.access_token,
         refreshToken,
         tokenExpiresAt,
         accountsServer: activeDc.accounts,
         meetingBase: activeDc.meeting,
-      });
+      };
+      await upsertZohoConnectionRecord(connectionPayload);
+      const sealedVault = sealZohoVault(connectionPayload);
 
       res.send(
         renderZohoPopupHtml(
           {
             type: 'ZOHO_OAUTH_SUCCESS',
             staffKey: verifiedState.staffKey,
-            zohoEmail,
-            zohoDisplayName,
+            staffEmail: verifiedState.staffEmail || '',
+            staffName: verifiedState.staffName || '',
+            zohoEmail: resolvedZohoEmail,
+            zohoDisplayName: resolvedDisplayName,
+            zsoid: resolvedZsoid,
+            zuid: resolvedZuid,
+            accountsServer: activeDc.accounts,
+            meetingBase: activeDc.meeting,
+            connectedAt: new Date().toISOString(),
+            tokenExpiresAt: tokenExpiresAt.toISOString(),
+            sealedVault,
           },
           true,
           'Zoho Meeting Connected',
-          `Signed in as ${zohoEmail || zohoDisplayName}. Returning to your scheduler...`
+          `Signed in as ${resolvedZohoEmail || resolvedDisplayName}. Returning to Uppseekers...`
         )
       );
     } catch (err: any) {
@@ -4431,7 +4891,8 @@ Preserve the author's exact wording wherever present in the document. If a list 
     }
   });
 
-  const isAdminCaller = async (staff: { staffKey: string; staffUid: string; staffEmail: string }) => {
+  const isAdminCaller = async (staff: { staffKey: string; staffUid: string; staffEmail: string }, req?: AuthRequest) => {
+    if (req && (await isVerifiedFirebaseAdmin(req))) return true;
     if (staff.staffEmail === 'uppseekers@gmail.com') return true;
     if (hasAdminServiceAccount()) {
       try {
@@ -4461,7 +4922,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
   // 4. Disconnect current counselor's (or admin-selected counselor's) Zoho Meeting account
   app.delete("/api/zoho/connection", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const staff = resolveStaffIdentity(req);
+      const staff = await resolveStaffIdentity(req);
       if (!staff) {
         return res.status(401).json({ error: 'Unable to identify counselor.' });
       }
@@ -4471,7 +4932,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
 
       let targetKey = staff.staffKey;
       if (requestedKey && requestedKey !== staff.staffKey) {
-        const allowed = await isAdminCaller(staff);
+        const allowed = await isAdminCaller(staff, req);
         if (!allowed) {
           return res.status(403).json({ error: 'Only administrators can disconnect another team member.' });
         }
@@ -4488,12 +4949,14 @@ Preserve the author's exact wording wherever present in the document. If a list 
   // 4b. Org-wide Zoho readiness & counselor connections diagnostics (tokens never exposed)
   app.get("/api/zoho/connections", requireAuth, async (req: AuthRequest, res) => {
     try {
+      await hydrateZohoConnectionsFromKv();
       const creds = getZohoCreds();
       const hasClientId = Boolean(creds.clientId);
       const hasClientSecret = Boolean(creds.clientSecret);
-      const hasAppUrl = Boolean(getValidAppUrl());
+      const hasAppUrl = Boolean(getValidAppUrl() || getConfiguredZohoRedirectUriEnv());
       const configured = hasClientId && hasClientSecret;
-      const redirectUri = getZohoRedirectUri(req);
+      const { redirectUri, source: redirectUriSource } = getZohoRedirectUriInfo(req);
+      const sharedOrgZsoid = await findSharedOrgZsoid();
 
       const safeCredDiagnostics = {
         clientIdPreview: creds.clientIdPreview,
@@ -4503,7 +4966,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
         rawHadWhitespaceOrQuotes: creds.rawHadWhitespaceOrQuotes,
       };
 
-      const staff = resolveStaffIdentity(req);
+      const staff = await resolveStaffIdentity(req);
       if (!staff) {
         return res.json({
           configured,
@@ -4511,12 +4974,15 @@ Preserve the author's exact wording wherever present in the document. If a list 
           hasClientSecret,
           hasAppUrl,
           redirectUri,
+          redirectUriSource,
+          sharedOrgZsoid: sharedOrgZsoid || undefined,
           ...safeCredDiagnostics,
           connections: [],
         });
       }
 
-      const admin = await isAdminCaller(staff);
+      const admin = await isAdminCaller(staff, req);
+      await getZohoConnectionByKey(staff.staffKey, req);
       const mergedMap = new Map<string, any>();
 
       if (hasAdminServiceAccount()) {
@@ -4566,6 +5032,8 @@ Preserve the author's exact wording wherever present in the document. If a list 
         hasClientSecret,
         hasAppUrl,
         redirectUri,
+        redirectUriSource,
+        sharedOrgZsoid: sharedOrgZsoid || visibleRows[0]?.zsoid || undefined,
         ...safeCredDiagnostics,
         isAdminView: admin,
         connections: visibleRows,
@@ -4575,34 +5043,46 @@ Preserve the author's exact wording wherever present in the document. If a list 
     }
   });
 
-  // 4c. Live handshake test against Zoho Meeting API v2 (/api/v2/user.json)
+  // 4c. Live handshake test against Zoho Meeting API v2 (/api/v2/user.json + non-admin /oauth/user/info fallback)
   app.post("/api/zoho/test", requireAuth, async (req: AuthRequest, res) => {
     const startedAt = Date.now();
     try {
-      const staff = resolveStaffIdentity(req);
+      const staff = await resolveStaffIdentity(req);
       if (!staff) {
         return res.status(401).json({ ok: false, error: 'Unable to identify signed-in counselor.' });
       }
 
       const requestedKey = typeof req.body?.staffKey === 'string' ? req.body.staffKey.trim().toLowerCase() : '';
+      const targetSealedFromBody = typeof req.body?.sealedVault === 'string' ? req.body.sealedVault.trim() : '';
       let targetKey = staff.staffKey;
       if (requestedKey && requestedKey !== staff.staffKey) {
-        const allowed = await isAdminCaller(staff);
+        const allowed = await isAdminCaller(staff, req);
         if (!allowed) {
           return res.status(403).json({ ok: false, error: 'Only administrators can test another counselor connection.' });
         }
         targetKey = requestedKey;
       }
 
-      const conn = await getZohoConnectionByKey(targetKey);
+      if (targetSealedFromBody) {
+        const unsealedTarget = unsealZohoVault(targetSealedFromBody);
+        if (unsealedTarget && unsealedTarget.staffKey === targetKey) {
+          zohoConnectionsMemory.set(targetKey, unsealedTarget);
+        }
+      }
+
+      // Hydrate own sealed vault into memory if provided
+      await getZohoConnectionByKey(staff.staffKey, req);
+
+      const conn = await getZohoConnectionByKey(targetKey, req);
       if (!conn) {
         return res.status(400).json({
           ok: false,
-          error: 'No Zoho account connected for this user yet. Click Connect My Zoho Account first.',
+          error: 'No Zoho account connected for this user yet. Click Connect Zoho Account first.',
         });
       }
 
       const meetingBase = conn.meetingBase || ZOHO_MEETING_BASE;
+      const accountsServer = conn.accountsServer || ZOHO_ACCOUNTS_BASE;
       let accessToken = await refreshZohoAccessToken(conn, false);
       let userRes = await fetch(`${meetingBase}/api/v2/user.json`, {
         method: 'GET',
@@ -4619,13 +5099,31 @@ Preserve the author's exact wording wherever present in the document. If a list 
 
       const userJson: any = await userRes.json().catch(() => ({}));
       const details = userJson?.userDetails || userJson;
+
       if (!userRes.ok || !details?.zsoid) {
+        // Non-admin Zoho presenters may receive 403 on /api/v2/user.json; verify token via /oauth/user/info + conn.zsoid
+        const oauthInfo = await fetchZohoOAuthUserInfo(accountsServer, accessToken);
+        if (oauthInfo && conn.zsoid) {
+          const refreshedConn = zohoConnectionsMemory.get(targetKey) || conn;
+          return res.json({
+            ok: true,
+            zohoEmail: oauthInfo.email || conn.zohoEmail || '',
+            zohoDisplayName: oauthInfo.displayName || conn.zohoDisplayName || '',
+            zsoid: String(conn.zsoid),
+            zuid: String(oauthInfo.zuid || conn.zuid),
+            latencyMs: Date.now() - startedAt,
+            checkedAt: new Date().toISOString(),
+            sealedVault: targetKey === staff.staffKey ? sealZohoVault(refreshedConn) : undefined,
+          });
+        }
+
         return res.status(userRes.status >= 400 ? userRes.status : 502).json({
           ok: false,
           error: userJson?.message || userJson?.error?.message || `Zoho API returned HTTP ${userRes.status}`,
         });
       }
 
+      const refreshedConn = zohoConnectionsMemory.get(targetKey) || conn;
       res.json({
         ok: true,
         zohoEmail: details.primaryEmail || conn.zohoEmail || '',
@@ -4634,6 +5132,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
         zuid: String(details.zuid || conn.zuid),
         latencyMs: Date.now() - startedAt,
         checkedAt: new Date().toISOString(),
+        sealedVault: targetKey === staff.staffKey ? sealZohoVault(refreshedConn) : undefined,
       });
     } catch (err: any) {
       res.status(500).json({
@@ -4647,12 +5146,12 @@ Preserve the author's exact wording wherever present in the document. If a list 
   // 5. Create an automated Zoho Meeting under the signed-in counselor's Zoho account
   app.post("/api/zoho/meetings", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const staff = resolveStaffIdentity(req);
+      const staff = await resolveStaffIdentity(req);
       if (!staff) {
         return res.status(401).json({ error: 'Unable to identify counselor. Please sign in again.' });
       }
 
-      const conn = await getZohoConnectionByKey(staff.staffKey);
+      const conn = await getZohoConnectionByKey(staff.staffKey, req);
       if (!conn) {
         return res.status(400).json({
           code: 'ZOHO_NOT_CONNECTED',
@@ -4735,6 +5234,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
         });
       }
 
+      const refreshedConn = zohoConnectionsMemory.get(staff.staffKey) || conn;
       res.json({
         meetingKey: String(createdSession.meetingKey || ''),
         joinLink: createdSession.joinLink,
@@ -4743,6 +5243,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
         participantCount: uniqueEmails.length,
         participantEmails: uniqueEmails,
         startTimeFormatted: formattedStartTime,
+        sealedVault: sealZohoVault(refreshedConn),
       });
     } catch (err: any) {
       res.status(500).json({ error: err?.message || 'Failed to create Zoho Meeting' });
@@ -4768,7 +5269,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
     app.use("*", async (req, res, next) => {
       try {
         const url = req.originalUrl;
-        let template = fs.readFileSync(path.resolve(__dirname, "index.html"), "utf-8");
+        let template = fs.readFileSync(path.resolve(process.cwd(), "index.html"), "utf-8");
         template = await vite.transformIndexHtml(url, template);
         res.status(200).set({ "Content-Type": "text/html" }).end(template);
       } catch (e) {
@@ -4786,6 +5287,9 @@ Preserve the author's exact wording wherever present in the document. If a list 
         },
       })
     );
+    app.all('/api/*', (_req, res) => {
+      res.status(404).json({ error: 'API endpoint not found.' });
+    });
     app.get('*', (req, res) => {
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
       res.sendFile(path.join(distPath, 'index.html'));

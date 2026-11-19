@@ -13,7 +13,15 @@ import {
   Activity,
 } from 'lucide-react';
 import { StaffMember } from '@/types';
-import { getFirebaseIdToken } from '@/lib/firebase';
+import {
+  deleteStaffZohoSealedVault,
+  listAllStaffZohoVaultDocs,
+  readStaffZohoSealedVault,
+  saveSharedOrgZsoid,
+  saveStaffZohoSealedVault,
+  subscribeToZohoOAuthMessages,
+  zohoAuthenticatedFetch,
+} from '@/lib/zohoClient';
 import { cn } from '@/lib/utils';
 
 interface ZohoConnectionSummary {
@@ -35,6 +43,7 @@ interface DiagnosticsState {
   hasClientSecret: boolean;
   hasAppUrl: boolean;
   redirectUri: string;
+  redirectUriSource?: string;
   clientIdPreview?: string;
   clientIdValidFormat?: boolean;
   clientSecretLength?: number;
@@ -45,6 +54,7 @@ interface DiagnosticsState {
 
 interface Props {
   currentUser: StaffMember;
+  employeeOnlyMode?: boolean;
 }
 
 const DEV_ORIGIN = 'https://ais-dev-ad6i7xzq6z67b7dvfben3e-916026696776.asia-southeast1.run.app';
@@ -52,14 +62,14 @@ const SHARED_ORIGIN = 'https://ais-pre-ad6i7xzq6z67b7dvfben3e-916026696776.asia-
 const DEV_CALLBACK_URL = `${DEV_ORIGIN}/api/zoho/oauth/callback`;
 const SHARED_CALLBACK_URL = `${SHARED_ORIGIN}/api/zoho/oauth/callback`;
 
-export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
+export default function ZohoSetupDiagnosticsPanel({ currentUser, employeeOnlyMode = false }: Props) {
   const [diag, setDiag] = useState<DiagnosticsState>({
     loading: true,
     configured: false,
     hasClientId: false,
     hasClientSecret: false,
     hasAppUrl: false,
-    redirectUri: DEV_CALLBACK_URL,
+    redirectUri: typeof window !== 'undefined' ? `${window.location.origin}/api/zoho/oauth/callback` : DEV_CALLBACK_URL,
     connections: [],
   });
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -76,27 +86,14 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
     error?: string;
   } | null>(null);
 
-  const getAuthHeaders = async (): Promise<Record<string, string>> => {
-    const email = (currentUser?.email || '').trim();
-    const token = await getFirebaseIdToken();
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(email ? { 'x-staff-email': email } : {}),
-      ...(currentUser?.name ? { 'x-staff-name': currentUser.name } : {}),
-    };
-  };
-
   const loadDiagnostics = async () => {
     setDiag(prev => ({ ...prev, loading: true, error: undefined }));
     try {
-      const headers = await getAuthHeaders();
-      const res = await fetch('/api/zoho/connections', {
-        method: 'GET',
-        headers,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      const [{ ok, data }, vaultDocs] = await Promise.all([
+        zohoAuthenticatedFetch('/api/zoho/connections', { method: 'GET' }, currentUser),
+        employeeOnlyMode ? Promise.resolve([]) : listAllStaffZohoVaultDocs(),
+      ]);
+      if (!ok) {
         setDiag(prev => ({
           ...prev,
           loading: false,
@@ -104,6 +101,37 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
         }));
         return;
       }
+
+      const byKey = new Map<string, ZohoConnectionSummary>();
+      const serverConns: ZohoConnectionSummary[] = Array.isArray(data.connections) ? data.connections : [];
+      for (const c of serverConns) {
+        if (c?.staffKey) {
+          byKey.set(c.staffKey.toLowerCase(), c);
+        }
+      }
+      for (const v of vaultDocs) {
+        const key = (v.staffEmail || '').trim().toLowerCase();
+        if (key && !byKey.has(key)) {
+          byKey.set(key, {
+            staffKey: key,
+            staffEmail: v.staffEmail,
+            staffName: v.staffName || v.staffEmail,
+            zohoEmail: v.zohoEmail,
+            zohoDisplayName: v.zohoDisplayName,
+            zsoid: v.zsoid,
+            zuid: v.zuid,
+            connectedAt: v.connectedAt,
+            updatedAt: v.updatedAt,
+          });
+        }
+      }
+
+      const mergedConnections = Array.from(byKey.values());
+      const firstOrgZsoid = data.sharedOrgZsoid || mergedConnections[0]?.zsoid;
+      if (!employeeOnlyMode && firstOrgZsoid) {
+        void saveSharedOrgZsoid(firstOrgZsoid);
+      }
+
       setDiag({
         loading: false,
         configured: Boolean(data.configured),
@@ -111,11 +139,12 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
         hasClientSecret: Boolean(data.hasClientSecret),
         hasAppUrl: Boolean(data.hasAppUrl),
         redirectUri: data.redirectUri || DEV_CALLBACK_URL,
+        redirectUriSource: data.redirectUriSource || (data.hasAppUrl ? 'APP_URL' : 'HOST_FALLBACK'),
         clientIdPreview: data.clientIdPreview || '',
         clientIdValidFormat: data.clientIdValidFormat !== false,
         clientSecretLength: typeof data.clientSecretLength === 'number' ? data.clientSecretLength : 0,
         secretLooksLikeClientId: Boolean(data.secretLooksLikeClientId),
-        connections: Array.isArray(data.connections) ? data.connections : [],
+        connections: mergedConnections,
       });
     } catch (err: any) {
       setDiag(prev => ({
@@ -131,31 +160,24 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
   }, [currentUser?.id, currentUser?.email]);
 
   useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      const allowed =
-        event.origin === window.location.origin ||
-        event.origin.endsWith('.run.app') ||
-        event.origin.startsWith('http://localhost') ||
-        event.origin.startsWith('https://localhost');
-      if (!allowed || !event.data || typeof event.data !== 'object') return;
-
-      if (event.data.type === 'ZOHO_OAUTH_SUCCESS') {
+    return subscribeToZohoOAuthMessages((payload) => {
+      if (payload.type === 'ZOHO_OAUTH_SUCCESS') {
         setIsConnecting(false);
+        void saveStaffZohoSealedVault(payload, currentUser?.email, currentUser?.name).then(() => {
+          loadDiagnostics();
+        });
         setActionBanner({
           type: 'success',
-          message: `Connected Zoho account (${event.data.zohoEmail || event.data.zohoDisplayName || 'Verified'}).`,
+          message: `Connected Zoho account (${payload.zohoEmail || payload.zohoDisplayName || 'Verified'}).`,
         });
-        loadDiagnostics();
-      } else if (event.data.type === 'ZOHO_OAUTH_ERROR') {
+      } else if (payload.type === 'ZOHO_OAUTH_ERROR') {
         setIsConnecting(false);
         setActionBanner({
           type: 'error',
-          message: event.data.error || 'Zoho OAuth did not complete.',
+          message: payload.error || 'Zoho OAuth did not complete.',
         });
       }
-    };
-    window.addEventListener('message', onMessage);
-    return () => window.removeEventListener('message', onMessage);
+    });
   }, [currentUser?.id, currentUser?.email]);
 
   const handleCopy = (key: string, value: string) => {
@@ -170,16 +192,15 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
     setActionBanner(null);
     setIsConnecting(true);
     try {
-      const headers = await getAuthHeaders();
-      const res = await fetch('/api/zoho/auth/url', {
-        method: 'GET',
-        headers,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.url) {
+      const { ok, status, data } = await zohoAuthenticatedFetch('/api/zoho/auth/url', { method: 'GET' }, currentUser);
+      if (!ok || !data.url) {
         setActionBanner({
           type: 'error',
-          message: data.error || 'Could not start Zoho OAuth. Verify ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET are set.',
+          message:
+            data.error ||
+            (status === 401
+              ? 'Your login session expired. Please sign out and sign back in, then click Connect again.'
+              : `Could not start Zoho OAuth (HTTP ${status}). Verify ZOHO_CLIENT_ID and ZOHO_CLIENT_SECRET are set.`),
         });
         setIsConnecting(false);
         return;
@@ -206,6 +227,9 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
         if (popup.closed) {
           window.clearInterval(timer);
           setIsConnecting(false);
+          window.setTimeout(() => {
+            void loadDiagnostics();
+          }, 400);
         }
       }, 500);
     } catch (err: any) {
@@ -218,13 +242,19 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
     setIsTesting(true);
     setTestResult(null);
     try {
-      const headers = await getAuthHeaders();
-      const res = await fetch('/api/zoho/test', {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(targetStaffKey ? { staffKey: targetStaffKey } : {}),
-      });
-      const data = await res.json().catch(() => ({}));
+      const targetSealedVault = targetStaffKey ? await readStaffZohoSealedVault(targetStaffKey) : '';
+      const { data } = await zohoAuthenticatedFetch(
+        '/api/zoho/test',
+        {
+          method: 'POST',
+          body: JSON.stringify(
+            targetStaffKey
+              ? { staffKey: targetStaffKey, ...(targetSealedVault ? { sealedVault: targetSealedVault } : {}) }
+              : {}
+          ),
+        },
+        currentUser
+      );
       setTestResult({
         ok: Boolean(data.ok),
         zohoEmail: data.zohoEmail,
@@ -246,15 +276,15 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
     setDisconnectingKey(staffKey);
     setActionBanner(null);
     try {
-      const headers = await getAuthHeaders();
-      const res = await fetch(`/api/zoho/connection?staffKey=${encodeURIComponent(staffKey)}`, {
-        method: 'DELETE',
-        headers,
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+      const { ok, data } = await zohoAuthenticatedFetch(
+        `/api/zoho/connection?staffKey=${encodeURIComponent(staffKey)}`,
+        { method: 'DELETE' },
+        currentUser
+      );
+      if (!ok) {
         setActionBanner({ type: 'error', message: data.error || 'Failed to disconnect counselor.' });
       } else {
+        await deleteStaffZohoSealedVault(staffKey);
         setActionBanner({ type: 'info', message: `Disconnected Zoho Meeting account for ${staffKey}.` });
         await loadDiagnostics();
       }
@@ -265,10 +295,147 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
   };
 
   const myEmailKey = (currentUser?.email || '').trim().toLowerCase();
-  const isCurrentUserConnected = diag.connections.some(
+  const myConnection = diag.connections.find(
     c => c.staffKey === myEmailKey || c.staffEmail.toLowerCase() === myEmailKey
   );
+  const isCurrentUserConnected = Boolean(myConnection);
   const sharedOrgId = diag.connections[0]?.zsoid;
+
+  if (employeeOnlyMode) {
+    return (
+      <Card className="border-slate-200 shadow-sm text-left">
+        <CardHeader className="bg-slate-50 border-b border-slate-200 flex flex-row items-center justify-between gap-4 py-4">
+          <div>
+            <CardTitle className="text-sm font-bold text-slate-900 flex items-center gap-2">
+              <Video className="w-4 h-4 text-indigo-600" />
+              My Zoho Meeting Account
+            </CardTitle>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Connect your Zoho Meeting seat ({currentUser?.email}) to automatically generate join &amp; host links in Class Scheduler.
+            </p>
+          </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={loadDiagnostics}
+            disabled={diag.loading}
+            className="bg-white text-xs h-8 px-3 whitespace-nowrap shrink-0"
+          >
+            <RefreshCw className={cn('w-3.5 h-3.5 mr-1.5', diag.loading && 'animate-spin')} />
+            Refresh
+          </Button>
+        </CardHeader>
+        <CardContent className="p-6 space-y-4 text-xs">
+          {actionBanner && (
+            <div
+              className={cn(
+                'p-3 rounded-lg border flex items-start gap-2',
+                actionBanner.type === 'success'
+                  ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
+                  : actionBanner.type === 'error'
+                  ? 'border-red-200 bg-red-50 text-red-900'
+                  : 'border-slate-200 bg-slate-50 text-slate-800'
+              )}
+            >
+              {actionBanner.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 text-slate-600 shrink-0 mt-0.5" />
+              )}
+              <div className="space-y-1 min-w-0">
+                <p className="font-semibold">{actionBanner.message}</p>
+                {actionBanner.type === 'error' && diag.redirectUri && (
+                  <p className="text-[11px] font-mono break-all opacity-80">
+                    Active Redirect URI: {diag.redirectUri}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className={cn('w-2.5 h-2.5 rounded-full', isCurrentUserConnected ? 'bg-emerald-500' : 'bg-amber-400')} />
+                <span className="font-bold text-slate-900 text-sm">
+                  {diag.loading
+                    ? 'Checking connection...'
+                    : isCurrentUserConnected
+                    ? `Connected: ${myConnection?.zohoEmail || myConnection?.zohoDisplayName}`
+                    : 'Not Connected Yet'}
+                </span>
+              </div>
+              <p className="text-slate-600">
+                {isCurrentUserConnected
+                  ? `Zoho Organization ID (zsoid): ${myConnection?.zsoid || 'Verified'}`
+                  : 'Sign in with the Zoho email invited to your Uppseekers Zoho Meeting organization.'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <Button
+                type="button"
+                onClick={handleConnectZoho}
+                disabled={isConnecting || !diag.configured}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold h-9 px-4"
+              >
+                {isConnecting ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    Authorizing...
+                  </>
+                ) : (
+                  <>
+                    <Video className="w-3.5 h-3.5 mr-1.5" />
+                    {isCurrentUserConnected ? 'Reconnect Zoho' : 'Connect My Zoho Account'}
+                  </>
+                )}
+              </Button>
+              {isCurrentUserConnected && (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleRunTest()}
+                    disabled={isTesting}
+                    className="bg-white text-slate-800 border-slate-300 text-xs font-semibold h-9 px-3"
+                  >
+                    <Activity className="w-3.5 h-3.5 mr-1.5 text-indigo-600" />
+                    {isTesting ? 'Testing...' : 'Test Connection'}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => handleDisconnect(myEmailKey)}
+                    disabled={disconnectingKey === myEmailKey}
+                    className="bg-white text-red-600 border-red-200 hover:bg-red-50 text-xs font-semibold h-9 px-3"
+                  >
+                    <Unplug className="w-3.5 h-3.5 mr-1.5" />
+                    Disconnect
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {testResult && (
+            <div
+              className={cn(
+                'p-3 rounded-lg border text-xs',
+                testResult.ok ? 'border-emerald-200 bg-emerald-50 text-emerald-950' : 'border-red-200 bg-red-50 text-red-950'
+              )}
+            >
+              <span className="font-semibold">
+                {testResult.ok
+                  ? `Handshake Verified (${testResult.zohoEmail} · zsoid ${testResult.zsoid})`
+                  : `Test Failed: ${testResult.error}`}
+              </span>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <div className="space-y-6 md:col-span-2">
@@ -507,7 +674,13 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser }: Props) {
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="text-slate-700 font-medium whitespace-nowrap">
-                    {diag.hasAppUrl ? 'APP_URL Active' : 'Host Fallback'}
+                    {diag.redirectUriSource === 'ZOHO_REDIRECT_URI'
+                      ? 'ZOHO_REDIRECT_URI Env'
+                      : diag.redirectUriSource === 'APP_URL'
+                      ? 'APP_URL Env'
+                      : diag.hasAppUrl
+                      ? 'Env Matched'
+                      : 'Origin Fallback'}
                   </span>
                   <Button
                     type="button"

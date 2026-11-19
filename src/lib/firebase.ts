@@ -36,7 +36,15 @@ export function getProvisionerAuth(): Auth {
 }
 
 export async function getFirebaseIdToken(forceRefresh = false): Promise<string | null> {
-  const user = auth.currentUser;
+  let user = auth.currentUser;
+  if (!user && typeof (auth as any).authStateReady === 'function') {
+    try {
+      await (auth as any).authStateReady();
+      user = auth.currentUser;
+    } catch {
+      // Ignore authStateReady errors
+    }
+  }
   if (!user) return null;
   try {
     return await user.getIdToken(forceRefresh);

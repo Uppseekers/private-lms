@@ -429,7 +429,6 @@ export default function TeamDashboard() {
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto w-full pb-12">
-      
       {/* Upper Grid: Intake + Batches */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         

@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { 
   Plus, Search, Users, Video, Edit, Trash2, X, RefreshCw, 
   FileText, Link as LinkIcon, CheckCircle2, Star, MessageSquare, ClipboardList, Paperclip,
   Repeat, Calendar, CalendarDays, ChevronDown, ChevronUp, Layers, Clock, Sparkles, AlertCircle,
-  Copy, Check, ExternalLink, Unplug, Mail
+  Copy, Check, ExternalLink, Unplug, Mail, SlidersHorizontal
 } from 'lucide-react';
 import { useDatabase, EventItem } from '@/context/DatabaseContext';
 import { getFirebaseIdToken } from '@/lib/firebase';
+import {
+  deleteStaffZohoSealedVault,
+  saveStaffZohoSealedVault,
+  subscribeToZohoOAuthMessages,
+  zohoAuthenticatedFetch,
+} from '@/lib/zohoClient';
 import { cn } from '@/lib/utils';
 import { MeetingMOM, MeetingResourceLink, MeetingTask, OperationalLog, BatchClassSession } from '@/types';
 import { canStaffAccessAllStudents, isUserAdmin, isStudentAssignedToStaff, canStaffAccessEvent } from '@/lib/staffPermissions';
@@ -24,6 +30,7 @@ import {
 
 export default function TeamScheduler() {
   const { events, setEvents, currentUser, batches, setBatches, students, updateStudent, permissionsMatrix } = useDatabase();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -104,26 +111,10 @@ export default function TeamScheduler() {
   const [modalError, setModalError] = useState<string | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
 
-  const getStaffAuthHeaders = async (): Promise<Record<string, string>> => {
-    const email = (currentUser?.email || '').trim();
-    const token = await getFirebaseIdToken();
-    return {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(email ? { 'x-staff-email': email } : {}),
-      ...(currentUser?.name ? { 'x-staff-name': currentUser.name } : {}),
-    };
-  };
-
   const fetchZohoStatus = async () => {
     try {
       setZohoStatus(prev => ({ ...prev, loading: true }));
-      const headers = await getStaffAuthHeaders();
-      const res = await fetch('/api/zoho/status', {
-        method: 'GET',
-        headers,
-      });
-      const data = await res.json().catch(() => ({}));
+      const { data } = await zohoAuthenticatedFetch('/api/zoho/status', { method: 'GET' }, currentUser);
       setZohoStatus({
         loading: false,
         configured: data.configured !== false,
@@ -142,32 +133,35 @@ export default function TeamScheduler() {
   }, [currentUser?.id, currentUser?.email]);
 
   useEffect(() => {
-    const handleOAuthMessage = (event: MessageEvent) => {
-      const originAllowed =
-        event.origin === window.location.origin ||
-        event.origin.endsWith('.run.app') ||
-        event.origin.startsWith('http://localhost') ||
-        event.origin.startsWith('https://localhost');
-      if (!originAllowed || !event.data || typeof event.data !== 'object') return;
-
-      if (event.data.type === 'ZOHO_OAUTH_SUCCESS') {
+    return subscribeToZohoOAuthMessages((payload) => {
+      if (payload.type === 'ZOHO_OAUTH_SUCCESS') {
         setIsConnectingZoho(false);
         setModalError(null);
+        void saveStaffZohoSealedVault(payload, currentUser?.email, currentUser?.name).then(() => {
+          fetchZohoStatus();
+        });
+        setZohoStatus(prev => ({
+          ...prev,
+          loading: false,
+          connected: true,
+          zohoEmail: payload.zohoEmail || prev.zohoEmail,
+          zohoDisplayName: payload.zohoDisplayName || prev.zohoDisplayName,
+        }));
         setZohoBanner({
           type: 'success',
-          message: `Connected Zoho Meeting account (${event.data.zohoEmail || event.data.zohoDisplayName || 'Verified'}).`,
+          message: `Connected Zoho Meeting account (${payload.zohoEmail || payload.zohoDisplayName || 'Verified'}).`,
         });
-        fetchZohoStatus();
         setVideoMode('zoho');
-      } else if (event.data.type === 'ZOHO_OAUTH_ERROR') {
+      } else if (payload.type === 'ZOHO_OAUTH_ERROR') {
         setIsConnectingZoho(false);
-        const msg = event.data.error || 'Zoho authorization did not complete.';
+        const msg = payload.error || 'Zoho authorization did not complete.';
+        if (payload.redirectUri) {
+          setZohoStatus(prev => ({ ...prev, redirectUri: payload.redirectUri }));
+        }
         setZohoBanner({ type: 'error', message: msg });
         if (isModalOpen) setModalError(msg);
       }
-    };
-    window.addEventListener('message', handleOAuthMessage);
-    return () => window.removeEventListener('message', handleOAuthMessage);
+    });
   }, [isModalOpen, currentUser?.id, currentUser?.email]);
 
   const handleConnectZoho = async () => {
@@ -175,17 +169,16 @@ export default function TeamScheduler() {
     setModalError(null);
     setIsConnectingZoho(true);
     try {
-      const headers = await getStaffAuthHeaders();
-      const res = await fetch('/api/zoho/auth/url', {
-        method: 'GET',
-        headers,
-      });
-      const data = await res.json().catch(() => ({}));
+      const { ok, status, data } = await zohoAuthenticatedFetch('/api/zoho/auth/url', { method: 'GET' }, currentUser);
       if (data.redirectUri) {
         setZohoStatus(prev => ({ ...prev, redirectUri: data.redirectUri }));
       }
-      if (!res.ok || !data.url) {
-        const errMsg = data.error || 'Unable to start Zoho OAuth flow.';
+      if (!ok || !data.url) {
+        const errMsg =
+          data.error ||
+          (status === 401
+            ? 'Your login session expired. Please sign out and sign back in, then click Connect Zoho Meeting.'
+            : `Unable to start Zoho OAuth flow (HTTP ${status}).`);
         setZohoStatus(prev => ({ ...prev, configured: data.configured !== false, redirectUri: data.redirectUri || prev.redirectUri }));
         setZohoBanner({ type: 'error', message: errMsg });
         if (isModalOpen) setModalError(errMsg);
@@ -214,6 +207,9 @@ export default function TeamScheduler() {
         if (popup.closed) {
           window.clearInterval(pollTimer);
           setIsConnectingZoho(false);
+          window.setTimeout(() => {
+            void fetchZohoStatus();
+          }, 400);
         }
       }, 500);
     } catch (err: any) {
@@ -226,11 +222,8 @@ export default function TeamScheduler() {
 
   const handleDisconnectZoho = async () => {
     try {
-      const headers = await getStaffAuthHeaders();
-      await fetch('/api/zoho/connection', {
-        method: 'DELETE',
-        headers,
-      });
+      await zohoAuthenticatedFetch('/api/zoho/connection', { method: 'DELETE' }, currentUser);
+      await deleteStaffZohoSealedVault(currentUser?.email);
       setZohoStatus(prev => ({ ...prev, connected: false, zohoEmail: '', zohoDisplayName: '' }));
       if (videoMode === 'zoho') setVideoMode('manual');
       setZohoBanner({ type: 'info', message: 'Disconnected your Zoho Meeting account.' });
@@ -543,22 +536,23 @@ export default function TeamScheduler() {
       }
       setIsCreatingZohoMeeting(true);
       try {
-        const headers = await getStaffAuthHeaders();
-        const res = await fetch('/api/zoho/meetings', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            topic: formData.title.trim(),
-            agenda: formData.notes.trim(),
-            startDate: occurrences[0],
-            startTime: formData.startTime,
-            durationMinutes,
-            timezone: formData.timezone || defaultTimezone,
-            participantEmails: participantResolution.emails,
-          }),
-        });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok || !data.joinLink) {
+        const { ok, data } = await zohoAuthenticatedFetch(
+          '/api/zoho/meetings',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              topic: formData.title.trim(),
+              agenda: formData.notes.trim(),
+              startDate: occurrences[0],
+              startTime: formData.startTime,
+              durationMinutes,
+              timezone: formData.timezone || defaultTimezone,
+              participantEmails: participantResolution.emails,
+            }),
+          },
+          currentUser
+        );
+        if (!ok || !data.joinLink) {
           setModalError(data.error || 'Could not create Zoho Meeting. Check your connection or switch to Manual Video Link.');
           setIsCreatingZohoMeeting(false);
           return;
@@ -1019,7 +1013,15 @@ export default function TeamScheduler() {
               )}
             </Button>
           )}
-          <Button onClick={() => handleOpenModal()} className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4 py-2 rounded-lg font-semibold shadow-sm h-9">
+          <Button
+            variant="outline"
+            onClick={() => navigate('/team/capacity-scheduler')}
+            className="text-xs border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-800 px-3.5 py-2 rounded-lg font-semibold h-9 whitespace-nowrap shrink-0"
+          >
+            <SlidersHorizontal className="w-4 h-4 mr-1.5 text-indigo-600" />
+            Capacity Scheduler
+          </Button>
+          <Button onClick={() => handleOpenModal()} className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4 py-2 rounded-lg font-semibold shadow-sm h-9 whitespace-nowrap shrink-0">
             <Plus className="w-4 h-4 mr-1.5" /> Schedule Class
           </Button>
         </div>

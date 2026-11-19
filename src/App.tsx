@@ -25,6 +25,7 @@ import CompetencyRadar from './pages/student/CompetencyRadar';
 import StudentActivityLog from './pages/student/ActivityLog';
 import StudentLaunchpad from './pages/student/Launchpad';
 import TeamLaunchpad from './pages/team/Launchpad';
+import CapacityScheduler from './pages/team/CapacityScheduler';
 
 const ProtectedRoute = ({
   children,
@@ -93,6 +94,7 @@ export default function App() {
             <Route index element={<Navigate to="dashboard" replace />} />
             <Route path="dashboard" element={<TeamDashboard />} />
             <Route path="scheduler" element={<TeamScheduler />} />
+            <Route path="capacity-scheduler" element={<CapacityScheduler />} />
             <Route path="vault" element={<TeamVault />} />
             <Route path="evaluator" element={<Evaluator />} />
             <Route path="users" element={<TeamUsers />} />

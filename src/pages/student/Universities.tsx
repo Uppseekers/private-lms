@@ -57,24 +57,23 @@ const mockRequiredDocs: RequiredDoc[] = [
 
 export default function StudentUniversities() {
   const { currentUser, students, updateStudent } = useDatabase();
-  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0] || (currentUser as any);
-  const rawShortlist = student?.shortlist || [];
+  const normalizedAuthEmail = (currentUser?.email || '').trim().toLowerCase();
+  const student =
+    students.find(
+      (s) =>
+        s.id === currentUser?.id ||
+        (normalizedAuthEmail && (s.email || '').trim().toLowerCase() === normalizedAuthEmail)
+    ) ||
+    students[0] ||
+    (currentUser as any);
+  const rawShortlist = Array.isArray(student?.shortlist) ? student.shortlist : [];
 
   const [expandedUniId, setExpandedUniId] = useState<string | null>(null);
   const [attachModalOpen, setAttachModalOpen] = useState(false);
   const [selectedReq, setSelectedReq] = useState<{uniId: string, reqId: string, reqName: string} | null>(null);
   const [previewDoc, setPreviewDoc] = useState<any | null>(null);
-  const [isAddUniModalOpen, setIsAddUniModalOpen] = useState(false);
   const [categoryFilter, setCategoryFilter] = useState<'All' | 'Reach' | 'Target' | 'Safety'>('All');
   const [searchQuery, setSearchQuery] = useState('');
-
-  // New Uni form state
-  const [newUniName, setNewUniName] = useState('');
-  const [newUniCategory, setNewUniCategory] = useState<'Reach' | 'Target' | 'Safety'>('Target');
-  const [newUniMajor, setNewUniMajor] = useState('Computer Science');
-  const [newUniRound, setNewUniRound] = useState('Regular Decision (RD)');
-  const [newUniDeadline, setNewUniDeadline] = useState('');
-  const [newUniPortal, setNewUniPortal] = useState('https://commonapp.org');
 
   // Normalize universities
   const shortlist = rawShortlist.map((uni: any, idx: number) => {
@@ -98,64 +97,11 @@ export default function StudentUniversities() {
       round: uni.round || 'Regular Decision',
       deadline: uni.deadline || '2026-11-01T23:59',
       portalLink: uni.portalLink || 'https://commonapp.org',
+      notes: uni.notes || '',
       requiredDocs: reqDocs,
       attachedDocs: (uni.attachedDocs && typeof uni.attachedDocs === 'object') ? uni.attachedDocs : {}
     };
   });
-
-  const handleAddUniversity = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newUniName.trim() || !student) return;
-
-    const newUni = {
-      id: 'U-' + Date.now(),
-      name: newUniName.trim(),
-      category: newUniCategory,
-      major: newUniMajor,
-      round: newUniRound,
-      deadline: newUniDeadline || '2026-12-01T23:59',
-      portalLink: newUniPortal,
-      requiredDocs: mockRequiredDocs.slice(0, 6),
-      attachedDocs: {}
-    };
-
-    const updatedShortlist = [...(student.shortlist || []), newUni];
-    updateStudent({
-      ...student,
-      shortlist: updatedShortlist,
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'UPDATE',
-          description: `Added target university: ${newUni.name}`
-        },
-        ...(student.activities || [])
-      ]
-    });
-
-    setNewUniName('');
-    setIsAddUniModalOpen(false);
-  };
-
-  const handleRemoveUniversity = (uniId: string) => {
-    if (!student) return;
-    const targetUni = shortlist.find((u: any) => u.id === uniId);
-    const updatedShortlist = (student.shortlist || []).filter((u: any) => u.id !== uniId && u.name !== targetUni?.name);
-    updateStudent({
-      ...student,
-      shortlist: updatedShortlist,
-      activities: [
-        {
-          id: Math.random().toString(),
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'UPDATE',
-          description: `Removed university from shortlist: ${targetUni?.name || 'University'}`
-        },
-        ...(student.activities || [])
-      ]
-    });
-  };
 
   const handleAttachFile = (fileName: string, fileUrl?: string) => {
     if (!selectedReq || !student) return;
@@ -315,7 +261,7 @@ export default function StudentUniversities() {
             </span>
           </div>
           <p className="text-xs text-slate-500 font-medium mt-0.5">
-            Admissions target pipeline, application deadlines & document readiness.
+            Admissions target pipeline, application deadlines & document readiness · Curated by your counselor
           </p>
         </div>
 
@@ -501,15 +447,8 @@ export default function StudentUniversities() {
                     </div>
                   </div>
 
-                  {/* Actions */}
+                  {/* Expand Indicator (Shortlist curated & managed by Counselor) */}
                   <div className="flex items-center gap-1">
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); handleRemoveUniversity(uni.id); }}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
-                      title="Remove from shortlist"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
                     <div className={cn(
                       "p-1.5 rounded-lg text-slate-400 transition-transform duration-200",
                       isExpanded ? "rotate-90 text-blue-600 bg-blue-50" : "hover:bg-slate-100"
@@ -689,92 +628,7 @@ export default function StudentUniversities() {
         />
       )}
 
-      {/* Add University Modal */}
-      {isAddUniModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl border border-slate-200">
-            <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-100">
-              <h3 className="font-bold text-base text-slate-900">Add Target University</h3>
-              <button onClick={() => setIsAddUniModalOpen(false)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleAddUniversity} className="space-y-3.5">
-              <div>
-                <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">University Name</label>
-                <input 
-                  type="text" 
-                  required 
-                  placeholder="e.g. Stanford University" 
-                  value={newUniName} 
-                  onChange={e => setNewUniName(e.target.value)} 
-                  className="w-full border border-slate-200 rounded-xl p-2.5 text-xs focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">Category</label>
-                  <select 
-                    value={newUniCategory} 
-                    onChange={e => setNewUniCategory(e.target.value as any)}
-                    className="w-full border border-slate-200 rounded-xl p-2.5 text-xs outline-none bg-white"
-                  >
-                    <option value="Reach">Reach</option>
-                    <option value="Target">Target</option>
-                    <option value="Safety">Safety</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">Round</label>
-                  <select 
-                    value={newUniRound} 
-                    onChange={e => setNewUniRound(e.target.value)}
-                    className="w-full border border-slate-200 rounded-xl p-2.5 text-xs outline-none bg-white"
-                  >
-                    <option value="Early Decision (ED)">Early Decision (ED)</option>
-                    <option value="Early Action (EA)">Early Action (EA)</option>
-                    <option value="Regular Decision (RD)">Regular Decision (RD)</option>
-                    <option value="Rolling">Rolling</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">Major / Program</label>
-                <input 
-                  type="text" 
-                  placeholder="e.g. B.S. in Computer Science" 
-                  value={newUniMajor} 
-                  onChange={e => setNewUniMajor(e.target.value)} 
-                  className="w-full border border-slate-200 rounded-xl p-2.5 text-xs outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-600 uppercase mb-1 block">Deadline Date</label>
-                <input 
-                  type="date" 
-                  value={newUniDeadline} 
-                  onChange={e => setNewUniDeadline(e.target.value)} 
-                  className="w-full border border-slate-200 rounded-xl p-2.5 text-xs outline-none bg-white"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-                <Button type="button" variant="ghost" size="sm" onClick={() => setIsAddUniModalOpen(false)} className="text-xs">
-                  Cancel
-                </Button>
-                <Button type="submit" size="sm" className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold">
-                  Add University
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Shortlist additions & removals are managed exclusively by the assigned counselor */}
 
       {/* Attach Modal */}
       {attachModalOpen && selectedReq && (

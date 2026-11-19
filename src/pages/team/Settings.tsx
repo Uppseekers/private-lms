@@ -31,10 +31,12 @@ import {
   FileSpreadsheet,
   GraduationCap,
   Eye,
-  EyeOff
+  EyeOff,
+  SlidersHorizontal
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDatabase, PermissionCategory } from '@/context/DatabaseContext';
+import { auth } from '@/lib/firebase';
 import { StaffMember } from '@/types';
 import {
   isUserAdmin,
@@ -45,8 +47,9 @@ import {
 } from '@/lib/staffPermissions';
 import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
 import ZohoSetupDiagnosticsPanel from '@/components/ZohoSetupDiagnosticsPanel';
+import SuggestedSchedulerRulesCard from '@/components/SuggestedSchedulerRulesCard';
 
-type TabType = 'staff' | 'permissions' | 'taxonomies' | 'communications' | 'calendar' | 'billing' | 'developer' | 'audit';
+type TabType = 'staff' | 'permissions' | 'counselling_rules' | 'taxonomies' | 'communications' | 'calendar' | 'billing' | 'developer' | 'audit';
 type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | 'Enabled' | 'None' | null;
 
 export default function TeamSettings() {
@@ -67,7 +70,8 @@ export default function TeamSettings() {
     resyncPortalAccess,
     restoreLegacySqlToFirestore,
   } = useDatabase();
-  const isAdmin = isUserAdmin(currentUser);
+  const firebaseAuthEmail = (auth.currentUser?.email || '').trim().toLowerCase();
+  const isAdmin = isUserAdmin(currentUser) || firebaseAuthEmail === 'uppseekers@gmail.com';
   const [activeTab, setActiveTab] = useState<TabType>('permissions');
   
   const [searchQuery, setSearchQuery] = useState('');
@@ -606,21 +610,25 @@ export default function TeamSettings() {
 
   if (!isAdmin) {
     return (
-      <div className="max-w-2xl mx-auto my-12 p-8 bg-white border border-rose-200 rounded-2xl shadow-sm text-center animate-in fade-in duration-300">
-        <div className="w-16 h-16 bg-rose-50 border border-rose-100 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600 shadow-inner">
-          <Shield className="w-8 h-8" />
-        </div>
-        <h2 className="text-xl font-bold text-slate-900 mb-2">Access Restricted: Administrator Only</h2>
-        <p className="text-sm text-slate-600 mb-3 leading-relaxed">
-          The Admin Settings Control Center is strictly restricted to System Administrators only. Non-admin roles (including Category Managers, Counselors, and Faculty) do not have authorization to access system configuration, developer APIs, or permission matrices.
-        </p>
-        <div className="inline-block bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-xs text-slate-600 mb-6">
-          Logged in as: <strong>{currentUser?.name || 'Staff Member'}</strong> • Role: <span className="font-semibold text-rose-600">{currentUser?.role}</span>
-        </div>
-        <div>
-          <Button onClick={() => navigate('/team/dashboard')} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-semibold">
-            Return to Dashboard
-          </Button>
+      <div className="max-w-3xl mx-auto my-8 space-y-6 animate-in fade-in duration-300">
+        {currentUser && <ZohoSetupDiagnosticsPanel currentUser={currentUser} employeeOnlyMode />}
+
+        <div className="p-8 bg-white border border-rose-200 rounded-2xl shadow-sm text-center">
+          <div className="w-14 h-14 bg-rose-50 border border-rose-100 rounded-full flex items-center justify-center mx-auto mb-4 text-rose-600 shadow-inner">
+            <Shield className="w-7 h-7" />
+          </div>
+          <h2 className="text-lg font-bold text-slate-900 mb-2">System Configuration: Administrator Only</h2>
+          <p className="text-sm text-slate-600 mb-4 leading-relaxed max-w-xl mx-auto">
+            You can connect and test your personal Zoho Meeting account above. Global system configuration, staff onboarding, and permission matrices are restricted to System Administrators.
+          </p>
+          <div className="inline-block bg-slate-50 border border-slate-200 rounded-lg px-4 py-2 text-xs text-slate-600 mb-6">
+            Logged in as: <strong>{currentUser?.name || 'Staff Member'}</strong> • Role: <span className="font-semibold text-rose-600">{currentUser?.role}</span>
+          </div>
+          <div>
+            <Button onClick={() => navigate('/team/scheduler')} className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-semibold">
+              Go to Class Scheduler
+            </Button>
+          </div>
         </div>
       </div>
     );
@@ -648,6 +656,7 @@ export default function TeamSettings() {
           [
             { id: 'staff', label: 'Staff Onboarding', icon: Users },
             { id: 'permissions', label: 'Access & Permissions', icon: Shield },
+            { id: 'counselling_rules', label: 'Class-Wise Counselling Rules', icon: SlidersHorizontal },
             { id: 'taxonomies', label: 'Master Taxonomies', icon: FolderTree },
             { id: 'communications', label: 'Communication & Alerts', icon: Bell },
             { id: 'calendar', label: 'Calendar & Links', icon: CalendarDays },
@@ -899,6 +908,7 @@ export default function TeamSettings() {
                  tab_launchpad: Compass,
                  tab_batches: BookOpen,
                  tab_scheduler: CalendarDays,
+                 tab_capacity_scheduler: SlidersHorizontal,
                  tab_vault: FolderLock,
                  tab_evaluator: CheckSquare,
                  tab_users: Users,
@@ -911,6 +921,7 @@ export default function TeamSettings() {
                  tab_launchpad: 'Launchpad',
                  tab_batches: 'Batches & Cohorts',
                  tab_scheduler: 'Class Scheduler',
+                 tab_capacity_scheduler: 'Capacity Scheduler',
                  tab_vault: 'Document Center',
                  tab_evaluator: 'Assignment Evaluator',
                  tab_users: 'Student Database',
@@ -1302,43 +1313,72 @@ export default function TeamSettings() {
         </div>
       )}
 
-      {activeTab === 'calendar' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-           <ZohoSetupDiagnosticsPanel currentUser={currentUser} />
+      {activeTab === 'counselling_rules' && (
+        <div className="space-y-6">
+          <div className="rounded-xl border border-slate-200 bg-white px-5 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">
+                Class-Wise Frequency & Session Time Configuration
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Set preferred meeting duration (30/45/60 mins), monthly frequency (1/month to 4/month), and buffer time for Grades 7–12. These rules power the dedicated Capacity Scheduler tab for all counsellors.
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => navigate('/team/capacity-scheduler')}
+              className="bg-indigo-50/70 hover:bg-indigo-100 border-indigo-200 text-indigo-800 text-xs font-semibold h-9 whitespace-nowrap shrink-0"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5 mr-1.5 text-indigo-600" />
+              <span>Open Capacity Scheduler Tab</span>
+            </Button>
+          </div>
+          <SuggestedSchedulerRulesCard />
+        </div>
+      )}
 
-           <Card className="border-slate-200 shadow-sm">
-             <CardHeader className="bg-slate-50 border-b border-slate-200">
-               <CardTitle className="text-sm font-bold uppercase tracking-wider text-slate-900">Global Holidays & Timezones</CardTitle>
-             </CardHeader>
-             <CardContent className="p-6 space-y-4">
-               <div className="space-y-4">
-                 <div>
-                   <label className="text-xs font-bold text-slate-700 block mb-1">Institution Primary Timezone</label>
-                   <select className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                     <option>Asia/Kolkata (IST)</option>
-                     <option>America/New_York (EST)</option>
-                     <option>Europe/London (GMT)</option>
-                   </select>
-                 </div>
-                 <div className="pt-2">
-                   <div className="flex justify-between items-center mb-2">
-                     <span className="text-xs font-bold text-slate-700 block">Upcoming Blocked Dates (Holidays)</span>
-                     <Button variant="ghost" size="sm" className="text-indigo-600 h-6 px-2 text-xs"><Plus className="w-3 h-3 mr-1" /> Add</Button>
+      {activeTab === 'calendar' && (
+        <div className="space-y-8">
+          <SuggestedSchedulerRulesCard />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+             <ZohoSetupDiagnosticsPanel currentUser={currentUser} />
+
+             <Card className="border-slate-200 shadow-sm">
+               <CardHeader className="bg-slate-50 border-b border-slate-200">
+                 <CardTitle className="text-sm font-bold uppercase tracking-wider text-slate-900">Global Holidays & Timezones</CardTitle>
+               </CardHeader>
+               <CardContent className="p-6 space-y-4">
+                 <div className="space-y-4">
+                   <div>
+                     <label className="text-xs font-bold text-slate-700 block mb-1">Institution Primary Timezone</label>
+                     <select className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                       <option>Asia/Kolkata (IST)</option>
+                       <option>America/New_York (EST)</option>
+                       <option>Europe/London (GMT)</option>
+                     </select>
                    </div>
-                   <div className="space-y-2">
-                     <div className="flex justify-between items-center text-sm border border-slate-200 p-2 rounded-lg">
-                       <span>Diwali Break</span>
-                       <span className="text-slate-500 text-xs">Nov 10 - Nov 14</span>
+                   <div className="pt-2">
+                     <div className="flex justify-between items-center mb-2">
+                       <span className="text-xs font-bold text-slate-700 block">Upcoming Blocked Dates (Holidays)</span>
+                       <Button variant="ghost" size="sm" className="text-indigo-600 h-6 px-2 text-xs"><Plus className="w-3 h-3 mr-1" /> Add</Button>
                      </div>
-                     <div className="flex justify-between items-center text-sm border border-slate-200 p-2 rounded-lg">
-                       <span>Winter Break</span>
-                       <span className="text-slate-500 text-xs">Dec 24 - Jan 02</span>
+                     <div className="space-y-2">
+                       <div className="flex justify-between items-center text-sm border border-slate-200 p-2 rounded-lg">
+                         <span>Diwali Break</span>
+                         <span className="text-slate-500 text-xs">Nov 10 - Nov 14</span>
+                       </div>
+                       <div className="flex justify-between items-center text-sm border border-slate-200 p-2 rounded-lg">
+                         <span>Winter Break</span>
+                         <span className="text-slate-500 text-xs">Dec 24 - Jan 02</span>
+                       </div>
                      </div>
                    </div>
                  </div>
-               </div>
-             </CardContent>
-           </Card>
+               </CardContent>
+             </Card>
+          </div>
         </div>
       )}
 
@@ -1823,3 +1863,4 @@ export default function TeamSettings() {
     </div>
   );
 }
+

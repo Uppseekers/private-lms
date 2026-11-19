@@ -2,8 +2,9 @@ import React, { useState } from 'react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, ChevronUp, Video, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, SlidersHorizontal, Award, Sparkles, CheckSquare, KeyRound, Send } from 'lucide-react';
+import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, ChevronUp, Video, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, EyeOff, Copy, SlidersHorizontal, Award, Sparkles, CheckSquare, KeyRound, Send } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { normalizeEmail, normalizeEmailKey, toValidDocId } from '@/lib/firebase';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage, DocumentInfo } from '@/types';
 import {
   canStaffAccessAllStudents,
@@ -22,6 +23,16 @@ import CompetencyRadar from '@/pages/student/CompetencyRadar';
 import PortalCredentialsManager from '@/components/PortalCredentialsManager';
 import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
 import BulkCounselorTransferModal from '@/components/BulkCounselorTransferModal';
+import CounsellorAvailabilityEditor from '@/components/CounsellorAvailabilityEditor';
+import StudentAvailabilityEditor from '@/components/StudentAvailabilityEditor';
+import {
+  COUNSELLING_GRADES,
+  buildDefaultStudentAvailability,
+  resolveStudentGrade,
+  summarizeCounsellorHourlyBandwidth,
+  summarizePrimaryAvailability,
+  summarizeStudentAvailability,
+} from '@/lib/counsellorAutoScheduler';
 
 export default function TeamUsers() {
   const {
@@ -35,11 +46,26 @@ export default function TeamUsers() {
     permissionsMatrix,
     provisionPortalUser,
     resetPortalUserPassword,
+    adminStudentPasswords,
   } = useDatabase();
   const isAdmin = isUserAdmin(currentUser);
+  const canViewStaffDirectory = isAdmin || canStaffAccessAllStudents(currentUser, permissionsMatrix);
   const [activeViewTab, setActiveViewTab] = useState<'students' | 'staff'>('students');
   const [searchQuery, setSearchQuery] = useState('');
   const [staffFilter, setStaffFilter] = useState<string>('All');
+  const [revealedTablePwIds, setRevealedTablePwIds] = useState<Record<string, boolean>>({});
+  const [copiedTablePwId, setCopiedTablePwId] = useState<string | null>(null);
+
+  const resolveStudentPortalPassword = (stu: Student): string => {
+    if (!isAdmin) return '';
+    return (
+      adminStudentPasswords[stu.id] ||
+      adminStudentPasswords[toValidDocId(stu.id, 'STU')] ||
+      (stu.email ? adminStudentPasswords[normalizeEmail(stu.email)] : '') ||
+      (stu.email ? adminStudentPasswords[normalizeEmailKey(stu.email)] : '') ||
+      ''
+    );
+  };
   
   // Selection state
   const [selectedStudentIds, setSelectedStudentIds] = useState<string[]>([]);
@@ -55,6 +81,7 @@ export default function TeamUsers() {
   const [drawerInitialTab, setDrawerInitialTab] = useState<string>('Profile Details');
   const [drawerActivityMode, setDrawerActivityMode] = useState<'extended' | 'mini'>('extended');
   const [selectedStaffMember, setSelectedStaffMember] = useState<StaffMember | null>(null);
+  const [staffDrawerInitialTab, setStaffDrawerInitialTab] = useState<'students' | 'availability' | 'tasks' | 'logs'>('students');
   const [userForPasswordChange, setUserForPasswordChange] = useState<TargetUserForPassword | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{
     type: 'student' | 'staff';
@@ -86,6 +113,7 @@ export default function TeamUsers() {
       name: targetName,
       newPassword: cleanPwd,
       userType,
+      studentId: userType === 'student' ? userId : undefined,
     });
   };
 
@@ -278,15 +306,34 @@ export default function TeamUsers() {
               >
                 Students ({filteredStudents.length})
               </button>
-              {isAdmin && (
+              {canViewStaffDirectory && (
                 <button 
                   onClick={() => setActiveViewTab('staff')}
                   className={cn(
-                    "text-xs font-bold px-3 py-1 rounded-md transition-colors",
+                    "text-xs font-bold px-3 py-1 rounded-md transition-colors whitespace-nowrap shrink-0",
                     activeViewTab === 'staff' ? "bg-blue-600 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                   )}
                 >
                   Staff & Mentors ({staff.length})
+                </button>
+              )}
+              {currentUser && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const selfRecord =
+                      staff.find(
+                        (s) =>
+                          s.id === currentUser.id ||
+                          (s.email && currentUser.email && s.email.toLowerCase() === currentUser.email.toLowerCase())
+                      ) || currentUser;
+                    setStaffDrawerInitialTab('availability');
+                    setSelectedStaffMember(selfRecord);
+                  }}
+                  className="text-xs font-semibold px-3 py-1 rounded-md bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition-colors inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>My Primary Availability</span>
                 </button>
               )}
             </div>
@@ -454,15 +501,20 @@ export default function TeamUsers() {
                   <th className="px-4 py-4">ID</th>
                   <th className="px-6 py-4">Student Name</th>
                   <th className="px-6 py-4">Email & Phone</th>
+                  {isAdmin && <th className="px-4 py-4 whitespace-nowrap">Portal Password</th>}
                   <th className="px-6 py-4">Assigned Counselor & Mentors</th>
                   <th className="px-6 py-4">Intake</th>
+                  <th className="px-6 py-4">Student Availability</th>
                   <th className="px-6 py-4">Target Countries</th>
                   <th className="px-6 py-4">Readiness</th>
                   <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
-                {filteredStudents.map(student => (
+                {filteredStudents.map(student => {
+                  const studentPortalPwd = resolveStudentPortalPassword(student);
+                  const isPwdRevealed = Boolean(revealedTablePwIds[student.id]);
+                  return (
                   <tr 
                     key={student.id} 
                     className={cn(
@@ -479,12 +531,87 @@ export default function TeamUsers() {
                         className="rounded border-slate-300 text-blue-600 focus:ring-blue-500 w-4 h-4 cursor-pointer"
                       />
                     </td>
-                    <td className="px-4 py-4 font-mono text-xs text-slate-500">{student.id}</td>
+                    <td className="px-4 py-4 font-mono text-xs text-slate-500 tabular-nums">{student.id}</td>
                     <td className="px-6 py-4 font-bold text-slate-900 group-hover:text-blue-600 transition-colors">{student.name}</td>
                     <td className="px-6 py-4">
                       <p className="text-slate-900 font-medium">{student.email}</p>
-                      <p className="text-xs text-slate-500">{student.phone}</p>
+                      <p className="text-xs text-slate-500 tabular-nums">{student.phone}</p>
                     </td>
+                    {isAdmin && (
+                      <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
+                        {studentPortalPwd ? (
+                          <div className="flex items-center gap-1.5">
+                            <span className="font-mono text-xs text-slate-800 bg-slate-100 border border-slate-200 px-2 py-1 rounded tabular-nums select-all">
+                              {isPwdRevealed ? studentPortalPwd : '••••••••'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setRevealedTablePwIds((prev) => ({
+                                  ...prev,
+                                  [student.id]: !prev[student.id],
+                                }))
+                              }
+                              className="p-1 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded transition-colors"
+                              title={isPwdRevealed ? 'Hide password' : 'Show password'}
+                            >
+                              {isPwdRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard?.writeText(studentPortalPwd).catch(() => {});
+                                setCopiedTablePwId(student.id);
+                                window.setTimeout(() => {
+                                  setCopiedTablePwId((prev) => (prev === student.id ? null : prev));
+                                }, 1600);
+                              }}
+                              className="p-1 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded transition-colors"
+                              title="Copy password"
+                            >
+                              {copiedTablePwId === student.id ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-600" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setUserForPasswordChange({
+                                  id: student.id,
+                                  name: student.name,
+                                  email: student.email,
+                                  role: 'Student',
+                                  type: 'student',
+                                })
+                              }
+                              className="p-1 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded transition-colors"
+                              title="Change student password"
+                            >
+                              <KeyRound className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setUserForPasswordChange({
+                                id: student.id,
+                                name: student.name,
+                                email: student.email,
+                                role: 'Student',
+                                type: 'student',
+                              })
+                            }
+                            className="px-2.5 py-1 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-lg inline-flex items-center gap-1 whitespace-nowrap shrink-0 transition-colors"
+                          >
+                            <KeyRound className="w-3 h-3" />
+                            <span>Set Password</span>
+                          </button>
+                        )}
+                      </td>
+                    )}
                     <td className="px-6 py-4">
                       <div className="text-xs space-y-0.5">
                         <p className="font-semibold text-slate-800">Counselor: <span className="font-normal text-slate-600">{student.counselor || '—'}</span></p>
@@ -497,11 +624,33 @@ export default function TeamUsers() {
                       </div>
                     </td>
                     <td className="px-6 py-4 text-slate-600 font-medium">{student.intake}</td>
+                    <td className="px-6 py-4 text-xs text-slate-600 tabular-nums">
+                      <span className="text-slate-800 font-medium">
+                        {summarizeStudentAvailability(student.studentAvailability)}
+                      </span>
+                      {!student.studentAvailability && (
+                        <span className="text-slate-400 ml-1.5">(Default)</span>
+                      )}
+                    </td>
                     <td className="px-6 py-4 text-slate-600">{(student.countries || []).join(', ')}</td>
                     <td className="px-6 py-4 font-bold">
                       <span className={getReadinessColor(student.readiness)}>{getReadinessIcon(student.readiness)} {student.readiness}%</span>
                     </td>
                     <td className="px-6 py-4 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
+                      <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 font-semibold text-xs inline-flex items-center gap-1 px-2.5 py-1" 
+                        title="Configure Student Availability (Days & Time Slots)"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedStudent(student);
+                          setDrawerInitialTab('Student Availability');
+                        }}
+                      >
+                        <CalendarDays className="w-3.5 h-3.5" />
+                        <span>Availability</span>
+                      </Button>
                       <Button 
                         variant="ghost" 
                         size="sm" 
@@ -572,7 +721,8 @@ export default function TeamUsers() {
                       </Button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             {filteredStudents.length === 0 && (
@@ -583,7 +733,7 @@ export default function TeamUsers() {
       )}
 
       {/* STAFF / TEAM TABLE VIEW */}
-      {isAdmin && activeViewTab === 'staff' && (
+      {canViewStaffDirectory && activeViewTab === 'staff' && (
         <Card className="overflow-hidden border-slate-200 shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm whitespace-nowrap">
@@ -601,6 +751,7 @@ export default function TeamUsers() {
                   <th className="px-6 py-4">Email</th>
                   <th className="px-6 py-4">Role</th>
                   <th className="px-6 py-4">Assigned Scope</th>
+                  <th className="px-6 py-4">Working Days & Bandwidth</th>
                   <th className="px-6 py-4">Status</th>
                   <th className="px-6 py-4 text-right">Actions</th>
                 </tr>
@@ -609,7 +760,10 @@ export default function TeamUsers() {
                 {filteredStaff.map(member => (
                   <tr 
                     key={member.id} 
-                    onClick={() => setSelectedStaffMember(member)}
+                    onClick={() => {
+                      setStaffDrawerInitialTab('students');
+                      setSelectedStaffMember(member);
+                    }}
                     className={cn(
                       "hover:bg-slate-50 transition-colors cursor-pointer group",
                       selectedStaffIds.includes(member.id) && "bg-blue-50/60"
@@ -639,17 +793,26 @@ export default function TeamUsers() {
                         const isGlobalMember = canStaffAccessAllStudents(member, permissionsMatrix);
                         if (isGlobalMember) {
                           return (
-                            <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
+                            <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700 tabular-nums">
                               Global Scope ({students.length} total{directCount > 0 ? ` · ${directCount} direct` : ''})
                             </span>
                           );
                         }
                         return (
-                          <span className="font-semibold text-slate-800">
+                          <span className="font-semibold text-slate-800 tabular-nums">
                             {directCount} Student{directCount !== 1 ? 's' : ''}
                           </span>
                         );
                       })()}
+                    </td>
+                    <td className="px-6 py-4 text-xs text-slate-600 tabular-nums">
+                      <span className="text-slate-800 font-medium">
+                        {summarizePrimaryAvailability(member.primaryAvailability)}
+                      </span>
+                      <span className="mx-1.5 text-slate-300" aria-hidden="true">·</span>
+                      <span className="text-indigo-700 font-semibold">
+                        {summarizeCounsellorHourlyBandwidth(member.primaryAvailability, member.dailyMaxCounsellingHours || 4)}
+                      </span>
                     </td>
                     <td className="px-6 py-4 font-bold text-xs">
                       <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded font-bold uppercase">
@@ -657,7 +820,27 @@ export default function TeamUsers() {
                       </span>
                     </td>
                     <td className="px-6 py-4 text-right space-x-1" onClick={(e) => e.stopPropagation()}>
-                      <Button variant="ghost" size="sm" className="text-blue-600 font-bold" onClick={() => setSelectedStaffMember(member)}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 font-semibold text-xs"
+                        onClick={() => {
+                          setStaffDrawerInitialTab('availability');
+                          setSelectedStaffMember(member);
+                        }}
+                      >
+                        <Clock className="w-3.5 h-3.5 mr-1" />
+                        Availability
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-blue-600 font-bold text-xs"
+                        onClick={() => {
+                          setStaffDrawerInitialTab('students');
+                          setSelectedStaffMember(member);
+                        }}
+                      >
                         View Details
                       </Button>
                       {isAdmin && (
@@ -680,15 +863,17 @@ export default function TeamUsers() {
                           <KeyRound className="w-4 h-4" />
                         </Button>
                       )}
-                      <Button 
-                        variant="ghost" 
-                        size="sm" 
-                        className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2"
-                        title="Delete Staff User"
-                        onClick={(e) => handleDeleteSingleStaff(member.id, e)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
+                      {isAdmin && (
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          className="text-red-500 hover:text-red-700 hover:bg-red-50 p-2"
+                          title="Delete Staff User"
+                          onClick={(e) => handleDeleteSingleStaff(member.id, e)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -707,7 +892,14 @@ export default function TeamUsers() {
           <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm transition-opacity" onClick={() => setSelectedStudent(null)} />
           <div className="relative w-full max-w-4xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
             <StudentDetailDrawer 
-              student={selectedStudent} 
+              student={
+                students.find(
+                  (s) =>
+                    s.id === selectedStudent.id ||
+                    toValidDocId(s.id, 'STU') === toValidDocId(selectedStudent.id, 'STU') ||
+                    (selectedStudent.email && normalizeEmail(s.email) === normalizeEmail(selectedStudent.email))
+                ) || selectedStudent
+              } 
               onClose={() => setSelectedStudent(null)} 
               onUpdate={handleUpdateStudent}
               initialTab={drawerInitialTab}
@@ -718,12 +910,13 @@ export default function TeamUsers() {
       )}
 
       {/* Slide-out Drawer for Staff Details */}
-      {isAdmin && selectedStaffMember && (
+      {selectedStaffMember && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-slate-900/20 backdrop-blur-sm transition-opacity" onClick={() => setSelectedStaffMember(null)} />
           <div className="relative w-full max-w-4xl bg-white h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-300">
             <StaffDetailDrawer 
-              staffMember={selectedStaffMember} 
+              staffMember={selectedStaffMember}
+              initialTab={staffDrawerInitialTab}
               onClose={() => setSelectedStaffMember(null)} 
               onSelectStudent={(stu) => setSelectedStudent(stu)}
             />
@@ -1208,7 +1401,7 @@ function StudentDetailDrawer({
       </div>
 
       <div className="flex border-b border-slate-200 px-6 bg-white shrink-0 overflow-x-auto scrollbar-hide">
-        {['Profile Details', 'Competency Radar', 'Shortlists', 'Document Vault', 'Essays', 'Tasks & Projects', 'Conversations', 'Activity'].map((tab) => (
+        {['Profile Details', 'Student Availability', 'Competency Radar', 'Shortlists', 'Document Vault', 'Essays', 'Tasks & Projects', 'Conversations', 'Activity'].map((tab) => (
           <button
             key={tab}
             onClick={() => {
@@ -1242,6 +1435,20 @@ function StudentDetailDrawer({
         
 {activeTab === 'Profile Details' && (
   <ProfileDetailsView student={student} onUpdate={onUpdate} />
+)}
+
+{activeTab === 'Student Availability' && (
+  <div className="space-y-4">
+    <div>
+      <h3 className="text-sm font-bold text-slate-900">
+        Student Counselling Availability ({student.name})
+      </h3>
+      <p className="text-xs text-slate-500 mt-0.5">
+        Choose available days, select a uniform time slot for all days or custom day-wise timings, and add optional date-specific time slots. Saved directly to the student database and honored by the Capacity Scheduler.
+      </p>
+    </div>
+    <StudentAvailabilityEditor student={student} canEdit={true} />
+  </div>
 )}
 
 {activeTab === 'Competency Radar' && (
@@ -2569,12 +2776,17 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
     ? topUniversities.filter(u => u.toLowerCase().includes(formData.name.toLowerCase()))
     : topUniversities.slice(0, 8);
   
+  const [revisionTargetKey, setRevisionTargetKey] = useState<string | null>(null);
+  const [revisionReasonDraft, setRevisionReasonDraft] = useState(
+    'Please re-upload a clear and signed copy of this document.'
+  );
+
   const handleAdd = () => {
     if (!formData.name.trim()) return;
     
     const newUni: ShortlistUniversity = {
-      id: Math.random().toString(),
-      name: formData.name,
+      id: `uni_${Date.now()}`,
+      name: formData.name.trim(),
       category: formData.category,
       deadline: formData.deadline || 'TBD',
       status: 'Considering',
@@ -2586,15 +2798,15 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
     
     onUpdate({
       ...student,
-      shortlist: [...student.shortlist, newUni],
+      shortlist: [...(student.shortlist || []), newUni],
       activities: [
         {
-          id: Math.random().toString(),
+          id: `act_${Date.now()}`,
           date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
           type: 'UPDATE',
           description: `University added to shortlist: ${newUni.name} (${formData.category})`
         },
-        ...student.activities
+        ...(student.activities || [])
       ]
     });
     
@@ -2610,21 +2822,22 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
     });
   };
 
-  const handleRemove = (id: string) => {
-    const uni = student.shortlist.find(u => u.id === id);
+  const handleRemove = (id?: string, name?: string) => {
+    const list = student.shortlist || [];
+    const uni = list.find((u) => (id && u.id ? u.id === id : u.name === name));
     if (!uni) return;
     
     onUpdate({
       ...student,
-      shortlist: student.shortlist.filter(u => u.id !== id),
+      shortlist: list.filter((u) => (id && u.id ? u.id !== id : u.name !== name)),
       activities: [
         {
-          id: Math.random().toString(),
+          id: `act_${Date.now()}`,
           date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
           type: 'UPDATE',
           description: `University removed from shortlist: ${uni.name}`
         },
-        ...student.activities
+        ...(student.activities || [])
       ]
     });
   };
@@ -2725,13 +2938,18 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
                       <div className="flex items-center justify-end gap-1.5">
                         <button
                           onClick={() => toggleExpand(uni.id)}
-                          className="px-2 py-1 text-[11px] font-semibold text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-1"
+                          className="px-2 py-1 text-[11px] font-semibold text-blue-600 hover:bg-blue-50 rounded-lg transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
                         >
                           <FileText className="w-3 h-3" />
                           <span>Checklist ({requiredDocs.length})</span>
                         </button>
-                        <button onClick={() => handleRemove(uni.id)} className="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition-colors">
+                        <button
+                          onClick={() => handleRemove(uni.id, uni.name)}
+                          className="px-2 py-1 text-[11px] font-semibold text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors flex items-center gap-1 whitespace-nowrap shrink-0"
+                          title="Remove university from shortlist"
+                        >
                           <Trash2 className="w-3.5 h-3.5" />
+                          <span>Remove</span>
                         </button>
                       </div>
                     </td>
@@ -2850,17 +3068,52 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
                                     )}
 
                                     {isUploaded && (
-                                      <button
-                                        onClick={() => {
-                                          const reason = window.prompt('Please enter revision instructions for student:', 'Please re-upload a clear and signed copy of this document.');
-                                          if (reason !== null) {
-                                            handleVerifyAttachedDoc(uni.id, docKey, 'rejected', reason);
-                                          }
-                                        }}
-                                        className="px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 flex items-center gap-1 transition-colors"
-                                      >
-                                        <AlertCircle className="w-3.5 h-3.5" /> Request Revision
-                                      </button>
+                                      revisionTargetKey === `${uni.id}_${docKey}` ? (
+                                        <div className="flex items-center gap-1.5">
+                                          <input
+                                            type="text"
+                                            value={revisionReasonDraft}
+                                            onChange={(e) => setRevisionReasonDraft(e.target.value)}
+                                            placeholder="Enter revision note..."
+                                            className="px-2 py-1 text-xs border border-rose-200 rounded-lg bg-white text-slate-800 w-44 focus:outline-none focus:ring-1 focus:ring-rose-400"
+                                          />
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              handleVerifyAttachedDoc(
+                                                uni.id,
+                                                docKey,
+                                                'rejected',
+                                                revisionReasonDraft.trim() || 'Please re-upload a clear copy.'
+                                              );
+                                              setRevisionTargetKey(null);
+                                            }}
+                                            className="px-2 py-1 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg whitespace-nowrap shrink-0"
+                                          >
+                                            Send
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setRevisionTargetKey(null)}
+                                            className="px-1.5 py-1 text-xs text-slate-500 hover:text-slate-800"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setRevisionReasonDraft(
+                                              uploadedInfo?.notes || 'Please re-upload a clear and signed copy of this document.'
+                                            );
+                                            setRevisionTargetKey(`${uni.id}_${docKey}`);
+                                          }}
+                                          className="px-2.5 py-1 text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 rounded-lg border border-rose-200 flex items-center gap-1 transition-colors whitespace-nowrap shrink-0"
+                                        >
+                                          <AlertCircle className="w-3.5 h-3.5" /> Request Revision
+                                        </button>
+                                      )
                                     )}
 
                                     {!isUploaded && (
@@ -3089,6 +3342,7 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
     email: '',
     phone: '',
     intake: '',
+    grade: '11',
     countries: [],
     school: '',
     counselor: '',
@@ -3098,6 +3352,10 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
     sendInvite: true,
     password: ''
   });
+  const [studentAvailabilityDraft, setStudentAvailabilityDraft] = useState(() =>
+    buildDefaultStudentAvailability()
+  );
+  const [showAvailabilityConfig, setShowAvailabilityConfig] = useState(false);
   
   const [showToast, setShowToast] = useState(false);
 
@@ -3114,6 +3372,8 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
       email: formData.email,
       phone: formData.phone,
       intake: formData.intake,
+      grade: formData.grade,
+      studentAvailability: studentAvailabilityDraft,
       countries: formData.countries,
       school: formData.school,
       counselor: matchedCounselor?.name || formData.counselor,
@@ -3142,6 +3402,7 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
       password: initialPassword,
       role: 'STUDENT',
       userType: 'student',
+      studentId: newStudent.id,
     });
 
     if (formData.sendInvite) {
@@ -3182,7 +3443,19 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
                <label className="block text-sm font-bold text-slate-700 mb-1.5">System Student ID</label>
                <input type="text" disabled value={newId} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm font-mono text-slate-500" />
              </div>
-             <div className="col-span-2">
+             <div className="col-span-2 sm:col-span-1">
+               <label className="block text-sm font-bold text-slate-700 mb-1.5">Current Class / Grade</label>
+               <select
+                 value={formData.grade}
+                 onChange={(e) => setFormData({ ...formData, grade: e.target.value })}
+                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+               >
+                 {COUNSELLING_GRADES.map((g) => (
+                   <option key={g} value={g}>Grade {g}</option>
+                 ))}
+               </select>
+             </div>
+             <div className="col-span-2 sm:col-span-1">
                <label className="block text-sm font-bold text-slate-700 mb-1.5">Password (Optional)</label>
                <input type="text" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Auto-generate if empty" />
              </div>
@@ -3306,6 +3579,36 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
              </div>
            </div>
         </section>
+
+        <section>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                Student Counselling Availability (Optional)
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {summarizeStudentAvailability(studentAvailabilityDraft)}
+              </p>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowAvailabilityConfig((prev) => !prev)}
+              className="text-xs font-semibold h-8 whitespace-nowrap shrink-0"
+            >
+              {showAvailabilityConfig ? 'Hide Availability' : 'Configure Days & Time Slots'}
+            </Button>
+          </div>
+          {showAvailabilityConfig && (
+            <StudentAvailabilityEditor
+              value={studentAvailabilityDraft}
+              onChangeDraft={setStudentAvailabilityDraft}
+              canEdit={true}
+              compact={true}
+            />
+          )}
+        </section>
       </div>
 
       <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 rounded-b-2xl mt-auto">
@@ -3319,6 +3622,8 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
 }
 
 function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
+  const { currentUser } = useDatabase();
+  const canViewStudentLogins = isUserAdmin(currentUser);
   const documents = student.documents || [];
   const credentials = student.credentials || [];
   const [subTab, setSubTab] = useState<'documents' | 'credentials'>('documents');
@@ -3328,18 +3633,18 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
   const handleUpload = () => {
     setIsUploading(true);
     setTimeout(() => {
-      const newDoc = { id: Math.random().toString(), name: 'New_Document_Scanned.pdf', type: 'Other', date: 'Just now', status: 'Pending' as const };
+      const newDoc = { id: `doc_${Date.now()}`, name: 'New_Document_Scanned.pdf', type: 'Other', date: 'Just now', status: 'Pending' as const };
       onUpdate({
         ...student,
         documents: [newDoc, ...documents],
         activities: [
           {
-            id: Math.random().toString(),
+            id: `act_${Date.now()}`,
             date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
             type: 'UPLOAD',
             description: 'New document uploaded: New_Document_Scanned.pdf'
           },
-          ...student.activities
+          ...(student.activities || [])
         ]
       });
       setIsUploading(false);
@@ -3351,7 +3656,11 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Student Vault</h3>
-          <p className="text-xs text-slate-500">Official documents, test reports, and website logins for {student.name}</p>
+          <p className="text-xs text-slate-500">
+            {canViewStudentLogins
+              ? `Official documents, test reports, and external portal logins for ${student.name}`
+              : `Official documents and verified test reports for ${student.name}`}
+          </p>
         </div>
         {subTab === 'documents' && (
           <div className="flex gap-2">
@@ -3362,34 +3671,36 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
         )}
       </div>
 
-      <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/80 w-fit gap-1">
-        <button
-          onClick={() => setSubTab('documents')}
-          className={cn(
-            "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2",
-            subTab === 'documents'
-              ? "bg-white text-slate-900 shadow-xs border border-slate-200/60"
-              : "text-slate-500 hover:text-slate-800"
-          )}
-        >
-          <FileText className="w-3.5 h-3.5 text-blue-600" />
-          <span>Uploaded Documents ({documents.length})</span>
-        </button>
-        <button
-          onClick={() => setSubTab('credentials')}
-          className={cn(
-            "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2",
-            subTab === 'credentials'
-              ? "bg-white text-slate-900 shadow-xs border border-slate-200/60"
-              : "text-slate-500 hover:text-slate-800"
-          )}
-        >
-          <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
-          <span>Website Logins & Passwords ({credentials.length})</span>
-        </button>
-      </div>
+      {canViewStudentLogins && (
+        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/80 w-fit gap-1">
+          <button
+            onClick={() => setSubTab('documents')}
+            className={cn(
+              "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap shrink-0",
+              subTab === 'documents'
+                ? "bg-white text-slate-900 shadow-xs border border-slate-200/60"
+                : "text-slate-500 hover:text-slate-800"
+            )}
+          >
+            <FileText className="w-3.5 h-3.5 text-blue-600" />
+            <span>Uploaded Documents ({documents.length})</span>
+          </button>
+          <button
+            onClick={() => setSubTab('credentials')}
+            className={cn(
+              "px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 whitespace-nowrap shrink-0",
+              subTab === 'credentials'
+                ? "bg-white text-slate-900 shadow-xs border border-slate-200/60"
+                : "text-slate-500 hover:text-slate-800"
+            )}
+          >
+            <KeyRound className="w-3.5 h-3.5 text-indigo-600" />
+            <span>Website Logins & Passwords ({credentials.length})</span>
+          </button>
+        </div>
+      )}
 
-      {subTab === 'credentials' ? (
+      {canViewStudentLogins && subTab === 'credentials' ? (
         <PortalCredentialsManager
           student={student}
           onUpdateCredentials={(newCreds) => onUpdate({ ...student, credentials: newCreds })}
@@ -4214,15 +4525,27 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
 
 
 function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
-  const { currentUser, staff, resetPortalUserPassword } = useDatabase();
+  const { currentUser, staff, resetPortalUserPassword, adminStudentPasswords } = useDatabase();
   const [isEditing, setIsEditing] = useState(false);
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [showPortalPassword, setShowPortalPassword] = useState(false);
+  const [copiedPortalPassword, setCopiedPortalPassword] = useState(false);
+
+  const studentPortalPassword = isUserAdmin(currentUser)
+    ? adminStudentPasswords[student.id] ||
+      adminStudentPasswords[toValidDocId(student.id, 'STU')] ||
+      (student.email ? adminStudentPasswords[normalizeEmail(student.email)] : '') ||
+      (student.email ? adminStudentPasswords[normalizeEmailKey(student.email)] : '') ||
+      ''
+    : '';
   
+  const resolvedGradeInfo = resolveStudentGrade(student);
   const [formData, setFormData] = useState({
     name: student.name,
     email: student.email,
     phone: student.phone,
     school: student.school,
+    grade: student.grade || resolvedGradeInfo.grade,
     intake: student.intake,
     countries: student.countries.join(', '),
     counselor: student.counselor || '',
@@ -4271,6 +4594,7 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
       email: formData.email,
       phone: formData.phone,
       school: formData.school,
+      grade: formData.grade,
       intake: formData.intake,
       countries: formData.countries.split(',').map(s => s.trim()).filter(Boolean),
       counselor: matchedCounselor?.name || formData.counselor,
@@ -4338,14 +4662,24 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
               )}
             </div>
             <div>
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Target Strategy</p>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Target Strategy & Grade</p>
               {isEditing ? (
                 <div className="space-y-2">
+                  <select
+                    className="w-full border rounded p-2 text-sm bg-white"
+                    value={formData.grade}
+                    onChange={(e) => setFormData({ ...formData, grade: e.target.value })}
+                  >
+                    {COUNSELLING_GRADES.map((g) => (
+                      <option key={g} value={g}>Grade {g}</option>
+                    ))}
+                  </select>
                   <input className="w-full border rounded p-2 text-sm" placeholder="Intake (e.g. Fall 2026)" value={formData.intake} onChange={e => setFormData({...formData, intake: e.target.value})} />
                   <input className="w-full border rounded p-2 text-sm" placeholder="Countries (comma separated)" value={formData.countries} onChange={e => setFormData({...formData, countries: e.target.value})} />
                 </div>
               ) : (
                 <>
+                  <p className="text-sm font-medium text-slate-900">Class: Grade {student.grade || resolvedGradeInfo.grade}</p>
                   <p className="text-sm font-medium text-slate-900">Intake: {student.intake}</p>
                   <p className="text-sm font-medium text-slate-900">Countries: {student.countries.join(', ')}</p>
                 </>
@@ -4380,18 +4714,18 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
             </div>
             {isUserAdmin(currentUser) && (
               <div className="col-span-2 p-4 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Shield className="w-4 h-4 text-amber-600" />
-                    <span className="text-xs font-bold text-amber-900 uppercase tracking-wider">Admin Security & Credentials</span>
-                    <span className="text-[10px] bg-amber-200/60 text-amber-800 font-bold px-2 py-0.5 rounded-full">Admin Only</span>
+                    <span className="text-xs font-bold text-amber-900">Admin Security & Student Portal Credentials</span>
+                    <span className="text-xs text-amber-700">· Visible only to System Admin</span>
                   </div>
                   <Button
                     size="sm"
                     variant="outline"
                     type="button"
                     onClick={() => setIsChangePasswordOpen(true)}
-                    className="text-xs font-bold border-amber-300 bg-white text-amber-900 hover:bg-amber-100 flex items-center gap-1.5 shadow-2xs h-7 px-2.5"
+                    className="text-xs font-bold border-amber-300 bg-white text-amber-900 hover:bg-amber-100 flex items-center gap-1.5 shadow-2xs h-7 px-2.5 whitespace-nowrap shrink-0"
                   >
                     <KeyRound className="w-3.5 h-3.5 text-amber-600" /> Change Password
                   </Button>
@@ -4401,11 +4735,47 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                     <span className="text-slate-400 font-bold block text-[10px] uppercase">Portal Login Email</span>
                     <span className="text-slate-800 font-mono font-bold truncate block">{student.email}</span>
                   </div>
-                  <div className="bg-white p-2.5 rounded-lg border border-amber-200/80 flex items-center justify-between">
-                    <div>
-                      <span className="text-slate-400 font-bold block text-[10px] uppercase">Authentication Provider</span>
-                      <span className="text-slate-800 font-semibold">Managed via Firebase Auth (encrypted)</span>
+                  <div className="bg-white p-2.5 rounded-lg border border-amber-200/80 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="text-slate-400 font-bold block text-[10px] uppercase">Student Portal Password</span>
+                      {studentPortalPassword ? (
+                        <span className="text-slate-900 font-mono font-bold tabular-nums select-all block truncate">
+                          {showPortalPassword ? studentPortalPassword : '••••••••••••'}
+                        </span>
+                      ) : (
+                        <span className="text-slate-500 italic block">
+                          Not recorded yet — click Change Password to set
+                        </span>
+                      )}
                     </div>
+                    {studentPortalPassword && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setShowPortalPassword((prev) => !prev)}
+                          className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
+                          title={showPortalPassword ? 'Hide password' : 'Show password'}
+                        >
+                          {showPortalPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            navigator.clipboard?.writeText(studentPortalPassword).catch(() => {});
+                            setCopiedPortalPassword(true);
+                            window.setTimeout(() => setCopiedPortalPassword(false), 1600);
+                          }}
+                          className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                          title="Copy password"
+                        >
+                          {copiedPortalPassword ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -4727,6 +5097,7 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
               name: student.name,
               newPassword: newPassword.trim(),
               userType: 'student',
+              studentId: student.id,
             });
           }}
           onSendResetEmail={async (em) => {
@@ -4734,6 +5105,7 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
               email: em,
               name: student.name,
               userType: 'student',
+              studentId: student.id,
             });
           }}
         />
@@ -4745,15 +5117,17 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
 /* Slide-out Drawer Component for Individual Staff Member Details */
 function StaffDetailDrawer({ 
   staffMember, 
+  initialTab = 'students',
   onClose, 
   onSelectStudent 
 }: { 
   staffMember: StaffMember; 
+  initialTab?: 'students' | 'availability' | 'tasks' | 'logs';
   onClose: () => void; 
   onSelectStudent?: (student: Student) => void;
 }) {
   const { students, setStudents, events, batches, updateStudent, permissionsMatrix, currentUser, staff, setStaff, resetPortalUserPassword, resyncPortalAccess } = useDatabase();
-  const [activeTab, setActiveTab] = useState<'students' | 'tasks' | 'logs'>('students');
+  const [activeTab, setActiveTab] = useState<'students' | 'availability' | 'tasks' | 'logs'>(initialTab);
   const [logSearchQuery, setLogSearchQuery] = useState('');
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isManageStudentsOpen, setIsManageStudentsOpen] = useState(false);
@@ -4761,6 +5135,15 @@ function StaffDetailDrawer({
   const [manageSearchQuery, setManageSearchQuery] = useState('');
   const [manageFilterMode, setManageFilterMode] = useState<'all' | 'assigned' | 'unassigned' | 'activity'>('all');
   const canManageRoster = isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix);
+  const canEditAvailability = isUserAdmin(currentUser);
+  const liveStaffMember = React.useMemo(
+    () => staff.find((s) => s.id === staffMember.id) || staffMember,
+    [staff, staffMember]
+  );
+
+  React.useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab, staffMember.id]);
 
   const directAssignedStudents = React.useMemo(() => {
     return getDirectAssignedStudentsForStaff(students, staffMember, batches);
@@ -5081,20 +5464,29 @@ function StaffDetailDrawer({
       </div>
 
       {/* Navigation Tabs */}
-      <div className="border-b border-slate-200 bg-white px-6 flex items-center gap-6 shrink-0">
+      <div className="border-b border-slate-200 bg-white px-6 flex items-center gap-6 overflow-x-auto shrink-0">
         <button
           onClick={() => setActiveTab('students')}
           className={cn(
-            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors",
+            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0",
             activeTab === 'students' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
           )}
         >
           <UsersIcon className="w-4 h-4" /> Assigned Students ({assignedStudents.length})
         </button>
         <button
+          onClick={() => setActiveTab('availability')}
+          className={cn(
+            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0",
+            activeTab === 'availability' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
+          )}
+        >
+          <Clock className="w-4 h-4" /> Primary Availability
+        </button>
+        <button
           onClick={() => setActiveTab('tasks')}
           className={cn(
-            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors",
+            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0",
             activeTab === 'tasks' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
           )}
         >
@@ -5103,7 +5495,7 @@ function StaffDetailDrawer({
         <button
           onClick={() => setActiveTab('logs')}
           className={cn(
-            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors",
+            "py-3.5 text-xs font-bold border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap shrink-0",
             activeTab === 'logs' ? "border-indigo-600 text-indigo-600" : "border-transparent text-slate-500 hover:text-slate-800"
           )}
         >
@@ -5113,7 +5505,13 @@ function StaffDetailDrawer({
 
       {/* Drawer Content */}
       <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
-        
+        {activeTab === 'availability' && (
+          <CounsellorAvailabilityEditor
+            staffMember={liveStaffMember}
+            canEdit={canEditAvailability}
+          />
+        )}
+
         {/* TAB 1: Assigned Students */}
         {activeTab === 'students' && (
           <div className="space-y-4">
