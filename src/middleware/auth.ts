@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { DecodedIdToken } from 'firebase-admin/auth';
-import { adminAuth, firebaseWebApiKey } from '../lib/firebase-admin';
+import { adminAuth, firebaseWebApiKey } from '../lib/firebase-admin.js';
 
 export interface AuthRequest extends Request {
   user?: Partial<DecodedIdToken> & {

@@ -1,6 +1,7 @@
-import { Pool } from "pg";
+import pg from "pg";
 import { eq } from "drizzle-orm";
-import { db, createPool } from "./index";
+const { Pool } = pg;
+import { db, createPool } from "./index.js";
 import {
   users,
   studentsData,
@@ -9,12 +10,12 @@ import {
   launchpadSubjects,
   launchpadChapters,
   launchpadCertificationQuestions,
-} from "./schema";
+} from "./schema.js";
 import {
   buildDefaultLaunchpadSubjects,
   buildDefaultLaunchpadChapters,
   buildDefaultCertQuestions,
-} from "../data/launchpadData";
+} from "../data/launchpadData.js";
 
 export const SYS_KV_PREFIX = "__SYS_KV__";
 
@@ -312,7 +313,7 @@ async function runIdempotentMigrationsIfNeeded(): Promise<void> {
   if (!needsMigration) return;
 
   const hasAdminCreds = Boolean(process.env.SQL_ADMIN_USER && process.env.SQL_ADMIN_PASSWORD);
-  let migrationPool: Pool | null = null;
+  let migrationPool: InstanceType<typeof Pool> | null = null;
   let shouldEndPool = false;
 
   try {

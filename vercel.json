@@ -28,6 +28,9 @@
     },
     {
       "src": "/(.*)",
+      "headers": {
+        "Cache-Control": "no-store, no-cache, must-revalidate"
+      },
       "dest": "/index.html"
     }
   ]

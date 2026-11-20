@@ -5,9 +5,9 @@ import path from "path";
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 import crypto from "crypto";
-import { requireAuth, AuthRequest } from "./src/middleware/auth";
-import { adminAuth, adminDb, hasAdminServiceAccount, firebaseWebApiKey, firebaseAppletConfig } from "./src/lib/firebase-admin";
-import { db, createPool } from "./src/db/index";
+import { requireAuth, AuthRequest } from "./src/middleware/auth.js";
+import { adminAuth, adminDb, hasAdminServiceAccount, firebaseWebApiKey, firebaseAppletConfig } from "./src/lib/firebase-admin.js";
+import { db, createPool } from "./src/db/index.js";
 import {
   users,
   studentsData,
@@ -26,13 +26,13 @@ import {
   assignmentEvaluations,
   zohoConnections,
   portalSettings
-} from "./src/db/schema";
+} from "./src/db/schema.js";
 import { eq, or, asc, desc, sql } from "drizzle-orm";
 import {
   buildDefaultLaunchpadSubjects,
   buildDefaultLaunchpadChapters,
   buildDefaultCertQuestions,
-} from "./src/data/launchpadData";
+} from "./src/data/launchpadData.js";
 import {
   ensureProductionReady,
   hasSqlEnv,
@@ -42,7 +42,7 @@ import {
   sysKvSet,
   mergeRecordsById,
   isSysKvUid,
-} from "./src/db/productionVault";
+} from "./src/db/productionVault.js";
 
 interface PasswordResetItem {
   token: string;
@@ -2057,43 +2057,58 @@ function createExpressApp(options?: {
       ];
 
       if (accessToken) {
-        const { google } = await import("googleapis");
-        const auth = new google.auth.OAuth2();
-        auth.setCredentials({ access_token: accessToken });
-        const sheets = google.sheets({ version: "v4", auth });
-
         let currentSheetId = spreadsheetId;
 
         if (!currentSheetId) {
-          const newSheet = await sheets.spreadsheets.create({
-            requestBody: {
+          const createRes = await fetch("https://sheets.googleapis.com/v4/spreadsheets", {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
               properties: {
-                title: "Uppseekers Portal Database - Realtime Backup & Live Sync"
+                title: "Uppseekers Portal Database - Realtime Backup & Live Sync",
               },
               sheets: [
                 { properties: { title: "Students" } },
                 { properties: { title: "Tasks" } },
                 { properties: { title: "Meetings" } },
                 { properties: { title: "Staff" } },
-              ]
-            }
+              ],
+            }),
           });
-          currentSheetId = newSheet.data.spreadsheetId || undefined;
+          const newSheet: any = await createRes.json().catch(() => ({}));
+          if (!createRes.ok) {
+            throw new Error(newSheet?.error?.message || `Google Sheets create failed (HTTP ${createRes.status})`);
+          }
+          currentSheetId = newSheet?.spreadsheetId || undefined;
         }
 
         if (currentSheetId) {
-          await sheets.spreadsheets.values.batchUpdate({
-            spreadsheetId: currentSheetId,
-            requestBody: {
-              valueInputOption: "USER_ENTERED",
-              data: [
-                { range: "Students!A1", values: studentRows },
-                { range: "Tasks!A1", values: taskRows },
-                { range: "Meetings!A1", values: eventRows },
-                { range: "Staff!A1", values: staffRows },
-              ]
+          const batchRes = await fetch(
+            `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(currentSheetId)}/values:batchUpdate`,
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                valueInputOption: "USER_ENTERED",
+                data: [
+                  { range: "Students!A1", values: studentRows },
+                  { range: "Tasks!A1", values: taskRows },
+                  { range: "Meetings!A1", values: eventRows },
+                  { range: "Staff!A1", values: staffRows },
+                ],
+              }),
             }
-          });
+          );
+          if (!batchRes.ok) {
+            const batchErr: any = await batchRes.json().catch(() => ({}));
+            throw new Error(batchErr?.error?.message || `Google Sheets batchUpdate failed (HTTP ${batchRes.status})`);
+          }
 
           return res.json({
             success: true,
@@ -4397,6 +4412,8 @@ Preserve the author's exact wording wherever present in the document. If a list 
       if (
         hostname.endsWith('.run.app') ||
         hostname.endsWith('.vercel.app') ||
+        hostname === 'uppseekers.com' ||
+        hostname.endsWith('.uppseekers.com') ||
         hostname === 'localhost' ||
         hostname === '127.0.0.1' ||
         (reqHost && host === reqHost.toLowerCase())
@@ -6016,10 +6033,11 @@ Preserve the author's exact wording wherever present in the document. If a list 
 async function startLocalServer() {
   const SERVER_INSTANCE_ID = crypto.randomUUID();
   const PORT = Number(process.env.PORT) || 3000;
-  const { WebSocketServer, WebSocket } = await import("ws");
+  const wsModuleName = "ws";
+  const { WebSocketServer, WebSocket } = await import(wsModuleName);
 
-  type AliveWebSocket = InstanceType<typeof WebSocket> & { isAlive?: boolean };
-  let wss: InstanceType<typeof WebSocketServer> | null = null;
+  type AliveWebSocket = any;
+  let wss: any = null;
 
   const sendToLocalWsClients = (serializedPayload: string) => {
     if (!wss) return;
@@ -6194,7 +6212,8 @@ async function startLocalServer() {
 
   // Vite middleware for local development only (never loaded on Vercel serverless)
   if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
+    const viteModuleName = "vite";
+    const { createServer: createViteServer } = await import(viteModuleName);
     const vite = await createViteServer({
       server: {
         middlewareMode: true,

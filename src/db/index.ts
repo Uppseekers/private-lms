@@ -1,9 +1,12 @@
 import { drizzle, NodePgDatabase } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
-import * as schema from './schema';
+import pg from 'pg';
+import * as schema from './schema.js';
+
+const { Pool } = pg;
+type PgPool = InstanceType<typeof Pool>;
 
 declare global {
-  var _postgresPool: Pool | undefined;
+  var _postgresPool: PgPool | undefined;
   var _drizzleDb: NodePgDatabase<typeof schema> | undefined;
 }
 
@@ -11,7 +14,7 @@ export function isSqlConfigured(): boolean {
   return Boolean(process.env.SQL_HOST && process.env.SQL_DB_NAME && process.env.SQL_USER);
 }
 
-export const createPool = (): Pool => {
+export const createPool = (): PgPool => {
   if (!global._postgresPool) {
     const isServerless = Boolean(process.env.VERCEL);
     global._postgresPool = new Pool({

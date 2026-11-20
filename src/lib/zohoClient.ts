@@ -713,6 +713,8 @@ export function isTrustedZohoPostMessageOrigin(origin: string): boolean {
     origin === window.location.origin ||
     origin.endsWith('.run.app') ||
     origin.endsWith('.vercel.app') ||
+    origin === 'https://uppseekers.com' ||
+    origin.endsWith('.uppseekers.com') ||
     origin.startsWith('http://localhost') ||
     origin.startsWith('https://localhost')
   );
