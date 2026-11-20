@@ -51,8 +51,9 @@ import {
 import {
   onAuthStateChanged,
   signOut,
+  signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  sendPasswordResetEmail,
+  updatePassword,
   updateProfile,
   User,
 } from 'firebase/auth';
@@ -411,13 +412,13 @@ function stripPasswordField<T extends Record<string, any>>(record: T): T {
 export interface ProvisionUserResult {
   ok: boolean;
   uid?: string;
-  method?: 'admin_sdk' | 'client_provisioner' | 'reset_email';
+  method?: 'admin_sdk' | 'client_provisioner';
   error?: string;
 }
 
 export interface PasswordResetResult {
   ok: boolean;
-  mode?: 'direct' | 'reset_email';
+  mode?: 'direct';
   error?: string;
 }
 
@@ -1135,32 +1136,68 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     void testFirestoreConnection();
   }, []);
 
+  const clearBrowserSessionCache = () => {
+    try {
+      if (typeof window !== 'undefined') {
+        window.sessionStorage?.clear();
+        if (window.localStorage) {
+          const keysToRemove: string[] = [];
+          for (let i = 0; i < window.localStorage.length; i++) {
+            const k = window.localStorage.key(i);
+            if (!k) continue;
+            // Preserve only non-identity Zoho diagnostic trace log
+            if (k === 'uppseekers_zoho_diagnostic_trace_v1') continue;
+            keysToRemove.push(k);
+          }
+          keysToRemove.forEach((k) => window.localStorage.removeItem(k));
+        }
+      }
+    } catch {
+      // Non-fatal storage cleanup
+    }
+  };
+
+  const resetAllPortalState = () => {
+    setIsAuthenticatedState(false);
+    setCurrentUserState(null);
+    setStudentsState([]);
+    setStaffState([]);
+    setBatchesState([]);
+    setEventsState([]);
+    setConversationsState([]);
+    setLaunchpadEnrollmentsState([]);
+    setLaunchpadSubjectReleasesState([]);
+    setLaunchpadProgressState([]);
+    setLaunchpadCertificationsState([]);
+    setLaunchpadEvaluationsState([]);
+    setAppNotificationsState([]);
+    setLaunchpadPermissionsState([]);
+    setAdminStudentPasswords({});
+    setFirestoreStatus('idle');
+  };
+
   // Resolve verified Firebase user into Staff or Student profile from Firestore
   useEffect(() => {
     let cancelled = false;
+    let lastResolvedUid: string | null = null;
     const unsubAuth = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
 
       if (!user || !normalizeEmail(user.email)) {
+        lastResolvedUid = null;
         if (!cancelled) {
-          setIsAuthenticatedState(false);
-          setCurrentUserState(null);
-          setStudentsState([]);
-          setStaffState([]);
-          setBatchesState([]);
-          setEventsState([]);
-          setConversationsState([]);
-          setLaunchpadEnrollmentsState([]);
-          setLaunchpadSubjectReleasesState([]);
-          setLaunchpadProgressState([]);
-          setLaunchpadCertificationsState([]);
-          setLaunchpadEvaluationsState([]);
-          setAppNotificationsState([]);
-          setLaunchpadPermissionsState([]);
-          setFirestoreStatus('idle');
+          resetAllPortalState();
           setIsFirebaseAuthReady(true);
         }
         return;
+      }
+
+      // Immediately isolate session whenever the authenticated Firebase UID changes
+      if (lastResolvedUid !== user.uid) {
+        lastResolvedUid = user.uid;
+        if (!cancelled) {
+          resetAllPortalState();
+        }
       }
 
       const authEmail = normalizeEmail(user.email);
@@ -1875,10 +1912,11 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       )
     );
 
-    // Admin-only student portal credentials listener & server vault hydration
-    const isStrictAdmin = isBootAdmin || isUserAdmin(currentUser);
+    // Admin & Category Manager student portal credentials listener & server vault hydration
+    const canViewStudentCredentials =
+      isBootAdmin || isUserAdmin(currentUser) || hasGlobalPortalAccess;
     let cancelledAdminVaultSync = false;
-    if (isStrictAdmin) {
+    if (canViewStudentCredentials) {
       unsubs.push(
         onSnapshot(
           collection(db, 'admin_student_credentials'),
@@ -1985,20 +2023,6 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     hasGlobalPortalAccess,
   ]);
 
-  const sendPortalPasswordResetEmail = async (cleanEmail: string) => {
-    try {
-      await sendPasswordResetEmail(auth, cleanEmail, {
-        url: `${window.location.origin}/login`,
-      });
-    } catch (err: any) {
-      if (err?.code === 'auth/unauthorized-continue-uri' || err?.code === 'auth/invalid-continue-uri') {
-        await sendPasswordResetEmail(auth, cleanEmail);
-      } else {
-        throw err;
-      }
-    }
-  };
-
   const saveAdminStudentPassword = async ({
     studentId,
     email,
@@ -2015,8 +2039,11 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     if (!cleanEmail || !cleanPassword) return;
 
     const callerEmail = normalizeEmail(auth.currentUser?.email || currentUser?.email);
-    const callerIsAdmin = callerEmail === BOOTSTRAP_ADMIN_EMAIL || isUserAdmin(currentUser);
-    if (!callerIsAdmin) return;
+    const callerCanManage =
+      callerEmail === BOOTSTRAP_ADMIN_EMAIL ||
+      isUserAdmin(currentUser) ||
+      canStaffAccessAllStudents(currentUser, permissionsMatrixState);
+    if (!callerCanManage) return;
 
     const emailKey = normalizeEmailKey(cleanEmail);
     const matchedStu = students.find(
@@ -2052,7 +2079,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  // Provision Firebase Email/Password user when Admin creates Student or Staff
+  // Provision Firebase Email/Password user when Admin or Category Manager creates Student or Staff (ZERO emails)
   const provisionPortalUser = async ({
     name,
     email,
@@ -2072,14 +2099,11 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     if (!cleanEmail) return { ok: false, error: 'Email is required.' };
     if (cleanPwd.length < 6) return { ok: false, error: 'Password must be at least 6 characters.' };
 
-    if (userType === 'student') {
-      void saveAdminStudentPassword({
-        studentId,
-        email: cleanEmail,
-        name,
-        password: cleanPwd,
-      });
-    }
+    const knownPrevPassword =
+      adminStudentPasswords[cleanEmail] ||
+      adminStudentPasswords[normalizeEmailKey(cleanEmail)] ||
+      (studentId ? adminStudentPasswords[studentId] : undefined) ||
+      '';
 
     try {
       const idToken = await getFirebaseIdToken();
@@ -2090,10 +2114,24 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${idToken}`,
           },
-          body: JSON.stringify({ email: cleanEmail, name, password: cleanPwd, userType }),
+          body: JSON.stringify({
+            email: cleanEmail,
+            name,
+            password: cleanPwd,
+            userType,
+            previousPassword: knownPrevPassword || undefined,
+          }),
         });
         const json = await res.json().catch(() => null);
         if (res.ok && json?.ok) {
+          if (userType === 'student') {
+            await saveAdminStudentPassword({
+              studentId,
+              email: cleanEmail,
+              name,
+              password: cleanPwd,
+            });
+          }
           return { ok: true, uid: json.uid, method: 'admin_sdk' };
         }
         if (json && !json.fallbackToClient && res.status >= 400) {
@@ -2104,7 +2142,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       // Fall through to client provisioner
     }
 
-    // Fallback: Secondary in-memory Firebase Auth provisioner (never signs out current admin)
+    // Fallback: Secondary in-memory Firebase Auth provisioner (never signs out current admin, never sends email)
     try {
       const provAuth = getProvisionerAuth();
       const cred = await createUserWithEmailAndPassword(provAuth, cleanEmail, cleanPwd);
@@ -2112,21 +2150,54 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         await updateProfile(cred.user, { displayName: name }).catch(() => {});
       }
       await signOut(provAuth).catch(() => {});
+      if (userType === 'student') {
+        await saveAdminStudentPassword({
+          studentId,
+          email: cleanEmail,
+          name,
+          password: cleanPwd,
+        });
+      }
       return { ok: true, uid: cred.user.uid, method: 'client_provisioner' };
     } catch (err: any) {
       if (err?.code === 'auth/email-already-in-use') {
-        try {
-          await sendPortalPasswordResetEmail(cleanEmail);
-          return { ok: true, method: 'reset_email' };
-        } catch (resetErr: any) {
-          return { ok: false, error: resetErr?.message || 'Account already exists in Firebase Auth.' };
+        // Account already exists in Firebase Auth (e.g. recreated student) — try direct password sync with known password, NEVER send email
+        const provAuth = getProvisionerAuth();
+        for (const tryPwd of [knownPrevPassword, cleanPwd].filter(Boolean)) {
+          try {
+            const existingCred = await signInWithEmailAndPassword(provAuth, cleanEmail, tryPwd);
+            if (tryPwd !== cleanPwd) {
+              await updatePassword(existingCred.user, cleanPwd);
+            }
+            if (name) {
+              await updateProfile(existingCred.user, { displayName: name }).catch(() => {});
+            }
+            await signOut(provAuth).catch(() => {});
+            if (userType === 'student') {
+              await saveAdminStudentPassword({
+                studentId,
+                email: cleanEmail,
+                name,
+                password: cleanPwd,
+              });
+            }
+            return { ok: true, uid: existingCred.user.uid, method: 'client_provisioner' };
+          } catch {
+            // Try next candidate
+          }
         }
+        await signOut(provAuth).catch(() => {});
+        return {
+          ok: true,
+          method: 'client_provisioner',
+          error: 'Account already exists in Firebase Auth. Profile saved without sending any automated email.',
+        };
       }
       return { ok: false, error: err?.message || 'Failed to provision Firebase Auth account.' };
     }
   };
 
-  // Admin password reset via Admin SDK, client provisioner for new Auth accounts, or Firebase Reset Email
+  // Direct Admin / Category Manager password reset (Zero Emails, Strict Firebase Auth Sync)
   const resetPortalUserPassword = async ({
     email,
     name,
@@ -2144,51 +2215,59 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     if (!cleanEmail) return { ok: false, error: 'Email address is required.' };
 
     const cleanPwd = (newPassword || '').trim();
-    if (cleanPwd.length >= 6) {
-      try {
-        const idToken = await getFirebaseIdToken();
-        if (idToken) {
-          const res = await fetch('/api/firebase-admin/change-password', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              Authorization: `Bearer ${idToken}`,
-            },
-            body: JSON.stringify({
+    if (cleanPwd.length < 6) {
+      return { ok: false, error: 'Password must be at least 6 characters.' };
+    }
+
+    const knownPrevPassword =
+      adminStudentPasswords[cleanEmail] ||
+      adminStudentPasswords[normalizeEmailKey(cleanEmail)] ||
+      (studentId ? adminStudentPasswords[studentId] : undefined) ||
+      '';
+
+    try {
+      const idToken = await getFirebaseIdToken();
+      if (idToken) {
+        const res = await fetch('/api/firebase-admin/change-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            email: cleanEmail,
+            name,
+            newPassword: cleanPwd,
+            userType: userType || 'student',
+            previousPassword: knownPrevPassword || undefined,
+          }),
+        });
+        const json = await res.json().catch(() => null);
+        if (res.ok && json?.ok) {
+          if (userType !== 'staff') {
+            await saveAdminStudentPassword({
+              studentId,
               email: cleanEmail,
               name,
-              newPassword: cleanPwd,
-              userType,
-            }),
-          });
-          const json = await res.json().catch(() => null);
-          if (res.ok && json?.ok) {
-            if (userType !== 'staff') {
-              await saveAdminStudentPassword({
-                studentId,
-                email: cleanEmail,
-                name,
-                password: cleanPwd,
-              });
-            }
-            return { ok: true, mode: 'direct' };
+              password: cleanPwd,
+            });
           }
-          if (json && !json.fallbackToClient && res.status >= 400) {
-            return { ok: false, error: json.error || 'Failed to update password in Firebase Auth.' };
-          }
+          return { ok: true, mode: 'direct' };
         }
-      } catch {
-        // Fall through to secondary client provisioner / reset email
+        if (json && !json.fallbackToClient && res.status >= 400) {
+          return { ok: false, error: json.error || 'Failed to update password in Firebase Auth.' };
+        }
       }
+    } catch {
+      // Fall through to secondary client provisioner
+    }
 
-      // If FIREBASE_SERVICE_ACCOUNT_JSON is not set and the user does not have a Firebase Auth account yet,
-      // create their Firebase Auth account right now with the admin-specified password.
+    // Secondary in-memory Firebase Auth fallback (updates existing account if old password known, or creates new account — NEVER sends emails)
+    const provAuth = getProvisionerAuth();
+    if (knownPrevPassword) {
       try {
-        const provAuth = getProvisionerAuth();
-        const cred = await createUserWithEmailAndPassword(provAuth, cleanEmail, cleanPwd);
-        if (name) {
-          await updateProfile(cred.user, { displayName: name }).catch(() => {});
-        }
+        const existingCred = await signInWithEmailAndPassword(provAuth, cleanEmail, knownPrevPassword);
+        await updatePassword(existingCred.user, cleanPwd);
         await signOut(provAuth).catch(() => {});
         if (userType !== 'staff') {
           await saveAdminStudentPassword({
@@ -2199,29 +2278,44 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
           });
         }
         return { ok: true, mode: 'direct' };
-      } catch (provErr: any) {
-        if (provErr?.code !== 'auth/email-already-in-use') {
-          return { ok: false, error: provErr?.message || 'Failed to update password in Firebase Auth.' };
-        }
+      } catch {
+        await signOut(provAuth).catch(() => {});
       }
     }
 
     try {
-      await sendPortalPasswordResetEmail(cleanEmail);
-      return { ok: true, mode: 'reset_email' };
-    } catch (err: any) {
-      return { ok: false, error: err?.message || 'Failed to send Firebase password reset email.' };
+      const cred = await createUserWithEmailAndPassword(provAuth, cleanEmail, cleanPwd);
+      if (name) {
+        await updateProfile(cred.user, { displayName: name }).catch(() => {});
+      }
+      await signOut(provAuth).catch(() => {});
+      if (userType !== 'staff') {
+        await saveAdminStudentPassword({
+          studentId,
+          email: cleanEmail,
+          name,
+          password: cleanPwd,
+        });
+      }
+      return { ok: true, mode: 'direct' };
+    } catch (provErr: any) {
+      if (provErr?.code === 'auth/email-already-in-use') {
+        return {
+          ok: false,
+          error:
+            'Could not sync the new password into Firebase Auth because this account already has a different password in Firebase Auth and server Admin credentials are not configured.',
+        };
+      }
+      return { ok: false, error: provErr?.message || 'Failed to update password in Firebase Auth.' };
     }
   };
 
   const signOutAll = async (): Promise<void> => {
     autoRepairedSessionRef.current = null;
     counselorRepairedIdsRef.current.clear();
+    clearBrowserSessionCache();
+    resetAllPortalState();
     await signOut(auth).catch(() => {});
-    setAdminStudentPasswords({});
-    setIsAuthenticatedState(false);
-    setCurrentUserState(null);
-    setFirestoreStatus('idle');
   };
 
   const sameStringArray = (a?: unknown, b?: string[]) => {
@@ -2830,6 +2924,8 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     out.email = cleanEmail.slice(0, 200);
 
     // Resolve and persist canonical counselor foreign key (counselorId + counselorEmail + counselor name)
+    // CRITICAL: When `counselor` is explicitly provided, resolve by `counselor` FIRST so changing
+    // a student's counselor (e.g. from Manika to Raj Bane) is NEVER reverted by stale counselorId/counselorEmail!
     const rawCounselorTrimmed = typeof cleaned.counselor === 'string' ? cleaned.counselor.trim() : '';
     if (!rawCounselorTrimmed || rawCounselorTrimmed.toLowerCase() === 'unassigned') {
       if (typeof cleaned.counselor === 'string') {
@@ -2838,11 +2934,32 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       delete out.counselorId;
       delete out.counselorEmail;
     } else {
-      const matchedCounselor = resolveCounselorForStudent(raw, staffList);
+      const matchedByExplicitName =
+        staffList.find(
+          (st) =>
+            doesValueMatchStaffMember(rawCounselorTrimmed, st) ||
+            String(st.id || '').trim() === rawCounselorTrimmed ||
+            normalizeEmail(st.email) === normalizeEmail(rawCounselorTrimmed)
+        ) || null;
+      const matchedCounselor = matchedByExplicitName || resolveCounselorForStudent(
+        { counselor: rawCounselorTrimmed },
+        staffList
+      );
       if (matchedCounselor) {
         out.counselor = String(matchedCounselor.name || rawCounselorTrimmed).trim().slice(0, 160);
         if (matchedCounselor.id) out.counselorId = String(matchedCounselor.id).trim().slice(0, 128);
+        else delete out.counselorId;
         if (matchedCounselor.email) out.counselorEmail = normalizeEmail(matchedCounselor.email).slice(0, 200);
+        else delete out.counselorEmail;
+      } else {
+        out.counselor = rawCounselorTrimmed.slice(0, 160);
+        // Clear stale foreign keys if they don't match the newly entered counselor name
+        if (out.counselorId && !staffList.some((st) => st.id === out.counselorId && doesValueMatchStaffMember(rawCounselorTrimmed, st))) {
+          delete out.counselorId;
+        }
+        if (out.counselorEmail && !staffList.some((st) => normalizeEmail(st.email) === normalizeEmail(out.counselorEmail) && doesValueMatchStaffMember(rawCounselorTrimmed, st))) {
+          delete out.counselorEmail;
+        }
       }
     }
 
@@ -2908,13 +3025,22 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         ] as const;
         const patch: Record<string, any> = {};
         for (const k of selfAllowedKeys) {
-          if (payload[k] !== undefined) patch[k] = payload[k];
+          if (payload[k] === undefined) continue;
+          // Only include shortlist when it actually changed to avoid tripping shortlist size rules on unrelated updates
+          if (k === 'shortlist' && JSON.stringify(matchedInState?.shortlist || []) === JSON.stringify(payload[k] || [])) {
+            continue;
+          }
+          patch[k] = payload[k];
         }
         await updateDoc(doc(db, 'students', safeId), patch);
       } else {
         const existingRef = doc(db, 'students', safeId);
         const snap = await getDoc(existingRef);
-        if (!snap.exists() || isUserAdmin(currentUser)) {
+        const canFullWrite =
+          !snap.exists() ||
+          isUserAdmin(currentUser) ||
+          canStaffAccessAllStudents(currentUser, permissionsMatrixState);
+        if (canFullWrite) {
           const existingInnerId =
             snap.exists() && typeof snap.data()?.id === 'string' && snap.data()!.id.trim()
               ? snap.data()!.id
@@ -2928,7 +3054,7 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
             'counsellor', 'mentor', 'mentorId', 'researchMentor',
             'satMathMentor', 'satVerbalMentor', 'universityMentor', 'readiness',
             'countries', 'activities', 'operationalLogs', 'shortlist', 'documents',
-            'essays', 'tasks', 'extracurriculars', 'academicScores', 'credentials', 'major1',
+            'essays', 'tasks', 'extracurriculars', 'academicScores', 'major1',
             'major2', 'targetDegree', 'targetCountry', 'allowedViewerEmails', 'updatedAt',
           ] as const;
           const patch: Record<string, any> = {};
@@ -3428,23 +3554,35 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
     for (const d of deleted) {
       if (d.id) {
-        ops.push({ type: 'delete', id: toValidDocId(d.id, 'EVT') });
+        ops.push({ type: 'delete', id: d.id });
+        const safeDelId = toValidDocId(d.id, 'EVT');
+        if (safeDelId !== d.id) {
+          ops.push({ type: 'delete', id: safeDelId });
+        }
       }
     }
 
     for (const ev of validNew) {
       const prev = events.find((p) => p.id === ev.id);
       if (prev && JSON.stringify(prev) === JSON.stringify(ev)) continue;
-      const safeId = toValidDocId(ev.id || `EVT-${Date.now()}`, 'EVT');
+      // Preserve existing valid Firestore doc ID on update so marking completed updates in-place instead of duplicating
+      const rawExistingId = prev?.id || ev.id || '';
+      const isAlreadyValidFirestoreId = /^[A-Za-z0-9_-]{1,128}$/.test(rawExistingId);
+      const targetDocId = isAlreadyValidFirestoreId
+        ? rawExistingId
+        : toValidDocId(rawExistingId || `EVT-${Date.now()}`, 'EVT');
+      if (prev?.id && prev.id !== targetDocId) {
+        ops.push({ type: 'delete', id: prev.id });
+      }
       const allowedViewerEmails = computeEventViewerEmails(ev);
       const payload = stripUndefinedAndNulls({
         ...ev,
-        id: safeId,
+        id: targetDocId,
         title: String(ev.title || 'Scheduled Session').trim().slice(0, 300),
         allowedViewerEmails,
         updatedAt: now,
       });
-      ops.push({ type: 'set', id: safeId, data: payload });
+      ops.push({ type: 'set', id: targetDocId, data: payload });
     }
 
     const CHUNK_SIZE = 350;

@@ -572,10 +572,10 @@ service cloud.firestore {
     }
 
     match /admin_student_credentials/{credId} {
-      allow get: if isAdmin() && isValidId(credId);
-      allow list: if isAdmin() && existing().email is string && existing().email.size() >= 3;
-      allow create: if isAdmin() && isValidId(credId) && isValidAdminStudentCredential(incoming()) && incoming().id == credId;
-      allow update: if isAdmin() && isValidId(credId) && isValidAdminStudentCredential(incoming()) && hasUnchangedOrInitializedDocId(credId);
+      allow get: if hasGlobalStaffAccess() && isValidId(credId);
+      allow list: if hasGlobalStaffAccess() && existing().email is string && existing().email.size() >= 3;
+      allow create: if hasGlobalStaffAccess() && isValidId(credId) && isValidAdminStudentCredential(incoming()) && incoming().id == credId;
+      allow update: if hasGlobalStaffAccess() && isValidId(credId) && isValidAdminStudentCredential(incoming()) && hasUnchangedOrInitializedDocId(credId);
       allow delete: if isAdmin() && isValidId(credId);
     }
 
@@ -684,7 +684,9 @@ service cloud.firestore {
           ])) ||
         ('email' in existing() && existing().email.lower() == authEmailLower() &&
           incoming().email == existing().email &&
-          (!('shortlist' in incoming()) || ('shortlist' in existing() && incoming().shortlist.size() == existing().shortlist.size())) &&
+          (!('shortlist' in incoming()) ||
+            (!('shortlist' in existing()) && incoming().shortlist is list && incoming().shortlist.size() == 0) ||
+            ('shortlist' in existing() && incoming().shortlist is list && existing().shortlist is list && incoming().shortlist.size() == existing().shortlist.size())) &&
           incoming().diff(existing()).affectedKeys().hasOnly([
             'id', 'tasks', 'essays', 'documents', 'activities', 'shortlist',
             'extracurriculars', 'academicScores', 'credentials', 'operationalLogs',

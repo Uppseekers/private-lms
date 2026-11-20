@@ -322,8 +322,12 @@ export default function NotificationDetailsModal({
                   <span className="font-bold text-slate-900">{notification.meeting.date || notification.meeting.day} • {notification.meeting.time || 'TBD'}</span>
                 </div>
                 <div>
-                  <span className="text-slate-500 block text-[10px] uppercase font-bold">Educator / Host</span>
-                  <span className="font-bold text-slate-900">{notification.meeting.host || 'Advisor'}</span>
+                  <span className="text-slate-500 block text-[10px] uppercase font-bold">Host</span>
+                  <span className="font-bold text-slate-900">
+                    {String(notification.meeting.host || 'Counselor')
+                      .replace(/\s*\((Mentor|Counselor|Counsellor|Staff|Advisor|Coach)\)\s*$/i, '')
+                      .trim() || 'Counselor'}
+                  </span>
                 </div>
               </div>
               {notification.meeting.location && (

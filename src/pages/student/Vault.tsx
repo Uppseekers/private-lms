@@ -88,44 +88,22 @@ const CATEGORIES = {
 
 export default function StudentVault() {
   const { students, updateStudent, currentUser } = useDatabase();
-  const student = students.find(s => s.id === currentUser?.id || s.email === currentUser?.email) || students[0];
-  if (!student) return null;
-  const documents: DocumentInfo[] = (student.documents || []) as DocumentInfo[];
+  const student = students.find(s =>
+    (currentUser?.id && s.id === currentUser.id) ||
+    (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
+  ) || (currentUser?.role === 'STUDENT' ? (currentUser as any) : null);
+
+  const documents: DocumentInfo[] = ((student?.documents || []) as DocumentInfo[]);
 
   const [vaultMode, setVaultMode] = useState<'documents' | 'credentials'>('documents');
 
   const currentCredentials: PortalCredential[] = useMemo(() => {
-    if (student.credentials && student.credentials.length > 0) {
-      return student.credentials;
-    }
-    return [
-      {
-        id: 'CRED-SAMPLE-1',
-        title: 'Common Application',
-        category: 'Application System',
-        websiteUrl: 'https://apply.commonapp.org',
-        username: student.email || 'anya.patel@example.com',
-        password: 'Pass#2026!Apply',
-        pinOrCode: 'CAID: 8849201',
-        notes: 'Submitted early applications. Remember to check recommender submission status.',
-        lastUpdated: 'Aug 24, 2026'
-      },
-      {
-        id: 'CRED-SAMPLE-2',
-        title: 'College Board (SAT & AP)',
-        category: 'Testing & Scores',
-        websiteUrl: 'https://mysat.collegeboard.org',
-        username: student.email || 'anya.patel@example.com',
-        password: 'SatBoard#Score26',
-        pinOrCode: 'CBID: 94821039',
-        notes: 'SAT official score reports sent to target schools.',
-        lastUpdated: 'Aug 15, 2026'
-      }
-    ];
-  }, [student.credentials, student.email]);
+    return Array.isArray(student?.credentials) ? student.credentials : [];
+  }, [student?.credentials]);
 
-  const handleUpdateCredentials = (newCredentials: PortalCredential[]) => {
-    updateStudent({
+  const handleUpdateCredentials = async (newCredentials: PortalCredential[]) => {
+    if (!student) return;
+    await updateStudent({
       ...student,
       credentials: newCredentials
     });
@@ -137,6 +115,9 @@ export default function StudentVault() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategoryFilter, setSelectedCategoryFilter] = useState('ALL');
   const [selectedDateFilter, setSelectedDateFilter] = useState<'ALL' | '7d' | '30d' | '90d' | 'this_year'>('ALL');
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [uploadSuccess, setUploadSuccess] = useState('');
 
   // Form State
   const [selectedCategory, setSelectedCategory] = useState(Object.keys(CATEGORIES)[0]);
@@ -144,7 +125,12 @@ export default function StudentVault() {
   const [docName, setDocName] = useState(selectedType);
   const [docTarget, setDocTarget] = useState('');
   const [docNotes, setDocNotes] = useState('');
+  const [docExternalUrl, setDocExternalUrl] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
+  if (!student) return null;
+
+  const uploadedByLabel = `Student (${student.name || currentUser?.name || 'Student'}${student.id ? ` - ${student.id}` : ''})`;
 
   const handleCategoryChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const newCat = e.target.value;
@@ -162,69 +148,92 @@ export default function StudentVault() {
 
   const handleFileDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    setUploadError('');
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       setSelectedFile(e.dataTransfer.files[0]);
     }
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadError('');
     if (e.target.files && e.target.files.length > 0) {
       setSelectedFile(e.target.files[0]);
     }
   };
 
-  const handleUploadSubmit = () => {
-    if (!selectedFile && !docName) return;
+  const readFileAsDataUrl = (file: File): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.onerror = () => reject(new Error('Failed to read selected file.'));
+      reader.readAsDataURL(file);
+    });
 
-    let ext = 'pdf';
-    if (selectedFile) {
-      const parts = selectedFile.name.split('.');
-      if (parts.length > 1) ext = parts.pop()!.toLowerCase();
+  const handleUploadSubmit = async () => {
+    if (!selectedFile && !docName.trim() && !docExternalUrl.trim()) return;
+    setUploadError('');
+
+    const MAX_INLINE_BYTES = 650 * 1024;
+    if (selectedFile && selectedFile.size > MAX_INLINE_BYTES && !docExternalUrl.trim()) {
+      setUploadError('File exceeds 650 KB direct storage limit. Please compress the file or paste a Google Drive / OneDrive share link below.');
+      return;
     }
 
-    const saveDoc = (fileDataUrl?: string) => {
+    setIsUploading(true);
+    try {
+      let ext = 'pdf';
+      let fileUrl = docExternalUrl.trim();
+      if (selectedFile) {
+        const parts = selectedFile.name.split('.');
+        if (parts.length > 1) ext = parts.pop()!.toLowerCase();
+        if (!fileUrl) {
+          fileUrl = await readFileAsDataUrl(selectedFile);
+        }
+      } else if (fileUrl) {
+        ext = 'link';
+      }
+
       const newDoc: DocumentInfo = {
         id: `DOC-${Date.now()}`,
-        name: docName || selectedType,
+        name: docName.trim() || selectedFile?.name || selectedType,
         category: selectedCategory,
         type: selectedType,
-        uploadedBy: student.name || 'Student',
+        uploadedBy: uploadedByLabel,
         target: docTarget,
-        notes: docNotes,
+        notes: docNotes.trim(),
         status: selectedCategory === 'Application & Writing Assets' ? 'draft' : 'pending',
         date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
         fileExt: ext,
-        fileUrl: fileDataUrl || ''
+        fileUrl
       };
 
       const updatedDocs = [newDoc, ...documents];
-
-      updateStudent({
+      await updateStudent({
         ...student,
         documents: updatedDocs
       });
 
       setIsUploadModalOpen(false);
       resetForm();
-    };
-
-    if (selectedFile) {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        saveDoc(e.target?.result as string);
-      };
-      reader.readAsDataURL(selectedFile);
-    } else {
-      saveDoc();
+      setUploadSuccess(`"${newDoc.name}" uploaded and saved to your Document Vault.`);
+      setTimeout(() => setUploadSuccess(''), 4000);
+    } catch (err: any) {
+      setUploadError(err?.message || 'Failed to save document to Firestore. Please try again.');
+    } finally {
+      setIsUploading(false);
     }
   };
 
-  const handleDeleteDoc = (docId: string) => {
+  const handleDeleteDoc = async (docId: string) => {
     const updatedDocs = documents.filter(d => d.id !== docId);
-    updateStudent({
-      ...student,
-      documents: updatedDocs
-    });
+    try {
+      await updateStudent({
+        ...student,
+        documents: updatedDocs
+      });
+    } catch (err) {
+      console.error('Failed to delete document:', err);
+    }
   };
 
   const resetForm = () => {
@@ -235,7 +244,9 @@ export default function StudentVault() {
     setDocName(defaultType);
     setDocTarget('');
     setDocNotes('');
+    setDocExternalUrl('');
     setSelectedFile(null);
+    setUploadError('');
   };
 
   const handleOpenUpload = () => {
@@ -302,6 +313,17 @@ export default function StudentVault() {
 
   return (
     <div className="max-w-7xl mx-auto space-y-6 pb-12">
+      {uploadSuccess && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl text-xs font-semibold flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            {uploadSuccess}
+          </span>
+          <button onClick={() => setUploadSuccess('')} className="text-emerald-600 hover:text-emerald-800">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h2 className="text-2xl font-bold text-slate-900 tracking-tight">My Student Vault</h2>
@@ -561,6 +583,10 @@ export default function StudentVault() {
                   <span className="font-semibold text-slate-800">{previewDoc.type}</span>
                 </div>
                 <div>
+                  <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px] mb-0.5">Uploaded By</span>
+                  <span className="font-semibold text-slate-800">{previewDoc.uploadedBy || uploadedByLabel}</span>
+                </div>
+                <div>
                   <span className="text-slate-400 font-bold uppercase tracking-wider block text-[10px] mb-0.5">Uploaded Date</span>
                   <span className="font-semibold text-slate-800">{previewDoc.date}</span>
                 </div>
@@ -631,15 +657,22 @@ export default function StudentVault() {
                 {selectedFile ? (
                   <div>
                     <p className="font-bold text-slate-900">{selectedFile.name}</p>
-                    <p className="text-xs text-slate-500 mt-1">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                    <p className="text-xs text-slate-500 mt-1">{(selectedFile.size / 1024).toFixed(1)} KB</p>
                   </div>
                 ) : (
                   <>
                     <p className="font-bold text-slate-900 mb-1">Drag & Drop or Browse File</p>
-                    <p className="text-xs text-slate-500 font-medium">Supports PDF, PNG, JPG (Max 25MB)</p>
+                    <p className="text-xs text-slate-500 font-medium">Direct upload supports PDF, PNG, JPG up to 650 KB (or paste a Drive link below for larger files)</p>
                   </>
                 )}
               </div>
+
+              {uploadError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl text-xs font-semibold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{uploadError}</span>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div className="md:col-span-2">
@@ -680,13 +713,27 @@ export default function StudentVault() {
                   <p className="text-[10px] text-slate-400 mt-1">Pre-filled with document type, append terms as needed.</p>
                 </div>
 
+                <div className="md:col-span-2">
+                  <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">External Document Link (Optional — Google Drive / OneDrive URL)</label>
+                  <input
+                    type="url"
+                    value={docExternalUrl}
+                    onChange={(e) => {
+                      setDocExternalUrl(e.target.value);
+                      setUploadError('');
+                    }}
+                    placeholder="https://drive.google.com/file/d/..."
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
+                  />
+                </div>
+
                 <div className="md:col-span-1">
                   <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Uploaded By</label>
                   <input 
                     type="text" 
-                    value="Student (Anya Patel - STU-1002)" 
+                    value={uploadedByLabel}
                     disabled 
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none text-slate-500 cursor-not-allowed" 
+                    className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none text-slate-700 font-medium cursor-not-allowed" 
                   />
                 </div>
                 
@@ -697,9 +744,12 @@ export default function StudentVault() {
                     onChange={(e) => setDocTarget(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900"
                   >
-                    <option value="">None</option>
-                    <option value="USA - Columbia">USA — Columbia University Application</option>
-                    <option value="UK - Oxford">UK — Oxford University Application</option>
+                    <option value="">None (General Profile Document)</option>
+                    {(student.shortlist || []).map((uni: any, idx: number) => (
+                      <option key={uni.id || idx} value={uni.name}>
+                        {uni.country ? `${uni.country} — ` : ''}{uni.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
 
@@ -718,9 +768,9 @@ export default function StudentVault() {
 
             {/* Footer Actions */}
             <div className="sticky bottom-0 bg-slate-50 border-t border-slate-100 p-4 sm:p-6 flex justify-end items-center gap-3 z-10 rounded-b-3xl">
-              <Button variant="ghost" onClick={() => setIsUploadModalOpen(false)} className="text-slate-500 hover:text-slate-700">Cancel</Button>
-              <Button onClick={handleUploadSubmit} className="bg-blue-600 hover:bg-blue-700 text-white" disabled={!selectedFile && !docName}>
-                 Upload Document
+              <Button variant="ghost" onClick={() => setIsUploadModalOpen(false)} disabled={isUploading} className="text-slate-500 hover:text-slate-700">Cancel</Button>
+              <Button onClick={handleUploadSubmit} className="bg-blue-600 hover:bg-blue-700 text-white" disabled={isUploading || (!selectedFile && !docName.trim() && !docExternalUrl.trim())}>
+                 {isUploading ? 'Saving to Vault...' : 'Upload Document'}
               </Button>
             </div>
           </div>

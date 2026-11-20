@@ -4,20 +4,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import {
   GraduationCap,
-  Mail,
   Key,
   Lock,
   ArrowLeft,
-  CheckCircle2,
   AlertCircle,
   Eye,
   EyeOff,
   ShieldCheck,
-  Send,
+  Shield,
 } from 'lucide-react';
-import { auth, normalizeEmail } from '@/lib/firebase';
+import { auth } from '@/lib/firebase';
 import {
-  sendPasswordResetEmail,
   verifyPasswordResetCode,
   confirmPasswordReset,
   applyActionCode,
@@ -31,8 +28,8 @@ export default function ResetPassword() {
   const urlOobCode = searchParams.get('oobCode') || '';
   const urlEmail = searchParams.get('email') || '';
 
-  const [step, setStep] = useState<'request' | 'email_sent' | 'verify_and_set' | 'success'>(
-    urlMode === 'resetPassword' && urlOobCode ? 'verify_and_set' : 'request'
+  const [step, setStep] = useState<'info' | 'verify_and_set' | 'success'>(
+    urlMode === 'resetPassword' && urlOobCode ? 'verify_and_set' : 'info'
   );
 
   const [email, setEmail] = useState(urlEmail);
@@ -58,7 +55,7 @@ export default function ResetPassword() {
           setSuccessMsg('Your email address has been verified! You can now sign in.');
           setStep('success');
         } catch (err: any) {
-          setError(err?.message || 'Verification link is invalid or expired. Please request a new one from Login.');
+          setError(err?.message || 'Verification link is invalid or expired.');
         } finally {
           setLoading(false);
         }
@@ -70,8 +67,8 @@ export default function ResetPassword() {
           if (verifiedEmail) setEmail(verifiedEmail);
           setStep('verify_and_set');
         } catch (err: any) {
-          setError(err?.message || 'Password reset link is invalid or expired. Please request a new reset email.');
-          setStep('request');
+          setError(err?.message || 'Password reset link is invalid or expired.');
+          setStep('info');
         } finally {
           setLoading(false);
         }
@@ -80,39 +77,6 @@ export default function ResetPassword() {
 
     void handleActionLink();
   }, [urlMode, urlOobCode, urlEmail]);
-
-  const handleRequestEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccessMsg('');
-
-    const cleanEmail = normalizeEmail(email);
-    if (!cleanEmail) {
-      setError('Please enter a valid email address.');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      await sendPasswordResetEmail(auth, cleanEmail, {
-        url: `${window.location.origin}/login`,
-      });
-      setSuccessMsg(
-        `A secure Firebase password reset link has been sent to ${cleanEmail}. Open the link in your inbox (or spam folder) to set a new password.`
-      );
-      setStep('email_sent');
-    } catch (err: any) {
-      if (err?.code === 'auth/invalid-email') {
-        setError('Please enter a valid email address.');
-      } else if (err?.code === 'auth/too-many-requests') {
-        setError('Too many reset requests. Please wait a few minutes and try again.');
-      } else {
-        setError(err?.message || 'Could not send password reset email. Please try again.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleConfirmReset = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -127,7 +91,7 @@ export default function ResetPassword() {
       return;
     }
     if (!oobCode) {
-      setError('Missing password reset verification code. Please open the link from your email.');
+      setError('Missing password reset verification code.');
       return;
     }
 
@@ -158,91 +122,41 @@ export default function ResetPassword() {
           </Link>
         </div>
 
-        {step === 'request' && (
+        {step === 'info' && (
           <Card className="border-slate-200 shadow-sm">
             <CardHeader className="text-center pb-3">
               <div className="mx-auto w-10 h-10 bg-blue-50 text-blue-600 rounded-full flex items-center justify-center mb-2">
-                <Mail className="w-5 h-5" />
+                <Shield className="w-5 h-5" />
               </div>
-              <CardTitle className="text-xl text-slate-800">Forgot / Reset Password</CardTitle>
+              <CardTitle className="text-xl text-slate-800">Direct Password Management</CardTitle>
               <p className="text-sm text-slate-500 mt-1">
-                Enter your registered account email. We will send a Firebase password reset link directly to your inbox.
+                Automated password reset emails are disabled on this portal.
               </p>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
               {error && (
-                <div className="mb-4 bg-red-50 text-red-600 text-sm p-3 rounded-lg border border-red-100 flex items-start gap-2">
+                <div className="bg-red-50 text-red-600 text-sm p-3 rounded-lg border border-red-100 flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
                   <span>{error}</span>
                 </div>
               )}
 
-              <form onSubmit={handleRequestEmail} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">
-                    Registered Email Address
-                  </label>
-                  <div className="relative">
-                    <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                    <input
-                      type="email"
-                      required
-                      placeholder="you@uppseekers.com"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    />
-                  </div>
-                </div>
-
-                <Button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 flex items-center justify-center gap-2"
-                >
-                  <Send className="w-4 h-4" />
-                  {loading ? 'Sending Reset Email...' : 'Send Password Reset Email'}
-                </Button>
-              </form>
-
-              <div className="mt-6 text-center border-t border-slate-100 pt-4">
-                <Link
-                  to="/login"
-                  className="inline-flex items-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700"
-                >
-                  <ArrowLeft className="w-4 h-4" />
-                  Back to Sign In
-                </Link>
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2 text-xs text-slate-700 leading-relaxed">
+                <p>
+                  <strong>Already signed in?</strong> Change your password directly inside your <strong>Profile</strong> page or the top-right account menu—no email verification links needed.
+                </p>
+                <p>
+                  <strong>Locked out of your account?</strong> Contact your <strong>Category Manager</strong> or <strong>System Administrator</strong> to set a new password directly from the Student Database.
+                </p>
               </div>
-            </CardContent>
-          </Card>
-        )}
 
-        {step === 'email_sent' && (
-          <Card className="border-slate-200 shadow-sm text-center">
-            <CardContent className="pt-8 pb-8 space-y-4">
-              <div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mx-auto">
-                <Mail className="w-7 h-7" />
-              </div>
-              <h3 className="text-xl font-bold text-slate-800">Check Your Inbox</h3>
-              <p className="text-sm text-slate-600 max-w-sm mx-auto leading-relaxed">
-                {successMsg}
-              </p>
-              <div className="pt-2 flex flex-col gap-2">
-                <Button
-                  onClick={() => navigate('/login')}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5"
-                >
-                  Return to Sign In
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setStep('request')}
-                  className="w-full text-xs"
-                >
-                  Try Another Email Address
-                </Button>
-              </div>
+              <Button
+                onClick={() => navigate('/login')}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2.5 flex items-center justify-center gap-2"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Return to Sign In
+              </Button>
             </CardContent>
           </Card>
         )}

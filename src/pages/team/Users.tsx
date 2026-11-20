@@ -25,6 +25,7 @@ import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/Cha
 import BulkCounselorTransferModal from '@/components/BulkCounselorTransferModal';
 import CounsellorAvailabilityEditor from '@/components/CounsellorAvailabilityEditor';
 import StudentAvailabilityEditor from '@/components/StudentAvailabilityEditor';
+import FormattedMomText from '@/components/FormattedMomText';
 import {
   COUNSELLING_GRADES,
   buildDefaultStudentAvailability,
@@ -50,6 +51,7 @@ export default function TeamUsers() {
   } = useDatabase();
   const isAdmin = isUserAdmin(currentUser);
   const canViewStaffDirectory = isAdmin || canStaffAccessAllStudents(currentUser, permissionsMatrix);
+  const canManageStudentCredentials = isAdmin || canStaffAccessAllStudents(currentUser, permissionsMatrix);
   const [activeViewTab, setActiveViewTab] = useState<'students' | 'staff'>('students');
   const [searchQuery, setSearchQuery] = useState('');
   const [staffFilter, setStaffFilter] = useState<string>('All');
@@ -57,7 +59,7 @@ export default function TeamUsers() {
   const [copiedTablePwId, setCopiedTablePwId] = useState<string | null>(null);
 
   const resolveStudentPortalPassword = (stu: Student): string => {
-    if (!isAdmin) return '';
+    if (!canManageStudentCredentials) return '';
     return (
       adminStudentPasswords[stu.id] ||
       adminStudentPasswords[toValidDocId(stu.id, 'STU')] ||
@@ -119,6 +121,8 @@ export default function TeamUsers() {
 
   const filteredStudents = (students || []).filter(s => {
     if (!s) return false;
+    const rawRole = String((s as any).role || '').trim().toUpperCase();
+    if (rawRole && rawRole !== 'STUDENT') return false;
     if (!canStaffAccessAllStudents(currentUser, permissionsMatrix)) {
       if (!isStudentAssignedToStaff(s, currentUser, permissionsMatrix, batches)) return false;
     }
@@ -166,6 +170,7 @@ export default function TeamUsers() {
 
   const filteredStaff = (staff || []).filter(m => {
     if (!m) return false;
+    if (String(m.role || '').trim().toUpperCase() === 'STUDENT') return false;
     const q = (searchQuery || '').toLowerCase();
     if (!q) return true;
     return (m.name || '').toLowerCase().includes(q) ||
@@ -345,7 +350,7 @@ export default function TeamUsers() {
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input 
               type="text" 
-              placeholder={activeViewTab === 'students' || !isAdmin ? "Search student name, email, ID..." : "Search staff name, email, role..."}
+              placeholder={activeViewTab === 'students' || !canViewStaffDirectory ? "Search student name, email, ID..." : "Search staff name, email, role..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-64 md:w-80 bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -415,7 +420,7 @@ export default function TeamUsers() {
             </Button>
           )}
 
-          {(activeViewTab === 'students' || !isAdmin) && (
+          {(activeViewTab === 'students' || !canViewStaffDirectory) && (
             <>
               <Button 
                 variant="outline" 
@@ -484,7 +489,7 @@ export default function TeamUsers() {
       )}
 
       {/* STUDENTS TABLE VIEW */}
-      {(activeViewTab === 'students' || !isAdmin) && (
+      {(activeViewTab === 'students' || !canViewStaffDirectory) && (
         <Card className="overflow-hidden border-slate-200 shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm whitespace-nowrap">
@@ -501,7 +506,7 @@ export default function TeamUsers() {
                   <th className="px-4 py-4">ID</th>
                   <th className="px-6 py-4">Student Name</th>
                   <th className="px-6 py-4">Email & Phone</th>
-                  {isAdmin && <th className="px-4 py-4 whitespace-nowrap">Portal Password</th>}
+                  {canManageStudentCredentials && <th className="px-4 py-4 whitespace-nowrap">Portal Password</th>}
                   <th className="px-6 py-4">Assigned Counselor & Mentors</th>
                   <th className="px-6 py-4">Intake</th>
                   <th className="px-6 py-4">Student Availability</th>
@@ -537,7 +542,7 @@ export default function TeamUsers() {
                       <p className="text-slate-900 font-medium">{student.email}</p>
                       <p className="text-xs text-slate-500 tabular-nums">{student.phone}</p>
                     </td>
-                    {isAdmin && (
+                    {canManageStudentCredentials && (
                       <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
                         {studentPortalPwd ? (
                           <div className="flex items-center gap-1.5">
@@ -690,12 +695,12 @@ export default function TeamUsers() {
                       >
                         <UserCheck className="w-4 h-4" />
                       </Button>
-                      {isAdmin && (
+                      {canManageStudentCredentials && (
                         <Button 
                           variant="ghost" 
                           size="sm" 
                           className="text-amber-600 hover:text-amber-800 hover:bg-amber-50 p-2"
-                          title="Change Password (Admin Only)"
+                          title="Set or Change Student Password"
                           onClick={(e) => {
                             e.stopPropagation();
                             setUserForPasswordChange({
@@ -928,10 +933,26 @@ export default function TeamUsers() {
       {isAddModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm overflow-y-auto">
           <div className="bg-white rounded-2xl w-full max-w-2xl shadow-xl my-8">
-            <AddStudentModal onClose={() => setIsAddModalOpen(false)} onSave={(newStudent) => {
-               setStudents([newStudent, ...students]);
-               setIsAddModalOpen(false);
-            }} />
+            <AddStudentModal
+              onClose={() => setIsAddModalOpen(false)}
+              onSave={async (newStudent, initialPassword) => {
+                await updateStudent(newStudent);
+                const prov = await provisionPortalUser({
+                  name: newStudent.name,
+                  email: newStudent.email,
+                  password: initialPassword,
+                  role: 'STUDENT',
+                  userType: 'student',
+                  studentId: newStudent.id,
+                });
+                setTransferSuccessMessage(
+                  prov.ok
+                    ? `Created student ${newStudent.name} (${newStudent.id}) with portal credentials saved. No automated email was sent.`
+                    : `Created student ${newStudent.name} (${newStudent.id}) in database. Note: ${prov.error || 'Set portal password manually in the credentials panel.'}`
+                );
+                setIsAddModalOpen(false);
+              }}
+            />
           </div>
         </div>
       )}
@@ -991,20 +1012,14 @@ export default function TeamUsers() {
         </div>
       )}
 
-      {/* Admin Change Password Modal for Table rows */}
-      {isAdmin && userForPasswordChange && (
+      {/* Change Password Modal for Table rows (Admins for all; Category Managers for students) */}
+      {userForPasswordChange &&
+        (userForPasswordChange.type === 'student' ? canManageStudentCredentials : isAdmin) && (
         <ChangeUserPasswordModal
           isOpen={Boolean(userForPasswordChange)}
           onClose={() => setUserForPasswordChange(null)}
           targetUser={userForPasswordChange}
           onSavePassword={handleSaveUserPassword}
-          onSendResetEmail={async (em) => {
-            await resetPortalUserPassword({
-              email: em,
-              name: userForPasswordChange.name,
-              userType: userForPasswordChange.type,
-            });
-          }}
         />
       )}
 
@@ -1382,13 +1397,13 @@ function StudentDetailDrawer({
           <h2 className="text-xl font-bold text-slate-900">{student.name} <span className="text-slate-400 font-medium">({student.id})</span></h2>
         </div>
         <div className="flex items-center gap-2">
-          {isUserAdmin(currentUser) && (
+          {(isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix)) && (
             <Button
               size="sm"
               variant="outline"
               onClick={() => setIsChangePasswordOpen(true)}
               className="text-xs font-bold border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 flex items-center gap-1.5 shadow-2xs"
-              title="Change password for this student (Admin only)"
+              title="Set or change password for this student"
             >
               <KeyRound className="w-3.5 h-3.5 text-amber-600" />
               <span>Change Password</span>
@@ -1983,9 +1998,9 @@ function StudentDetailDrawer({
                                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
                                           1. Key Discussion Points:
                                         </span>
-                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
-                                          {mom.keyPoints}
-                                        </p>
+                                        <div className="bg-white p-3 rounded-lg border border-slate-200">
+                                          <FormattedMomText text={mom.keyPoints} className="text-xs text-slate-800" />
+                                        </div>
                                       </div>
                                     )}
 
@@ -1994,9 +2009,9 @@ function StudentDetailDrawer({
                                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
                                           2. Student Progress & Achievements:
                                         </span>
-                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
-                                          {mom.studentProgress}
-                                        </p>
+                                        <div className="bg-white p-3 rounded-lg border border-slate-200">
+                                          <FormattedMomText text={mom.studentProgress} className="text-xs text-slate-800" />
+                                        </div>
                                       </div>
                                     )}
 
@@ -2005,9 +2020,9 @@ function StudentDetailDrawer({
                                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
                                           3. Observations & Concerns:
                                         </span>
-                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
-                                          {mom.observations}
-                                        </p>
+                                        <div className="bg-white p-3 rounded-lg border border-slate-200">
+                                          <FormattedMomText text={mom.observations} className="text-xs text-slate-800" />
+                                        </div>
                                       </div>
                                     )}
 
@@ -2016,9 +2031,9 @@ function StudentDetailDrawer({
                                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
                                           4. Recommended Next Steps:
                                         </span>
-                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
-                                          {mom.nextSteps}
-                                        </p>
+                                        <div className="bg-white p-3 rounded-lg border border-slate-200">
+                                          <FormattedMomText text={mom.nextSteps} className="text-xs text-slate-800" />
+                                        </div>
                                       </div>
                                     )}
 
@@ -2027,9 +2042,9 @@ function StudentDetailDrawer({
                                         <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">
                                           5. Follow-Up Action Items:
                                         </span>
-                                        <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-3 rounded-lg border border-slate-200 leading-relaxed">
-                                          {mom.followUpActions}
-                                        </p>
+                                        <div className="bg-white p-3 rounded-lg border border-slate-200">
+                                          <FormattedMomText text={mom.followUpActions} className="text-xs text-slate-800" />
+                                        </div>
                                       </div>
                                     )}
                                   </div>
@@ -2581,8 +2596,8 @@ function StudentDetailDrawer({
         )}
       </div>
 
-      {/* Admin Change Password Modal in Student Drawer */}
-      {isUserAdmin(currentUser) && isChangePasswordOpen && (
+      {/* Admin & Manager Change Password Modal in Student Drawer */}
+      {(isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix)) && isChangePasswordOpen && (
         <ChangeUserPasswordModal
           isOpen={isChangePasswordOpen}
           onClose={() => setIsChangePasswordOpen(false)}
@@ -2599,13 +2614,7 @@ function StudentDetailDrawer({
               name: student.name,
               newPassword: newPassword.trim(),
               userType: 'student',
-            });
-          }}
-          onSendResetEmail={async (em) => {
-            await resetPortalUserPassword({
-              email: em,
-              name: student.name,
-              userType: 'student',
+              studentId: student.id,
             });
           }}
         />
@@ -3333,9 +3342,9 @@ function ShortlistsView({ student, onUpdate }: { student: Student, onUpdate: (s:
   );
 }
 
-function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s: Student) => void }) {
-  const { staff, provisionPortalUser } = useDatabase();
-  const newId = `STU-2026-${Math.floor(Math.random() * 1000).toString().padStart(4, '0')}`;
+function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s: Student, initialPassword: string) => Promise<void> | void }) {
+  const { staff } = useDatabase();
+  const [newId] = useState(() => `STU-2026-${Math.floor(1000 + Math.random() * 9000)}`);
   
   const [formData, setFormData] = useState({
     name: '',
@@ -3343,87 +3352,76 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
     phone: '',
     intake: '',
     grade: '11',
-    countries: [],
+    countries: [] as string[],
     school: '',
     counselor: '',
     researchMentor: '',
     satVerbalMentor: '',
     satMathMentor: '',
-    sendInvite: true,
     password: ''
   });
   const [studentAvailabilityDraft, setStudentAvailabilityDraft] = useState(() =>
     buildDefaultStudentAvailability()
   );
   const [showAvailabilityConfig, setShowAvailabilityConfig] = useState(false);
-  
-  const [showToast, setShowToast] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
-  const handleSave = () => {
-    if(!formData.name || !formData.email) return; // basic validation
-    
-    const initialPassword = (formData.password || '').trim() || (Math.random().toString(36).slice(-8) + 'A1!');
-
-    const matchedCounselor = resolveCounselorForStudent({ counselor: formData.counselor }, staff);
-
-    const newStudent: Student = {
-      id: newId,
-      name: formData.name,
-      email: formData.email,
-      phone: formData.phone,
-      intake: formData.intake,
-      grade: formData.grade,
-      studentAvailability: studentAvailabilityDraft,
-      countries: formData.countries,
-      school: formData.school,
-      counselor: matchedCounselor?.name || formData.counselor,
-      ...(matchedCounselor?.id ? { counselorId: matchedCounselor.id } : {}),
-      ...(matchedCounselor?.email ? { counselorEmail: matchedCounselor.email.trim().toLowerCase() } : {}),
-      researchMentor: formData.researchMentor,
-      satVerbalMentor: formData.satVerbalMentor,
-      satMathMentor: formData.satMathMentor,
-      readiness: 0,
-      activities: [
-        {
-          id: '1',
-          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-          type: 'SYSTEM',
-          description: formData.sendInvite ? 'Student profile created. Firebase Auth invite triggered.' : 'Student profile created.'
-        }
-      ],
-      shortlist: [],
-      documents: [],
-      essays: []
-    };
-
-    void provisionPortalUser({
-      name: newStudent.name,
-      email: newStudent.email,
-      password: initialPassword,
-      role: 'STUDENT',
-      userType: 'student',
-      studentId: newStudent.id,
-    });
-
-    if (formData.sendInvite) {
-      setShowToast(true);
-      setTimeout(() => {
-        onSave(newStudent);
-      }, 1000);
-    } else {
-      onSave(newStudent);
+  const handleSave = async () => {
+    setSaveError('');
+    if (!formData.name.trim() || !formData.email.trim()) {
+      setSaveError('Please enter both Full Name and Email Address.');
+      return;
     }
-  }
+
+    setIsSaving(true);
+    try {
+      const initialPassword = (formData.password || '').trim() || (Math.random().toString(36).slice(-8) + 'A1!');
+      const matchedCounselor = formData.counselor && formData.counselor !== 'Unassigned'
+        ? resolveCounselorForStudent({ counselor: formData.counselor }, staff)
+        : null;
+
+      const newStudent: Student = {
+        id: newId,
+        name: formData.name.trim(),
+        email: formData.email.trim().toLowerCase(),
+        phone: formData.phone.trim(),
+        intake: formData.intake,
+        grade: formData.grade,
+        studentAvailability: studentAvailabilityDraft,
+        countries: formData.countries,
+        school: formData.school.trim(),
+        counselor: formData.counselor === 'Unassigned' ? '' : (matchedCounselor?.name || formData.counselor),
+        ...(matchedCounselor?.id ? { counselorId: matchedCounselor.id } : {}),
+        ...(matchedCounselor?.email ? { counselorEmail: matchedCounselor.email.trim().toLowerCase() } : {}),
+        researchMentor: formData.researchMentor === 'Unassigned' ? '' : formData.researchMentor,
+        satVerbalMentor: formData.satVerbalMentor === 'Unassigned' ? '' : formData.satVerbalMentor,
+        satMathMentor: formData.satMathMentor === 'Unassigned' ? '' : formData.satMathMentor,
+        readiness: 0,
+        activities: [
+          {
+            id: `act_${Date.now()}`,
+            date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+            type: 'SYSTEM',
+            description: 'Student profile created in portal database.'
+          }
+        ],
+        shortlist: [],
+        documents: [],
+        essays: [],
+        extracurriculars: [],
+      };
+
+      await onSave(newStudent, initialPassword);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Failed to save student to Firestore. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full max-h-[90vh] relative">
-      {showToast && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-green-600 text-white px-6 py-3 rounded-lg shadow-xl font-medium flex items-center gap-2 animate-in slide-in-from-top-4 fade-in duration-300">
-          <CheckCircle2 className="w-5 h-5" />
-          Invitation email sent to {formData.email}!
-        </div>
-      )}
-      
       <div className="p-6 border-b border-slate-200 flex justify-between items-center bg-slate-50 rounded-t-2xl">
         <h2 className="text-xl font-bold text-slate-900 tracking-tight">Add New Student</h2>
         <button onClick={onClose} className="text-slate-400 hover:text-slate-600 bg-white p-2 rounded-full border border-slate-200">
@@ -3432,6 +3430,12 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
       </div>
 
       <div className="p-6 overflow-y-auto space-y-8 bg-white">
+        {saveError && (
+          <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-semibold flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{saveError}</span>
+          </div>
+        )}
         <section>
            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Basic Information</h3>
            <div className="grid grid-cols-2 gap-6">
@@ -3456,8 +3460,8 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
                </select>
              </div>
              <div className="col-span-2 sm:col-span-1">
-               <label className="block text-sm font-bold text-slate-700 mb-1.5">Password (Optional)</label>
-               <input type="text" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Auto-generate if empty" />
+               <label className="block text-sm font-bold text-slate-700 mb-1.5">Initial Portal Password (Optional)</label>
+               <input type="text" value={formData.password} onChange={e => setFormData({...formData, password: e.target.value})} className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Auto-generate if empty (no email sent)" />
              </div>
            </div>
         </section>
@@ -3568,14 +3572,8 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
                </div>
              </div>
 
-             <div>
-               <label className="flex items-start gap-3 cursor-pointer p-4 border border-blue-100 bg-blue-50 rounded-xl">
-                 <input type="checkbox" checked={formData.sendInvite} onChange={e => setFormData({...formData, sendInvite: e.target.checked})} className="mt-0.5 w-4 h-4 text-blue-600 rounded border-blue-300 focus:ring-blue-500" />
-                 <div>
-                   <span className="text-sm font-bold text-blue-900 block mb-0.5">Send Portal Invitation</span>
-                   <span className="text-xs text-blue-700">Send an auto-login and welcome email to the student immediately upon creation.</span>
-                 </div>
-               </label>
+             <div className="p-3.5 border border-slate-200 bg-slate-50 rounded-xl text-xs text-slate-600">
+               Automated invitation and password-reset emails are disabled. After saving, Admins and Category Managers can view or copy the student's login password directly from the portal roster.
              </div>
            </div>
         </section>
@@ -3612,9 +3610,9 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
       </div>
 
       <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3 rounded-b-2xl mt-auto">
-        <Button variant="ghost" onClick={onClose}>Cancel</Button>
-        <Button className="bg-blue-600 hover:bg-blue-700 text-white px-8" onClick={handleSave} disabled={showToast}>
-          {showToast ? 'Sending...' : 'Save & Create Student'}
+        <Button variant="ghost" onClick={onClose} disabled={isSaving}>Cancel</Button>
+        <Button className="bg-blue-600 hover:bg-blue-700 text-white px-8" onClick={handleSave} disabled={isSaving}>
+          {isSaving ? 'Saving to Database...' : 'Save & Create Student'}
         </Button>
       </div>
     </div>
@@ -3622,19 +3620,88 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
 }
 
 function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
-  const { currentUser } = useDatabase();
-  const canViewStudentLogins = isUserAdmin(currentUser);
+  const { currentUser, permissionsMatrix, updateStudent } = useDatabase();
+  const canViewStudentLogins = isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix);
   const documents = student.documents || [];
   const credentials = student.credentials || [];
   const [subTab, setSubTab] = useState<'documents' | 'credentials'>('documents');
+  const [isUploadFormOpen, setIsUploadFormOpen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [uploadSuccess, setUploadSuccess] = useState('');
+  const [docTitle, setDocTitle] = useState('');
+  const [docCategory, setDocCategory] = useState('Academic Records');
+  const [docStatus, setDocStatus] = useState<'verified' | 'pending'>('verified');
+  const [docNotes, setDocNotes] = useState('');
+  const [docExternalUrl, setDocExternalUrl] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewingDoc, setPreviewingDoc] = useState<any | null>(null);
 
-  const handleUpload = () => {
+  const handleFilePick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setUploadError('');
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setSelectedFile(file);
+    if (!docTitle.trim()) {
+      setDocTitle(file.name.replace(/\.[^/.]+$/, ''));
+    }
+  };
+
+  const handleStaffUploadSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUploadError('');
+    setUploadSuccess('');
+
+    if (!selectedFile && !docExternalUrl.trim()) {
+      setUploadError('Please select a file from your computer or provide a document link (e.g. Google Drive URL).');
+      return;
+    }
+
+    const finalTitle = docTitle.trim() || selectedFile?.name || 'Uploaded Document';
+    const uploaderLabel = `${currentUser?.name || 'Staff Member'} (${currentUser?.role || 'Team'})`;
     setIsUploading(true);
-    setTimeout(() => {
-      const newDoc = { id: `doc_${Date.now()}`, name: 'New_Document_Scanned.pdf', type: 'Other', date: 'Just now', status: 'Pending' as const };
-      onUpdate({
+
+    try {
+      let fileUrl = docExternalUrl.trim();
+      let fileType = 'Link';
+      let fileSize = '';
+
+      if (selectedFile) {
+        if (selectedFile.size > 650 * 1024) {
+          setUploadError('File exceeds 650 KB Firestore inline storage limit. Please compress the file or paste a Google Drive / cloud share link instead.');
+          setIsUploading(false);
+          return;
+        }
+        fileSize = selectedFile.size > 1024 * 1024
+          ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB`
+          : `${Math.max(1, Math.round(selectedFile.size / 1024))} KB`;
+        fileType = selectedFile.type.includes('pdf')
+          ? 'PDF'
+          : selectedFile.type.startsWith('image/')
+            ? 'Image'
+            : selectedFile.name.split('.').pop()?.toUpperCase() || 'File';
+
+        fileUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ''));
+          reader.onerror = () => reject(new Error('Could not read the selected file.'));
+          reader.readAsDataURL(selectedFile);
+        });
+      }
+
+      const newDoc: DocumentInfo = {
+        id: `doc_${Date.now()}`,
+        name: finalTitle,
+        category: docCategory,
+        type: fileType,
+        date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+        status: docStatus,
+        uploadedBy: uploaderLabel,
+        notes: docNotes.trim() || (fileSize ? `File size: ${fileSize}` : undefined),
+        fileUrl: fileUrl || undefined,
+      };
+
+      const updatedStudent: Student = {
         ...student,
         documents: [newDoc, ...documents],
         activities: [
@@ -3642,13 +3709,28 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
             id: `act_${Date.now()}`,
             date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
             type: 'UPLOAD',
-            description: 'New document uploaded: New_Document_Scanned.pdf'
+            description: `${uploaderLabel} uploaded document to vault: ${finalTitle}`
           },
           ...(student.activities || [])
         ]
-      });
+      };
+
+      await updateStudent(updatedStudent);
+      onUpdate(updatedStudent);
+
+      setDocTitle('');
+      setDocCategory('Academic Records');
+      setDocStatus('verified');
+      setDocNotes('');
+      setDocExternalUrl('');
+      setSelectedFile(null);
+      setIsUploadFormOpen(false);
+      setUploadSuccess(`Saved "${finalTitle}" to ${student.name}'s Document Vault.`);
+    } catch (err: any) {
+      setUploadError(err?.message || 'Failed to save document to Firestore.');
+    } finally {
       setIsUploading(false);
-    }, 1000);
+    }
   };
 
   return (
@@ -3664,12 +3746,132 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
         </div>
         {subTab === 'documents' && (
           <div className="flex gap-2">
-            <Button onClick={handleUpload} className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm" disabled={isUploading}>
-              {isUploading ? 'Uploading...' : <><Plus className="w-4 h-4 mr-2" /> Upload Document</>}
+            <Button
+              onClick={() => {
+                setUploadError('');
+                setUploadSuccess('');
+                setIsUploadFormOpen((prev) => !prev);
+              }}
+              className="bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
+            >
+              {isUploadFormOpen ? <><X className="w-4 h-4 mr-2" /> Close Upload Form</> : <><Plus className="w-4 h-4 mr-2" /> Upload Document</>}
             </Button>
           </div>
         )}
       </div>
+
+      {uploadSuccess && (
+        <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{uploadSuccess}</span>
+          </div>
+          <button type="button" onClick={() => setUploadSuccess('')} className="text-emerald-700 hover:text-emerald-900">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {isUploadFormOpen && subTab === 'documents' && (
+        <form onSubmit={handleStaffUploadSubmit} className="bg-white border border-blue-200 rounded-2xl p-5 shadow-sm space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div>
+              <h4 className="text-sm font-bold text-slate-900">Upload Document for {student.name} ({student.id})</h4>
+              <p className="text-xs text-slate-500">Saved directly to this student's Firestore Document Vault as {currentUser?.name || 'Team'}.</p>
+            </div>
+          </div>
+
+          {uploadError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-medium flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              <span>{uploadError}</span>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Document Title *</label>
+              <input
+                type="text"
+                value={docTitle}
+                onChange={(e) => setDocTitle(e.target.value)}
+                placeholder="e.g. Official Grade 11 Transcript"
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                required={!selectedFile}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Category</label>
+              <select
+                value={docCategory}
+                onChange={(e) => setDocCategory(e.target.value)}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              >
+                <option value="Academic Records">Academic Records</option>
+                <option value="Test Scores">Test Scores</option>
+                <option value="Recommendations">Recommendations (LORs)</option>
+                <option value="Essays & CV">Essays & CV</option>
+                <option value="Financial & Identity">Financial & Identity</option>
+                <option value="Certificates & Awards">Certificates & Awards</option>
+                <option value="Other">Other</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Upload File (PDF / Image / Doc, up to 650 KB)</label>
+              <input
+                type="file"
+                onChange={handleFilePick}
+                className="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-xs bg-slate-50 file:mr-3 file:py-1 file:px-2.5 file:rounded file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700"
+              />
+              {selectedFile && (
+                <p className="text-[11px] text-emerald-700 mt-1 font-medium">
+                  Selected: {selectedFile.name} ({Math.max(1, Math.round(selectedFile.size / 1024))} KB)
+                </p>
+              )}
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Or External Document Link (Google Drive / URL)</label>
+              <input
+                type="url"
+                value={docExternalUrl}
+                onChange={(e) => setDocExternalUrl(e.target.value)}
+                placeholder="https://drive.google.com/file/d/..."
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Verification Status</label>
+              <select
+                value={docStatus}
+                onChange={(e) => setDocStatus(e.target.value as 'verified' | 'pending')}
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs bg-white focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              >
+                <option value="verified">Verified</option>
+                <option value="pending">Pending Review</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Notes (Optional)</label>
+              <input
+                type="text"
+                value={docNotes}
+                onChange={(e) => setDocNotes(e.target.value)}
+                placeholder="Optional counselor/manager note..."
+                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+            <Button type="button" variant="outline" size="sm" onClick={() => setIsUploadFormOpen(false)} disabled={isUploading}>
+              Cancel
+            </Button>
+            <Button type="submit" size="sm" className="bg-blue-600 hover:bg-blue-700 text-white font-bold" disabled={isUploading}>
+              {isUploading ? 'Saving Document...' : 'Save to Student Vault'}
+            </Button>
+          </div>
+        </form>
+      )}
 
       {canViewStudentLogins && (
         <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200/80 w-fit gap-1">
@@ -3725,15 +3927,17 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
                     <p className="font-bold text-slate-900 flex items-center gap-2">
                       <FileText className="w-4 h-4 text-blue-500" /> {doc.name}
                     </p>
-                    <p className="text-xs text-slate-500 mt-1">Uploaded on {doc.date}</p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Uploaded on {doc.date}{doc.uploadedBy ? ` · by ${doc.uploadedBy}` : ''}
+                    </p>
                   </td>
-                  <td className="px-6 py-4 text-slate-600 font-medium">{doc.type}</td>
+                  <td className="px-6 py-4 text-slate-600 font-medium">{doc.category || doc.type}</td>
                   <td className="px-6 py-4">
                     <span className={cn(
                       "inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                      doc.status === 'Verified' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                      doc.status.toLowerCase() === 'verified' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
                     )}>
-                      {doc.status === 'Verified' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
+                      {doc.status.toLowerCase() === 'verified' ? <CheckCircle2 className="w-3 h-3" /> : <Clock className="w-3 h-3" />}
                       {doc.status}
                     </span>
                   </td>
@@ -3746,7 +3950,7 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
                         ...doc,
                         category: doc.category || doc.type || 'Academic Records',
                         type: doc.type || 'Document',
-                        uploadedBy: student.name,
+                        uploadedBy: doc.uploadedBy || student.name,
                         studentName: student.name,
                         studentId: student.id,
                         status: doc.status.toLowerCase(),
@@ -4525,13 +4729,17 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
 
 
 function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
-  const { currentUser, staff, resetPortalUserPassword, adminStudentPasswords } = useDatabase();
+  const { currentUser, staff, permissionsMatrix, resetPortalUserPassword, adminStudentPasswords, updateStudent } = useDatabase();
+  const canManageStudentCredentials = isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix);
   const [isEditing, setIsEditing] = useState(false);
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [profileFeedback, setProfileFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [newPasswordDraft, setNewPasswordDraft] = useState('');
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [showPortalPassword, setShowPortalPassword] = useState(false);
   const [copiedPortalPassword, setCopiedPortalPassword] = useState(false);
 
-  const studentPortalPassword = isUserAdmin(currentUser)
+  const studentPortalPassword = canManageStudentCredentials
     ? adminStudentPasswords[student.id] ||
       adminStudentPasswords[toValidDocId(student.id, 'STU')] ||
       (student.email ? adminStudentPasswords[normalizeEmail(student.email)] : '') ||
@@ -4547,7 +4755,7 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
     school: student.school,
     grade: student.grade || resolvedGradeInfo.grade,
     intake: student.intake,
-    countries: student.countries.join(', '),
+    countries: (student.countries || []).join(', '),
     counselor: student.counselor || '',
     researchMentor: student.researchMentor || '',
     satVerbalMentor: student.satVerbalMentor || '',
@@ -4572,46 +4780,137 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
 
   const [extracurriculars, setExtracurriculars] = useState<any[]>(initialPureExtracurriculars);
 
-  const handleSave = () => {
-    const isTaskSheetChanged = formData.taskSheetLink !== (student.taskSheetLink || '');
-    const newOpLog = {
-      id: 'LOG-' + Date.now(),
-      timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
-      performedBy: currentUser?.name || 'Staff User',
-      role: currentUser?.role || 'COUNSELLOR',
-      activityType: 'PROFILE_UPDATE',
-      description: `Updated master profile for ${formData.name}`,
-      details: isTaskSheetChanged ? `Task Sheet Link set to: ${formData.taskSheetLink}` : undefined
-    };
+  React.useEffect(() => {
+    if (!isEditing) {
+      setExtracurriculars(initialPureExtracurriculars);
+    }
+  }, [initialPureExtracurriculars, isEditing]);
 
-    const matchedCounselor = formData.counselor
-      ? resolveCounselorForStudent({ counselor: formData.counselor }, staff)
-      : null;
+  React.useEffect(() => {
+    if (!isEditing) {
+      const gradeInfo = resolveStudentGrade(student);
+      setFormData({
+        name: student.name,
+        email: student.email,
+        phone: student.phone,
+        school: student.school,
+        grade: student.grade || gradeInfo.grade,
+        intake: student.intake,
+        countries: (student.countries || []).join(', '),
+        counselor: student.counselor || '',
+        researchMentor: student.researchMentor || '',
+        satVerbalMentor: student.satVerbalMentor || '',
+        satMathMentor: student.satMathMentor || '',
+        taskSheetLink: student.taskSheetLink || ''
+      });
+      setScores(student.academicScores || defaultScores);
+      setNewPasswordDraft('');
+    }
+  }, [student, isEditing]);
 
-    onUpdate({
-      ...student,
-      name: formData.name,
-      email: formData.email,
-      phone: formData.phone,
-      school: formData.school,
-      grade: formData.grade,
-      intake: formData.intake,
-      countries: formData.countries.split(',').map(s => s.trim()).filter(Boolean),
-      counselor: matchedCounselor?.name || formData.counselor,
-      counselorId: matchedCounselor?.id || (formData.counselor ? student.counselorId : undefined),
-      counselorEmail: matchedCounselor?.email
-        ? matchedCounselor.email.trim().toLowerCase()
-        : (formData.counselor ? student.counselorEmail : undefined),
-      researchMentor: formData.researchMentor,
-      satVerbalMentor: formData.satVerbalMentor,
-      satMathMentor: formData.satMathMentor,
-      taskSheetLink: formData.taskSheetLink,
-      academicScores: scores,
-      activities: student.activities || [],
-      extracurriculars: extracurriculars,
-      operationalLogs: [newOpLog, ...(student.operationalLogs || [])]
-    });
-    setIsEditing(false);
+  const handleSave = async () => {
+    setProfileFeedback(null);
+    setIsSavingProfile(true);
+    try {
+      const isTaskSheetChanged = formData.taskSheetLink !== (student.taskSheetLink || '');
+      const cleanCounselorInput = (formData.counselor || '').trim();
+      const isUnassigned = !cleanCounselorInput || cleanCounselorInput.toLowerCase() === 'unassigned';
+
+      const matchedCounselor = !isUnassigned
+        ? (staff || []).find(
+            (st) =>
+              st &&
+              ((st.name || '').trim().toLowerCase() === cleanCounselorInput.toLowerCase() ||
+                st.id === cleanCounselorInput ||
+                (st.email || '').trim().toLowerCase() === cleanCounselorInput.toLowerCase())
+          ) || resolveCounselorForStudent({ counselor: cleanCounselorInput }, staff)
+        : null;
+
+      const resolvedCounselorName = isUnassigned ? '' : (matchedCounselor?.name || cleanCounselorInput);
+
+      const newOpLog = {
+        id: 'LOG-' + Date.now(),
+        timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+        performedBy: currentUser?.name || 'Staff User',
+        role: currentUser?.role || 'COUNSELLOR',
+        activityType: 'PROFILE_UPDATE',
+        description: `Updated master profile for ${formData.name}`,
+        details: isTaskSheetChanged ? `Task Sheet Link set to: ${formData.taskSheetLink}` : undefined
+      };
+
+      const updatedPayload: Student = {
+        ...student,
+        name: formData.name,
+        email: formData.email,
+        phone: formData.phone,
+        school: formData.school,
+        grade: formData.grade,
+        intake: formData.intake,
+        countries: formData.countries.split(',').map(s => s.trim()).filter(Boolean),
+        counselor: resolvedCounselorName,
+        counselorId: isUnassigned ? undefined : (matchedCounselor?.id || undefined),
+        counselorEmail: isUnassigned
+          ? undefined
+          : (matchedCounselor?.email ? matchedCounselor.email.trim().toLowerCase() : undefined),
+        researchMentor: formData.researchMentor === 'Unassigned' ? '' : formData.researchMentor,
+        satVerbalMentor: formData.satVerbalMentor === 'Unassigned' ? '' : formData.satVerbalMentor,
+        satMathMentor: formData.satMathMentor === 'Unassigned' ? '' : formData.satMathMentor,
+        taskSheetLink: formData.taskSheetLink,
+        academicScores: scores,
+        activities: student.activities || [],
+        extracurriculars: extracurriculars,
+        operationalLogs: [newOpLog, ...(student.operationalLogs || [])]
+      };
+
+      await updateStudent(updatedPayload);
+      onUpdate(updatedPayload);
+
+      const cleanNewPwd = newPasswordDraft.trim();
+      if (canManageStudentCredentials && cleanNewPwd) {
+        if (cleanNewPwd.length < 6) {
+          setProfileFeedback({
+            type: 'error',
+            message: 'Profile saved, but password was not changed (must be at least 6 characters).',
+          });
+          setIsSavingProfile(false);
+          return;
+        }
+        const pwdRes = await resetPortalUserPassword({
+          email: formData.email,
+          name: formData.name,
+          newPassword: cleanNewPwd,
+          userType: 'student',
+          studentId: student.id,
+        });
+        if (!pwdRes.ok) {
+          setProfileFeedback({
+            type: 'error',
+            message: `Profile saved, but password update failed: ${pwdRes.error || 'Please try again.'}`,
+          });
+          setIsSavingProfile(false);
+          return;
+        }
+        setNewPasswordDraft('');
+        setProfileFeedback({
+          type: 'success',
+          message: 'Student profile and portal password updated directly in Firebase.',
+        });
+      } else {
+        setProfileFeedback({
+          type: 'success',
+          message: 'Student profile saved to Firestore.',
+        });
+      }
+
+      setIsEditing(false);
+    } catch (err: any) {
+      setProfileFeedback({
+        type: 'error',
+        message: err?.message || 'Failed to save student profile changes.',
+      });
+    } finally {
+      setIsSavingProfile(false);
+    }
   };
 
   return (
@@ -4619,14 +4918,32 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
       <div className="flex justify-between items-center">
         <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Master Details</h3>
         {!isEditing ? (
-          <Button onClick={() => setIsEditing(true)} size="sm" variant="outline" className="bg-white">Edit Profile</Button>
+          <Button onClick={() => { setProfileFeedback(null); setIsEditing(true); }} size="sm" variant="outline" className="bg-white">Edit Profile</Button>
         ) : (
           <div className="flex gap-2">
-             <Button onClick={() => setIsEditing(false)} size="sm" variant="ghost">Cancel</Button>
-             <Button onClick={handleSave} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">Save Changes</Button>
+             <Button onClick={() => { setNewPasswordDraft(''); setIsEditing(false); }} size="sm" variant="ghost" disabled={isSavingProfile}>Cancel</Button>
+             <Button onClick={handleSave} size="sm" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={isSavingProfile}>
+               {isSavingProfile ? 'Saving...' : 'Save Changes'}
+             </Button>
           </div>
         )}
       </div>
+
+      {profileFeedback && (
+        <div
+          className={cn(
+            'p-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2',
+            profileFeedback.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-red-50 border-red-200 text-red-700'
+          )}
+        >
+          <span>{profileFeedback.message}</span>
+          <button type="button" onClick={() => setProfileFeedback(null)}>
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       <Card>
         <CardContent className="p-6">
@@ -4712,13 +5029,13 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                 )
               )}
             </div>
-            {isUserAdmin(currentUser) && (
+            {canManageStudentCredentials && (
               <div className="col-span-2 p-4 bg-amber-50/70 border border-amber-200 rounded-xl space-y-2.5">
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
                     <Shield className="w-4 h-4 text-amber-600" />
-                    <span className="text-xs font-bold text-amber-900">Admin Security & Student Portal Credentials</span>
-                    <span className="text-xs text-amber-700">· Visible only to System Admin</span>
+                    <span className="text-xs font-bold text-amber-900">Portal Security & Student Credentials</span>
+                    <span className="text-xs text-amber-700">· Visible to Admins & Category Managers</span>
                   </div>
                   <Button
                     size="sm"
@@ -4778,6 +5095,20 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                     )}
                   </div>
                 </div>
+                {isEditing && (
+                  <div className="pt-2 border-t border-amber-200/80">
+                    <label className="text-[11px] font-bold text-amber-900 block mb-1">
+                      Set / Reset Portal Password Directly (Optional — Leave blank to keep current password, no email sent)
+                    </label>
+                    <input
+                      type="text"
+                      value={newPasswordDraft}
+                      onChange={(e) => setNewPasswordDraft(e.target.value)}
+                      placeholder="Enter new password (min 6 chars) to update immediately on Save Changes"
+                      className="w-full bg-white border border-amber-300 rounded-lg px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -5079,8 +5410,8 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
         </CardContent>
       </Card>
 
-      {/* Admin Change Password Modal in Profile Details */}
-      {isUserAdmin(currentUser) && isChangePasswordOpen && (
+      {/* Admin & Manager Change Password Modal in Profile Details */}
+      {canManageStudentCredentials && isChangePasswordOpen && (
         <ChangeUserPasswordModal
           isOpen={isChangePasswordOpen}
           onClose={() => setIsChangePasswordOpen(false)}
@@ -5096,14 +5427,6 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
               email: student.email,
               name: student.name,
               newPassword: newPassword.trim(),
-              userType: 'student',
-              studentId: student.id,
-            });
-          }}
-          onSendResetEmail={async (em) => {
-            await resetPortalUserPassword({
-              email: em,
-              name: student.name,
               userType: 'student',
               studentId: student.id,
             });
@@ -5517,7 +5840,7 @@ function StaffDetailDrawer({
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-xs font-bold uppercase text-slate-500 tracking-wider">Students Under Staff Management</h3>
-              {canManageRoster && !memberHasGlobalScope && (
+              {canManageRoster && (
                 <Button
                   size="sm"
                   onClick={openManageStudentsModal}
@@ -5581,7 +5904,7 @@ function StaffDetailDrawer({
                       : 'Click Assign / Manage Students to link students to this counselor or mentor.'}
                   </p>
                 </div>
-                {canManageRoster && !memberHasGlobalScope && (
+                {canManageRoster && (
                   <Button
                     size="sm"
                     onClick={openManageStudentsModal}
@@ -5878,13 +6201,6 @@ function StaffDetailDrawer({
               email: staffMember.email,
               name: staffMember.name,
               newPassword: newPassword.trim(),
-              userType: 'staff',
-            });
-          }}
-          onSendResetEmail={async (em) => {
-            await resetPortalUserPassword({
-              email: em,
-              name: staffMember.name,
               userType: 'staff',
             });
           }}

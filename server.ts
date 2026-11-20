@@ -1,17 +1,12 @@
 import "dotenv/config";
 import express from "express";
 import http from "http";
-import { WebSocketServer, WebSocket } from "ws";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
-import { google } from "googleapis";
-import nodemailer from "nodemailer";
 import crypto from "crypto";
-import mammoth from "mammoth";
 import { requireAuth, AuthRequest } from "./src/middleware/auth";
-import { adminAuth, adminDb, hasAdminServiceAccount, firebaseWebApiKey } from "./src/lib/firebase-admin";
+import { adminAuth, adminDb, hasAdminServiceAccount, firebaseWebApiKey, firebaseAppletConfig } from "./src/lib/firebase-admin";
 import { db, createPool } from "./src/db/index";
 import {
   users,
@@ -60,6 +55,8 @@ const passwordResetStore = new Map<string, PasswordResetItem>();
 let cachedTransporter: any = null;
 async function getMailTransporter() {
   if (cachedTransporter) return cachedTransporter;
+  const nodemailerMod: any = await import("nodemailer");
+  const nodemailer = nodemailerMod.default || nodemailerMod;
   if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
     try {
       cachedTransporter = nodemailer.createTransport({
@@ -94,15 +91,16 @@ async function safeDbQuery<T>(queryFn: () => Promise<T>, fallback: T): Promise<T
   try {
     return await queryFn();
   } catch (firstErr: any) {
-    // Cloud SQL Developer edition scales to zero (~2s cold start); retry once on transient connection wakeup
+    // Cloud SQL Developer edition scales to zero (~2s cold start); retry once on transient connection wakeup (skip slow sleep on Vercel)
     const msg = String(firstErr?.message || firstErr || '').toLowerCase();
     const isTransient =
-      msg.includes('connect') ||
-      msg.includes('timeout') ||
-      msg.includes('terminated') ||
-      msg.includes('econnreset') ||
-      msg.includes('closed') ||
-      msg.includes('failed query');
+      !process.env.VERCEL &&
+      (msg.includes('connect') ||
+        msg.includes('timeout') ||
+        msg.includes('terminated') ||
+        msg.includes('econnreset') ||
+        msg.includes('closed') ||
+        msg.includes('failed query'));
     if (isTransient) {
       await new Promise((r) => setTimeout(r, 1200));
       try {
@@ -126,23 +124,63 @@ function normEmailKey(email?: string | null): string {
   return clean ? clean.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 128) : "unknown_user";
 }
 
-async function isVerifiedFirebaseAdmin(req: AuthRequest): Promise<boolean> {
+const GLOBAL_MANAGER_ROLES = new Set([
+  "SYSTEM_ADMIN",
+  "ADMIN",
+  "SUPER_ADMIN",
+  "CATEGORY_MANAGER",
+  "CATEGORY_LEAD",
+  "OPERATIONS_LEAD",
+  "OPS_LEAD",
+  "HEAD_COUNSELOR",
+  "ACADEMIC_DIRECTOR",
+]);
+
+async function getVerifiedCallerStaffDirRole(req: AuthRequest): Promise<{ role: string; status: string; globalScope: boolean } | null> {
   const email = normEmail(req.user?.email);
   const uid = (req.user?.uid || "").trim();
-  if (!uid || !email) return false;
-  if (email === "uppseekers@gmail.com") return true;
+  if (!uid || !email) return null;
+  if (email === "uppseekers@gmail.com") {
+    return { role: "SYSTEM_ADMIN", status: "Active", globalScope: true };
+  }
 
   if (hasAdminServiceAccount()) {
     try {
       const adminSnap = await adminDb.collection("admins").doc(uid).get();
-      if (adminSnap.exists) return true;
+      if (adminSnap.exists) {
+        return { role: "SYSTEM_ADMIN", status: "Active", globalScope: true };
+      }
       const dirSnap = await adminDb.collection("staff_directory").doc(normEmailKey(email)).get();
       if (dirSnap.exists) {
         const d = dirSnap.data() || {};
-        const role = String(d.role || "").toUpperCase();
-        const status = String(d.status || "Active").toLowerCase();
-        if (status !== "suspended" && (role === "SYSTEM_ADMIN" || role === "ADMIN")) {
-          return true;
+        return {
+          role: String(d.role || "").trim().toUpperCase().replace(/[\s-]+/g, "_"),
+          status: String(d.status || "Active").trim(),
+          globalScope: Boolean(d.globalScope),
+        };
+      }
+    } catch {
+      // Fall through to Firestore REST / SQL check
+    }
+  }
+
+  // Fallback: verify caller's own staff_directory document via Firestore REST using their verified Bearer token
+  const authHeader = req.headers.authorization || "";
+  const idToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const firebaseProjectId = firebaseAppletConfig.projectId;
+  const firestoreDatabaseId = firebaseAppletConfig.firestoreDatabaseId || "(default)";
+  if (idToken && firebaseProjectId && firestoreDatabaseId) {
+    try {
+      const docUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(firebaseProjectId)}/databases/${encodeURIComponent(firestoreDatabaseId)}/documents/staff_directory/${encodeURIComponent(normEmailKey(email))}`;
+      const r = await fetch(docUrl, { headers: { Authorization: `Bearer ${idToken}` } });
+      if (r.ok) {
+        const docJson: any = await r.json().catch(() => null);
+        const fields = docJson?.fields || {};
+        const role = String(fields.role?.stringValue || "").trim().toUpperCase().replace(/[\s-]+/g, "_");
+        const status = String(fields.status?.stringValue || "Active").trim();
+        const globalScope = Boolean(fields.globalScope?.booleanValue);
+        if (role) {
+          return { role, status, globalScope };
         }
       }
     } catch {
@@ -155,11 +193,155 @@ async function isVerifiedFirebaseAdmin(req: AuthRequest): Promise<boolean> {
       () => db.select().from(users).where(or(eq(users.email, email), eq(users.uid, uid))).then(r => r[0] || null),
       null
     );
-    const role = String(userRow?.role || "").toUpperCase();
-    if (role === "SYSTEM_ADMIN" || role === "ADMIN") return true;
+    if (userRow?.role) {
+      const role = String(userRow.role).trim().toUpperCase().replace(/[\s-]+/g, "_");
+      return { role, status: "Active", globalScope: GLOBAL_MANAGER_ROLES.has(role) };
+    }
   }
 
-  return false;
+  return null;
+}
+
+async function isVerifiedFirebaseAdmin(req: AuthRequest): Promise<boolean> {
+  const info = await getVerifiedCallerStaffDirRole(req);
+  if (!info) return false;
+  if (info.status.toLowerCase() === "suspended") return false;
+  return info.role === "SYSTEM_ADMIN" || info.role === "ADMIN" || info.role === "SUPER_ADMIN";
+}
+
+async function isVerifiedPortalManager(req: AuthRequest): Promise<boolean> {
+  const info = await getVerifiedCallerStaffDirRole(req);
+  if (!info) return false;
+  if (info.status.toLowerCase() === "suspended") return false;
+  return info.globalScope || GLOBAL_MANAGER_ROLES.has(info.role);
+}
+
+async function updateFirebasePasswordViaToolkitWithOldPasswords(
+  email: string,
+  newPassword: string,
+  candidateOldPasswords: string[]
+): Promise<{ ok: boolean; uid?: string; created?: boolean; error?: string }> {
+  if (!firebaseWebApiKey) {
+    return { ok: false, error: "Firebase Web API key is not configured." };
+  }
+
+  const tried = new Set<string>();
+  const candidates = candidateOldPasswords
+    .map((p) => (typeof p === "string" ? p.trim() : ""))
+    .filter((p) => {
+      if (!p || tried.has(p)) return false;
+      tried.add(p);
+      return true;
+    });
+
+  // 1. Try signing in with any known previous password (or the target new password if already synced)
+  for (const pwd of [...candidates, newPassword]) {
+    try {
+      const signInRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(firebaseWebApiKey)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password: pwd, returnSecureToken: true }),
+        }
+      );
+      const signInJson: any = await signInRes.json().catch(() => null);
+      if (signInRes.ok && signInJson?.idToken) {
+        if (pwd === newPassword) {
+          return { ok: true, uid: signInJson.localId, created: false };
+        }
+        const updateRes = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:update?key=${encodeURIComponent(firebaseWebApiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              idToken: signInJson.idToken,
+              password: newPassword,
+              returnSecureToken: true,
+            }),
+          }
+        );
+        const updateJson: any = await updateRes.json().catch(() => null);
+        if (updateRes.ok) {
+          return { ok: true, uid: updateJson?.localId || signInJson.localId, created: false };
+        }
+        return {
+          ok: false,
+          error: updateJson?.error?.message || "Failed to update password in Firebase Auth.",
+        };
+      }
+    } catch {
+      // Try next candidate
+    }
+  }
+
+  // 2. If user does not exist yet in Firebase Auth, create them directly with newPassword
+  try {
+    const signUpRes = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(firebaseWebApiKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email,
+          password: newPassword,
+          returnSecureToken: false,
+        }),
+      }
+    );
+    const signUpJson: any = await signUpRes.json().catch(() => null);
+    if (signUpRes.ok) {
+      return { ok: true, uid: signUpJson?.localId, created: true };
+    }
+    if (signUpJson?.error?.message === "EMAIL_EXISTS") {
+      return {
+        ok: false,
+        error:
+          "Existing Firebase Auth password does not match our stored record and server Admin SDK credentials (FIREBASE_SERVICE_ACCOUNT_JSON) are not configured.",
+      };
+    }
+    return { ok: false, error: signUpJson?.error?.message || "Failed to provision Firebase Auth account." };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Firebase Auth network error." };
+  }
+}
+
+async function getStoredKnownPasswordsForEmail(cleanEmail: string): Promise<string[]> {
+  const candidates: string[] = [];
+  try {
+    const kvMap = await sysKvGet<Record<string, string>>("user_passwords", {});
+    const fromKv = kvMap?.[`email:${cleanEmail}`];
+    if (typeof fromKv === "string" && fromKv.trim()) {
+      candidates.push(fromKv.trim());
+    }
+  } catch {
+    // ignore
+  }
+  if (hasAdminServiceAccount()) {
+    try {
+      const credSnap = await adminDb.collection("admin_student_credentials").doc(normEmailKey(cleanEmail)).get();
+      const fromCred = credSnap.exists ? credSnap.data()?.password : "";
+      if (typeof fromCred === "string" && fromCred.trim()) {
+        candidates.push(fromCred.trim());
+      }
+    } catch {
+      // ignore
+    }
+  }
+  if (hasSqlEnv()) {
+    try {
+      const allUsers = await readAllUsersSafe();
+      for (const u of allUsers) {
+        if (normEmail(u?.email) === cleanEmail && typeof u?.password === "string" && u.password.trim()) {
+          candidates.push(u.password.trim());
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return candidates;
 }
 
 const CORE_STUDENT_RELATIONAL_KEYS = new Set([
@@ -512,186 +694,14 @@ async function findUserByUidOrEmail(uid?: string, email?: string) {
   );
 }
 
-async function startServer() {
+function createExpressApp(options?: {
+  sendToLocalWsClients?: (serializedPayload: string) => void;
+  serverInstanceId?: string;
+}): express.Express {
   const app = express();
-  const httpServer = http.createServer(app);
-  const PORT = Number(process.env.PORT) || 3000;
-  const SERVER_INSTANCE_ID = crypto.randomUUID();
-
-  // Real-time WebSocket server attached to the same HTTP server (disabled in Vercel serverless)
-  interface AliveWebSocket extends WebSocket {
-    isAlive?: boolean;
-  }
-  const wss: WebSocketServer | null = process.env.VERCEL
-    ? null
-    : new WebSocketServer({ server: httpServer, path: "/ws/realtime" });
-
-  const sendToLocalWsClients = (serializedPayload: string) => {
-    if (!wss) return;
-    wss.clients.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) {
-        try {
-          client.send(serializedPayload);
-        } catch {
-          // Ignore send errors on closing sockets
-        }
-      }
-    });
-  };
-
-  // Cross-instance Cloud Run & Preview<->Published PostgreSQL LISTEN/NOTIFY bridge
-  let pgListenClient: any = null;
-  let pgListenConnecting = false;
-  let pgIdleReleaseTimer: ReturnType<typeof setTimeout> | null = null;
-  let pgReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
+  const SERVER_INSTANCE_ID = options?.serverInstanceId || crypto.randomUUID();
+  const sendToLocalWsClients = options?.sendToLocalWsClients || (() => {});
   const hasSqlConfigured = () => hasSqlEnv();
-
-  const releasePgListener = () => {
-    if (pgReconnectTimer) {
-      clearTimeout(pgReconnectTimer);
-      pgReconnectTimer = null;
-    }
-    if (pgListenClient) {
-      const clientToRelease = pgListenClient;
-      pgListenClient = null;
-      clientToRelease.removeAllListeners("notification");
-      clientToRelease.removeAllListeners("error");
-      clientToRelease.removeAllListeners("end");
-      clientToRelease.query("UNLISTEN uppseekers_realtime").catch(() => {}).finally(() => {
-        try {
-          clientToRelease.release();
-        } catch {
-          // Ignore release errors
-        }
-      });
-    }
-  };
-
-  const ensurePgListener = async () => {
-    if (!wss || !hasSqlConfigured() || pgListenClient || pgListenConnecting || wss.clients.size === 0) {
-      return;
-    }
-    pgListenConnecting = true;
-    try {
-      const pool = createPool();
-      const client = await pool.connect();
-      if (!wss || wss.clients.size === 0) {
-        client.release();
-        pgListenConnecting = false;
-        return;
-      }
-      pgListenClient = client;
-
-      client.on("notification", (msg: any) => {
-        if (msg?.channel !== "uppseekers_realtime" || !msg.payload) return;
-        try {
-          const parsed = JSON.parse(msg.payload);
-          if (!parsed || parsed.instanceId === SERVER_INSTANCE_ID) return;
-          const { instanceId: _ignored, ...cleanEvent } = parsed;
-          sendToLocalWsClients(JSON.stringify(cleanEvent));
-        } catch {
-          // Ignore malformed notification payloads
-        }
-      });
-
-      const handleDisconnect = () => {
-        if (pgListenClient === client) {
-          pgListenClient = null;
-          try {
-            client.release(true);
-          } catch {
-            // Ignore release errors
-          }
-          if (wss && wss.clients.size > 0 && !pgReconnectTimer) {
-            pgReconnectTimer = setTimeout(() => {
-              pgReconnectTimer = null;
-              void ensurePgListener();
-            }, 3000);
-          }
-        }
-      };
-
-      client.on("error", handleDisconnect);
-      client.on("end", handleDisconnect);
-
-      await client.query("LISTEN uppseekers_realtime");
-    } catch {
-      if (wss && wss.clients.size > 0 && !pgReconnectTimer) {
-        pgReconnectTimer = setTimeout(() => {
-          pgReconnectTimer = null;
-          void ensurePgListener();
-        }, 4000);
-      }
-    } finally {
-      pgListenConnecting = false;
-    }
-  };
-
-  if (wss) {
-    wss.on("connection", (ws: AliveWebSocket) => {
-      ws.isAlive = true;
-      if (pgIdleReleaseTimer) {
-        clearTimeout(pgIdleReleaseTimer);
-        pgIdleReleaseTimer = null;
-      }
-      void ensurePgListener();
-
-      ws.on("pong", () => {
-        ws.isAlive = true;
-      });
-      ws.on("message", (raw) => {
-        ws.isAlive = true;
-        try {
-          const msg = JSON.parse(String(raw));
-          if (msg?.type === "ping" && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ type: "pong", timestamp: new Date().toISOString() }));
-          }
-        } catch {
-          // Ignore malformed client frames
-        }
-      });
-      ws.on("close", () => {
-        if (wss && wss.clients.size === 0 && !pgIdleReleaseTimer) {
-          pgIdleReleaseTimer = setTimeout(() => {
-            pgIdleReleaseTimer = null;
-            if (wss && wss.clients.size === 0) {
-              releasePgListener();
-            }
-          }, 30000);
-        }
-      });
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(
-          JSON.stringify({
-            type: "connected",
-            timestamp: new Date().toISOString(),
-          })
-        );
-      }
-    });
-
-    const wsHeartbeat = setInterval(() => {
-      wss.clients.forEach((client) => {
-        const ws = client as AliveWebSocket;
-        if (ws.isAlive === false) {
-          ws.terminate();
-          return;
-        }
-        ws.isAlive = false;
-        try {
-          ws.ping();
-        } catch {
-          // Ignore ping errors on closing sockets
-        }
-      });
-    }, 25000);
-
-    wss.on("close", () => {
-      clearInterval(wsHeartbeat);
-      releasePgListener();
-    });
-  }
 
   const broadcastRealtime = (event: {
     type: string;
@@ -705,7 +715,7 @@ async function startServer() {
     };
     sendToLocalWsClients(JSON.stringify(fullEvent));
 
-    if (hasSqlConfigured()) {
+    if (hasSqlConfigured() && !process.env.VERCEL) {
       const pgPayload = JSON.stringify({
         ...fullEvent,
         instanceId: SERVER_INSTANCE_ID,
@@ -718,11 +728,23 @@ async function startServer() {
 
   app.use(express.json({ limit: "50mb" }));
 
-  // Lazy single-flight schema introspection only when SQL is configured
-  app.use("/api", async (_req, _res, next) => {
+  // Lazy single-flight schema introspection only when SQL is configured (skip on health & Zoho OAuth routes)
+  app.use("/api", async (req, _res, next) => {
+    const reqPath = req.path || "";
+    if (reqPath === "/health" || reqPath.startsWith("/zoho")) {
+      next();
+      return;
+    }
     if (hasSqlConfigured()) {
       try {
-        await ensureProductionReady();
+        if (process.env.VERCEL) {
+          await Promise.race([
+            ensureProductionReady(),
+            new Promise<void>((resolve) => setTimeout(resolve, 3500)),
+          ]);
+        } else {
+          await ensureProductionReady();
+        }
       } catch {
         // Handled internally by productionVault
       }
@@ -1065,17 +1087,25 @@ async function startServer() {
     }
   });
 
-  // Admin Provision Firebase Auth User (Server-Side via Admin SDK when configured)
+  // Admin / Manager Provision Firebase Auth User (Server-Side via Admin SDK or Identity Toolkit)
   app.post("/api/firebase-admin/provision-user", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const allowed = await isVerifiedFirebaseAdmin(req);
+      const userType = String(req.body?.userType || "student").trim().toLowerCase();
+      const allowed =
+        userType === "staff"
+          ? await isVerifiedFirebaseAdmin(req)
+          : await isVerifiedPortalManager(req);
       if (!allowed) {
-        return res.status(403).json({ error: "Forbidden: Only System Admins can provision portal users." });
+        return res.status(403).json({
+          error:
+            userType === "staff"
+              ? "Forbidden: Only System Admins can provision staff accounts."
+              : "Forbidden: Only Admins or Category Managers can provision student accounts.",
+        });
       }
       const cleanEmail = normEmail(req.body?.email);
       const displayName = String(req.body?.name || "").trim();
       const password = typeof req.body?.password === "string" ? req.body.password.trim() : "";
-      const userType = String(req.body?.userType || "student").trim().toLowerCase();
 
       if (!cleanEmail) {
         return res.status(400).json({ error: "Valid email is required." });
@@ -1084,61 +1114,82 @@ async function startServer() {
         return res.status(400).json({ error: "Password must be at least 6 characters." });
       }
 
-      if (userType !== "staff") {
-        await saveUserPasswordMirror(cleanEmail, cleanEmail, password);
+      if (hasAdminServiceAccount()) {
+        try {
+          const existing = await adminAuth.getUserByEmail(cleanEmail);
+          await adminAuth.updateUser(existing.uid, {
+            ...(displayName ? { displayName } : {}),
+            password,
+            emailVerified: true,
+          });
+          if (userType !== "staff") {
+            await saveUserPasswordMirror(existing.uid, cleanEmail, password);
+          }
+          return res.json({ ok: true, uid: existing.uid, created: false });
+        } catch (lookupErr: any) {
+          if (lookupErr?.code !== "auth/user-not-found") {
+            throw lookupErr;
+          }
+          const created = await adminAuth.createUser({
+            email: cleanEmail,
+            password,
+            displayName: displayName || cleanEmail.split("@")[0],
+            emailVerified: true,
+          });
+          if (userType !== "staff") {
+            await saveUserPasswordMirror(created.uid, cleanEmail, password);
+          }
+          return res.json({ ok: true, uid: created.uid, created: true });
+        }
       }
 
-      if (!hasAdminServiceAccount()) {
-        return res.json({
-          ok: false,
-          fallbackToClient: true,
-          message: "FIREBASE_SERVICE_ACCOUNT_JSON is not configured on the server; falling back to client provisioner.",
-        });
+      const knownPasswords = await getStoredKnownPasswordsForEmail(cleanEmail);
+      if (typeof req.body?.previousPassword === "string" && req.body.previousPassword.trim()) {
+        knownPasswords.unshift(req.body.previousPassword.trim());
+      }
+      const toolkitResult = await updateFirebasePasswordViaToolkitWithOldPasswords(
+        cleanEmail,
+        password,
+        knownPasswords
+      );
+      if (toolkitResult.ok) {
+        if (userType !== "staff") {
+          await saveUserPasswordMirror(toolkitResult.uid || cleanEmail, cleanEmail, password);
+        }
+        return res.json({ ok: true, uid: toolkitResult.uid, created: Boolean(toolkitResult.created) });
       }
 
-      try {
-        const existing = await adminAuth.getUserByEmail(cleanEmail);
-        await adminAuth.updateUser(existing.uid, {
-          ...(displayName ? { displayName } : {}),
-          password,
-          emailVerified: true,
-        });
-        if (userType !== "staff") {
-          await saveUserPasswordMirror(existing.uid, cleanEmail, password);
-        }
-        return res.json({ ok: true, uid: existing.uid, created: false });
-      } catch (lookupErr: any) {
-        if (lookupErr?.code !== "auth/user-not-found") {
-          throw lookupErr;
-        }
-        const created = await adminAuth.createUser({
-          email: cleanEmail,
-          password,
-          displayName: displayName || cleanEmail.split("@")[0],
-          emailVerified: true,
-        });
-        if (userType !== "staff") {
-          await saveUserPasswordMirror(created.uid, cleanEmail, password);
-        }
-        return res.json({ ok: true, uid: created.uid, created: true });
-      }
+      return res.json({
+        ok: false,
+        fallbackToClient: true,
+        error: toolkitResult.error,
+        message: toolkitResult.error || "Falling back to client provisioner.",
+      });
     } catch (err: any) {
       console.error("Error in /api/firebase-admin/provision-user:", err);
       return res.status(500).json({ ok: false, error: err?.message || "Failed to provision Firebase user" });
     }
   });
 
-  // Admin Change Firebase Auth User Password (Server-Side via Admin SDK when configured)
+  // Admin / Category Manager Change Firebase Auth User Password (Direct, Zero Emails)
   const handleAdminChangeFirebasePassword = async (req: AuthRequest, res: express.Response) => {
     try {
-      const allowed = await isVerifiedFirebaseAdmin(req);
+      const userType = String(req.body?.userType || "student").trim().toLowerCase();
+      const allowed =
+        userType === "staff"
+          ? await isVerifiedFirebaseAdmin(req)
+          : await isVerifiedPortalManager(req);
       if (!allowed) {
-        return res.status(403).json({ error: "Forbidden: Only System Admins can change another user's password." });
+        return res.status(403).json({
+          error:
+            userType === "staff"
+              ? "Forbidden: Only System Admins can change staff passwords."
+              : "Forbidden: Only Admins or Category Managers can change student passwords.",
+        });
       }
 
       const cleanEmail = normEmail(req.body?.email);
       const cleanNewPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword.trim() : "";
-      const userType = String(req.body?.userType || "").trim().toLowerCase();
       if (!cleanEmail) {
         return res.status(400).json({ error: "Target user email is required." });
       }
@@ -1146,43 +1197,65 @@ async function startServer() {
         return res.status(400).json({ error: "New password must be at least 6 characters." });
       }
 
-      if (userType !== "staff") {
-        await saveUserPasswordMirror(cleanEmail, cleanEmail, cleanNewPassword);
-      }
-
-      if (!hasAdminServiceAccount()) {
-        return res.json({
-          ok: false,
-          fallbackToClient: true,
-          message: "FIREBASE_SERVICE_ACCOUNT_JSON is not configured on the server.",
-        });
-      }
-
-      try {
-        const userRecord = await adminAuth.getUserByEmail(cleanEmail);
-        await adminAuth.updateUser(userRecord.uid, {
-          password: cleanNewPassword,
-          emailVerified: true,
-        });
-        if (userType !== "staff") {
-          await saveUserPasswordMirror(userRecord.uid, cleanEmail, cleanNewPassword);
-        }
-        return res.json({ ok: true, success: true, uid: userRecord.uid, message: "Firebase password updated successfully." });
-      } catch (err: any) {
-        if (err?.code === "auth/user-not-found") {
-          const created = await adminAuth.createUser({
-            email: cleanEmail,
+      if (hasAdminServiceAccount()) {
+        try {
+          const userRecord = await adminAuth.getUserByEmail(cleanEmail);
+          await adminAuth.updateUser(userRecord.uid, {
             password: cleanNewPassword,
-            displayName: String(req.body?.name || cleanEmail.split("@")[0]).trim(),
             emailVerified: true,
           });
           if (userType !== "staff") {
-            await saveUserPasswordMirror(created.uid, cleanEmail, cleanNewPassword);
+            await saveUserPasswordMirror(userRecord.uid, cleanEmail, cleanNewPassword);
           }
-          return res.json({ ok: true, success: true, uid: created.uid, message: "Firebase Auth account created with the new password." });
+          return res.json({ ok: true, success: true, uid: userRecord.uid, message: "Firebase password updated successfully." });
+        } catch (err: any) {
+          if (err?.code === "auth/user-not-found") {
+            const created = await adminAuth.createUser({
+              email: cleanEmail,
+              password: cleanNewPassword,
+              displayName: String(req.body?.name || cleanEmail.split("@")[0]).trim(),
+              emailVerified: true,
+            });
+            if (userType !== "staff") {
+              await saveUserPasswordMirror(created.uid, cleanEmail, cleanNewPassword);
+            }
+            return res.json({ ok: true, success: true, uid: created.uid, message: "Firebase Auth account created with the new password." });
+          }
+          throw err;
         }
-        throw err;
       }
+
+      // No service account: attempt verified update via Identity Toolkit using known previous password(s)
+      const knownPasswords = await getStoredKnownPasswordsForEmail(cleanEmail);
+      if (typeof req.body?.previousPassword === "string" && req.body.previousPassword.trim()) {
+        knownPasswords.unshift(req.body.previousPassword.trim());
+      }
+      const toolkitResult = await updateFirebasePasswordViaToolkitWithOldPasswords(
+        cleanEmail,
+        cleanNewPassword,
+        knownPasswords
+      );
+      if (toolkitResult.ok) {
+        if (userType !== "staff") {
+          await saveUserPasswordMirror(toolkitResult.uid || cleanEmail, cleanEmail, cleanNewPassword);
+        }
+        return res.json({
+          ok: true,
+          success: true,
+          uid: toolkitResult.uid,
+          message: toolkitResult.created
+            ? "Firebase Auth account created with the new password."
+            : "Firebase password updated successfully.",
+        });
+      }
+
+      return res.status(422).json({
+        ok: false,
+        fallbackToClient: false,
+        error:
+          toolkitResult.error ||
+          "Could not update Firebase Auth password. Ensure the previous password is known or configure FIREBASE_SERVICE_ACCOUNT_JSON.",
+      });
     } catch (e: any) {
       console.error("Error in admin password change:", e);
       return res.status(500).json({ ok: false, error: e?.message || "Failed to update password in Firebase Auth." });
@@ -1192,12 +1265,223 @@ async function startServer() {
   app.post("/api/firebase-admin/change-password", requireAuth, handleAdminChangeFirebasePassword);
   app.post("/api/admin/change-password", requireAuth, handleAdminChangeFirebasePassword);
 
-  // Admin-only: Read stored student portal passwords (never staff passwords, never accessible to non-admins)
+  // Authenticated User Self-Service Direct Password Change (No Email Links)
+  app.post("/api/auth/self-change-password", requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const uid = String(req.user?.uid || "").trim();
+      const email = normEmail(req.user?.email);
+      const newPassword = typeof req.body?.newPassword === "string" ? req.body.newPassword.trim() : "";
+      const currentPassword = typeof req.body?.currentPassword === "string" ? req.body.currentPassword.trim() : "";
+
+      if (!uid || !email) {
+        return res.status(401).json({ ok: false, error: "Authentication required." });
+      }
+      if (!newPassword || newPassword.length < 6) {
+        return res.status(400).json({ ok: false, error: "New password must be at least 6 characters." });
+      }
+
+      const callerStaff = await getVerifiedCallerStaffDirRole(req);
+      const isStaffCaller = Boolean(callerStaff);
+
+      if (hasAdminServiceAccount()) {
+        await adminAuth.updateUser(uid, { password: newPassword, emailVerified: true });
+        if (!isStaffCaller) {
+          await saveUserPasswordMirror(uid, email, newPassword);
+          try {
+            const credId = normEmailKey(email);
+            await adminDb.collection("admin_student_credentials").doc(credId).set(
+              {
+                id: credId,
+                email,
+                password: newPassword,
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            );
+          } catch {
+            // Non-fatal mirror sync
+          }
+        }
+        return res.json({ ok: true, success: true, message: "Password updated successfully." });
+      }
+
+      // Fallback using Identity Toolkit with caller's ID token or currentPassword
+      if (firebaseWebApiKey) {
+        let tokenToUse = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+        if (currentPassword) {
+          const signInRes = await fetch(
+            `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${encodeURIComponent(firebaseWebApiKey)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ email, password: currentPassword, returnSecureToken: true }),
+            }
+          );
+          const signInJson: any = await signInRes.json().catch(() => null);
+          if (!signInRes.ok || !signInJson?.idToken) {
+            return res.status(400).json({ ok: false, error: "Current password is incorrect." });
+          }
+          tokenToUse = signInJson.idToken;
+        }
+        const updateRes = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:update?key=${encodeURIComponent(firebaseWebApiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ idToken: tokenToUse, password: newPassword, returnSecureToken: true }),
+          }
+        );
+        const updateJson: any = await updateRes.json().catch(() => null);
+        if (updateRes.ok) {
+          if (!isStaffCaller) {
+            await saveUserPasswordMirror(uid, email, newPassword);
+          }
+          return res.json({ ok: true, success: true, message: "Password updated successfully." });
+        }
+        const errMsg = updateJson?.error?.message || "";
+        if (errMsg === "CREDENTIAL_TOO_OLD_LOGIN_AGAIN") {
+          return res.status(409).json({
+            ok: false,
+            requiresRecentLogin: true,
+            error: "Please enter your current password to verify your identity before updating.",
+          });
+        }
+        return res.status(400).json({ ok: false, error: errMsg || "Failed to update password." });
+      }
+
+      return res.status(500).json({ ok: false, error: "Firebase authentication configuration missing on server." });
+    } catch (e: any) {
+      console.error("Error in /api/auth/self-change-password:", e);
+      return res.status(500).json({ ok: false, error: e?.message || "Failed to update password." });
+    }
+  });
+
+  // Seamless Login-Time Legacy Student Credential Migration (Zero Emails)
+  // If an existing student from legacy SQL / credential store hasn't been migrated to Firebase Auth yet,
+  // verify their legacy password and provision their Firebase Auth account with that exact password.
+  app.post("/api/auth/migrate-legacy-login", async (req, res) => {
+    try {
+      const cleanEmail = normEmail(req.body?.email);
+      const rawPassword = typeof req.body?.password === "string" ? req.body.password.trim() : "";
+      if (!cleanEmail || !rawPassword || rawPassword.length < 6) {
+        return res.json({ ok: false, migrated: false });
+      }
+
+      let matchedPassword = "";
+      let displayName = cleanEmail.split("@")[0];
+      let matchedRole = "";
+
+      // 1. Check legacy SQL users table
+      if (hasSqlEnv()) {
+        const allUsers = await readAllUsersSafe();
+        const found = allUsers.find((u) => normEmail(u?.email) === cleanEmail);
+        if (found) {
+          const sqlPwd = typeof found.password === "string" ? found.password.trim() : "";
+          if (sqlPwd && sqlPwd === rawPassword) {
+            matchedPassword = sqlPwd;
+            displayName = String(found.name || displayName).trim();
+            matchedRole = String(found.role || "STUDENT").toUpperCase();
+          }
+        }
+      }
+
+      // 2. Check user_passwords KV mirror
+      if (!matchedPassword) {
+        const kvMap = await sysKvGet<Record<string, string>>("user_passwords", {});
+        const kvPwd = typeof kvMap?.[`email:${cleanEmail}`] === "string" ? kvMap[`email:${cleanEmail}`].trim() : "";
+        if (kvPwd && kvPwd === rawPassword) {
+          matchedPassword = kvPwd;
+          matchedRole = "STUDENT";
+        }
+      }
+
+      // 3. Check admin_student_credentials in Firestore if Admin SDK is configured
+      if (!matchedPassword && hasAdminServiceAccount()) {
+        try {
+          const credSnap = await adminDb.collection("admin_student_credentials").doc(normEmailKey(cleanEmail)).get();
+          if (credSnap.exists) {
+            const credData = credSnap.data() || {};
+            const storedPwd = typeof credData.password === "string" ? credData.password.trim() : "";
+            if (storedPwd && storedPwd === rawPassword) {
+              matchedPassword = storedPwd;
+              displayName = String(credData.studentName || displayName).trim();
+              matchedRole = "STUDENT";
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!matchedPassword) {
+        return res.json({ ok: false, migrated: false });
+      }
+
+      // Provision or sync into Firebase Auth with exact legacy password (zero emails)
+      if (hasAdminServiceAccount()) {
+        try {
+          const existing = await adminAuth.getUserByEmail(cleanEmail);
+          await adminAuth.updateUser(existing.uid, {
+            password: matchedPassword,
+            emailVerified: true,
+          });
+          if (matchedRole === "STUDENT") {
+            await saveUserPasswordMirror(existing.uid, cleanEmail, matchedPassword);
+          }
+          return res.json({ ok: true, migrated: true, uid: existing.uid });
+        } catch (lookupErr: any) {
+          if (lookupErr?.code !== "auth/user-not-found") {
+            throw lookupErr;
+          }
+          const created = await adminAuth.createUser({
+            email: cleanEmail,
+            password: matchedPassword,
+            displayName,
+            emailVerified: true,
+          });
+          if (matchedRole === "STUDENT") {
+            await saveUserPasswordMirror(created.uid, cleanEmail, matchedPassword);
+          }
+          return res.json({ ok: true, migrated: true, uid: created.uid });
+        }
+      }
+
+      if (firebaseWebApiKey) {
+        const signUpRes = await fetch(
+          `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${encodeURIComponent(firebaseWebApiKey)}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              email: cleanEmail,
+              password: matchedPassword,
+              displayName,
+              returnSecureToken: false,
+            }),
+          }
+        );
+        const signUpJson: any = await signUpRes.json().catch(() => null);
+        if (signUpRes.ok) {
+          if (matchedRole === "STUDENT") {
+            await saveUserPasswordMirror(signUpJson?.localId || cleanEmail, cleanEmail, matchedPassword);
+          }
+          return res.json({ ok: true, migrated: true, uid: signUpJson?.localId });
+        }
+      }
+
+      return res.json({ ok: false, migrated: false });
+    } catch (err: any) {
+      console.error("Error in /api/auth/migrate-legacy-login:", err);
+      return res.json({ ok: false, migrated: false });
+    }
+  });
+
+  // Admin & Category Manager: Read stored student portal passwords (never staff passwords)
   app.get("/api/firebase-admin/student-passwords", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const allowed = await isVerifiedFirebaseAdmin(req);
+      const allowed = await isVerifiedPortalManager(req);
       if (!allowed) {
-        return res.status(403).json({ error: "Forbidden: Only System Admins can view student portal passwords." });
+        return res.status(403).json({ error: "Forbidden: Only Admins and Category Managers can view student portal passwords." });
       }
       const passwordsByEmail: Record<string, string> = {};
       const passwordsByUid: Record<string, string> = {};
@@ -1266,9 +1550,9 @@ async function startServer() {
 
   app.post("/api/firebase-admin/sync-legacy-users", requireAuth, async (req: AuthRequest, res) => {
     try {
-      const allowed = await isVerifiedFirebaseAdmin(req);
+      const allowed = await isVerifiedPortalManager(req);
       if (!allowed) {
-        return res.status(403).json({ error: "Forbidden: Only System Admins can restore legacy users." });
+        return res.status(403).json({ error: "Forbidden: Only System Admins and Category Managers can restore legacy users." });
       }
       if (!hasSqlEnv()) {
         return res.json({
@@ -1366,12 +1650,37 @@ async function startServer() {
                 status: `failed:${signUpJson?.error?.message || signUpRes.status}`,
               });
             }
+            if (roleUpper === "STUDENT") {
+              await saveUserPasswordMirror(String(u?.uid || cleanEmail), cleanEmail, rawPwd);
+            }
           } else {
             failed++;
           }
         } catch (err: any) {
           failed++;
           details.push({ email: cleanEmail, role: roleUpper, status: `error:${err?.code || err?.message || "unknown"}` });
+        }
+        // Always backfill legacy student passwords into password mirror & Firestore credential vault
+        if (roleUpper === "STUDENT") {
+          await saveUserPasswordMirror(String(u?.uid || cleanEmail), cleanEmail, rawPwd);
+          if (hasAdminServiceAccount()) {
+            try {
+              const credId = normEmailKey(cleanEmail);
+              await adminDb.collection("admin_student_credentials").doc(credId).set(
+                {
+                  id: credId,
+                  studentId: String(u?.uid || `STU-${u?.id || credId}`),
+                  studentName: String(u?.name || cleanEmail.split("@")[0]).trim(),
+                  email: cleanEmail,
+                  password: rawPwd,
+                  updatedAt: new Date().toISOString(),
+                },
+                { merge: true }
+              );
+            } catch {
+              // ignore non-fatal mirror failure
+            }
+          }
         }
       }
 
@@ -1440,117 +1749,15 @@ async function startServer() {
     }
   });
 
-  // Request Password Reset - Triggers email with reset link and 6-digit OTP code
-  app.post("/api/auth/request-password-reset", async (req, res) => {
-    try {
-      const { email } = req.body;
-      if (!email || typeof email !== 'string') {
-        res.status(400).json({ error: "Email address is required" });
-        return;
-      }
-
-      const cleanEmail = email.toLowerCase().trim();
-      const token = crypto.randomBytes(32).toString('hex');
-      const code = Math.floor(100000 + Math.random() * 900000).toString();
-      const expiresAt = Date.now() + 60 * 60 * 1000; // 60 minutes
-
-      const resetItem: PasswordResetItem = {
-        token,
-        code,
-        email: cleanEmail,
-        expiresAt,
-      };
-
-      // Store by token and also index by code for verification
-      passwordResetStore.set(token, resetItem);
-      passwordResetStore.set(`code_${cleanEmail}_${code}`, resetItem);
-
-      let reqOrigin = 'http://localhost:3000';
-      try {
-        if (req.headers.origin && typeof req.headers.origin === 'string') {
-          reqOrigin = req.headers.origin;
-        } else if (req.headers.referer && typeof req.headers.referer === 'string') {
-          reqOrigin = new URL(req.headers.referer).origin;
-        } else {
-          const proto = req.protocol === 'https' || req.get('x-forwarded-proto') === 'https' ? 'https' : 'http';
-          reqOrigin = `${proto}://${req.get('host') || 'localhost:3000'}`;
-        }
-      } catch (urlErr) {
-        reqOrigin = 'http://localhost:3000';
-      }
-
-      const resetLink = `${reqOrigin}/reset-password?token=${token}&email=${encodeURIComponent(cleanEmail)}`;
-
-      const htmlContent = `
-        <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05);">
-          <div style="background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%); padding: 32px 24px; text-align: center;">
-            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 800; letter-spacing: -0.5px;">Uppseekers</h1>
-            <p style="color: #bfdbfe; margin: 6px 0 0 0; font-size: 13px; font-weight: 500;">Always Look Up &bull; Student &amp; Team Portal</p>
-          </div>
-          <div style="padding: 36px 28px;">
-            <h2 style="color: #0f172a; font-size: 20px; font-weight: 700; margin: 0 0 12px 0;">Reset Your Password</h2>
-            <p style="color: #475569; font-size: 15px; line-height: 1.6; margin: 0 0 24px 0;">
-              Hello,<br/>
-              A request was made to reset or change the password for your Uppseekers account associated with <strong style="color: #1e293b;">${cleanEmail}</strong>.
-            </p>
-
-            <div style="background: #f8fafc; border: 1.5px dashed #cbd5e1; border-radius: 12px; padding: 20px; text-align: center; margin: 24px 0;">
-              <span style="display: block; color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px;">Your 6-Digit Verification Code</span>
-              <div style="font-size: 32px; font-weight: 800; font-family: 'SF Mono', Consolas, Monaco, monospace; letter-spacing: 8px; color: #1d4ed8;">${code}</div>
-              <span style="display: block; color: #94a3b8; font-size: 12px; margin-top: 6px;">Valid for 60 minutes</span>
-            </div>
-
-            <div style="text-align: center; margin: 32px 0 24px 0;">
-              <a href="${resetLink}" style="display: inline-block; background: #2563eb; color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 10px; font-weight: 700; font-size: 15px; box-shadow: 0 4px 10px rgba(37,99,235,0.25);">
-                Click to Reset Password
-              </a>
-            </div>
-
-            <p style="color: #64748b; font-size: 13px; line-height: 1.6; margin: 24px 0 0 0; border-top: 1px solid #f1f5f9; padding-top: 20px;">
-              Or copy and paste this secure link directly into your browser:<br/>
-              <a href="${resetLink}" style="color: #2563eb; word-break: break-all; font-size: 12px;">${resetLink}</a>
-            </p>
-
-            <p style="color: #94a3b8; font-size: 12px; line-height: 1.5; margin: 20px 0 0 0;">
-              If you didn't request a password reset, you can safely disregard this email. Your password will remain unchanged.
-            </p>
-          </div>
-          <div style="background: #f8fafc; padding: 16px 24px; border-top: 1px solid #e2e8f0; text-align: center;">
-            <p style="color: #94a3b8; font-size: 12px; margin: 0;">&copy; Uppseekers. Always Look Up.</p>
-          </div>
-        </div>
-      `;
-
-      // Trigger email dispatch in the background without blocking the HTTP response
-      getMailTransporter().then(transporter => {
-        transporter.sendMail({
-          from: process.env.SMTP_FROM || '"Uppseekers Portal" <no-reply@uppseekers.com>',
-          to: cleanEmail,
-          subject: 'Reset Your Password - Uppseekers (Always Look Up)',
-          html: htmlContent,
-        }).then((mailResult: any) => {
-          console.log(`[Email Dispatched] Password reset email queued for ${cleanEmail}. MessageId:`, mailResult?.messageId);
-        }).catch((mailErr: any) => {
-          console.warn(`[Email Notice] Send mail background notice for ${cleanEmail}:`, mailErr?.message || mailErr);
-        });
-      }).catch((err) => {
-        console.warn(`[Email Transporter Notice] Could not initialize mailer:`, err?.message || err);
-      });
-
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.json({
-        success: true,
-        message: `Password reset instructions have been triggered and sent to ${cleanEmail}`,
-        email: cleanEmail,
-        code,
-        token,
-        resetLink,
-      });
-    } catch (err: any) {
-      console.error("Error in /api/auth/request-password-reset:", err);
-      res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.status(500).json({ error: err.message || "Failed to process password reset request" });
-    }
+  // Automated outbound password-reset emails are strictly disabled.
+  // Password updates are performed directly in-app by Admins/Managers or authenticated users.
+  app.post("/api/auth/request-password-reset", async (_req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.status(410).json({
+      success: false,
+      disabled: true,
+      error: "Automated password reset emails are disabled. Please change your password directly inside your portal profile or ask your Category Manager / Admin to update it directly.",
+    });
   });
 
   // Verify Reset Code or Token
@@ -1850,6 +2057,7 @@ async function startServer() {
       ];
 
       if (accessToken) {
+        const { google } = await import("googleapis");
         const auth = new google.auth.OAuth2();
         auth.setCredentials({ access_token: accessToken });
         const sheets = google.sheets({ version: "v4", auth });
@@ -3632,6 +3840,8 @@ Provide your response in two clearly labeled sections using Markdown:
       let extractedText = '';
       if (isDocx) {
         try {
+          const mammothMod: any = await import("mammoth");
+          const mammoth = mammothMod.default || mammothMod;
           const result = await mammoth.extractRawText({ buffer: fileBuffer });
           extractedText = result.value || '';
         } catch (docErr: any) {
@@ -3980,6 +4190,129 @@ Preserve the author's exact wording wherever present in the document. If a list 
   const zohoConnectionsMemory = new Map<string, any>();
   let zohoKvHydrated = false;
 
+  interface ZohoServerTraceEvent {
+    id: string;
+    timestamp: string;
+    stage: string;
+    category: 'API_HANDSHAKE' | 'TOKEN_STORAGE' | 'AUTH_SESSION' | 'SERVER_RUNTIME';
+    ok: boolean;
+    httpStatus: number;
+    durationMs: number;
+    staffKey?: string;
+    redirectUri?: string;
+    accountsServer?: string;
+    meetingBase?: string;
+    summary: string;
+    details?: Record<string, any>;
+  }
+
+  const recentZohoServerEvents: ZohoServerTraceEvent[] = [];
+  const recordZohoServerEvent = (evt: Omit<ZohoServerTraceEvent, 'id' | 'timestamp'>) => {
+    recentZohoServerEvents.unshift({
+      id: `srv_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      timestamp: new Date().toISOString(),
+      ...evt,
+    });
+    if (recentZohoServerEvents.length > 35) {
+      recentZohoServerEvents.length = 35;
+    }
+  };
+
+  const inspectSealedVaultFormat = (rawSealed?: string | null, expectedStaffKey?: string) => {
+    if (!rawSealed || typeof rawSealed !== 'string' || !rawSealed.trim()) {
+      return {
+        present: false,
+        validEnvelopeFormat: false,
+        decryptOk: false,
+        reason: 'No x-zoho-sealed-vault header/payload provided (normal before first connect or after disconnect).',
+      };
+    }
+    const trimmed = rawSealed.trim();
+    const parts = trimmed.split('.');
+    if (parts.length !== 3) {
+      return {
+        present: true,
+        length: trimmed.length,
+        segmentCount: parts.length,
+        validEnvelopeFormat: false,
+        decryptOk: false,
+        reason: `Malformed sealedVault envelope: expected 3 dot-separated base64url segments (iv.authTag.ciphertext), got ${parts.length}.`,
+      };
+    }
+    let ivBytes = 0;
+    let tagBytes = 0;
+    let cipherBytes = 0;
+    try {
+      ivBytes = Buffer.from(parts[0], 'base64url').length;
+      tagBytes = Buffer.from(parts[1], 'base64url').length;
+      cipherBytes = Buffer.from(parts[2], 'base64url').length;
+    } catch {
+      return {
+        present: true,
+        length: trimmed.length,
+        segmentCount: 3,
+        validEnvelopeFormat: false,
+        decryptOk: false,
+        reason: 'Base64url decoding failed on one or more AES-256-GCM segments.',
+      };
+    }
+
+    const validEnvelopeFormat = ivBytes === 12 && tagBytes === 16 && cipherBytes > 0;
+    if (!validEnvelopeFormat) {
+      return {
+        present: true,
+        length: trimmed.length,
+        segmentCount: 3,
+        ivBytes,
+        tagBytes,
+        cipherBytes,
+        validEnvelopeFormat: false,
+        decryptOk: false,
+        reason: `Unexpected AES-256-GCM byte lengths: iv=${ivBytes}B (expected 12), tag=${tagBytes}B (expected 16), ciphertext=${cipherBytes}B.`,
+      };
+    }
+
+    const decrypted = unsealZohoVault(trimmed);
+    if (!decrypted) {
+      return {
+        present: true,
+        length: trimmed.length,
+        segmentCount: 3,
+        ivBytes,
+        tagBytes,
+        cipherBytes,
+        validEnvelopeFormat: true,
+        decryptOk: false,
+        reason: 'AES-256-GCM decryption failed (likely ZOHO_CLIENT_SECRET or ZOHO_STATE_SECRET changed since this vault was sealed, or required fields staffKey/refreshToken/zsoid were missing).',
+      };
+    }
+
+    const staffKeyMatch = !expectedStaffKey || decrypted.staffKey === expectedStaffKey;
+    return {
+      present: true,
+      length: trimmed.length,
+      segmentCount: 3,
+      ivBytes,
+      tagBytes,
+      cipherBytes,
+      validEnvelopeFormat: true,
+      decryptOk: true,
+      staffKeyMatch,
+      storedStaffKey: decrypted.staffKey,
+      hasRefreshToken: Boolean(decrypted.refreshToken),
+      refreshTokenLength: typeof decrypted.refreshToken === 'string' ? decrypted.refreshToken.length : 0,
+      hasAccessToken: Boolean(decrypted.accessToken),
+      hasZsoid: Boolean(decrypted.zsoid),
+      hasZuid: Boolean(decrypted.zuid),
+      accountsServer: decrypted.accountsServer || '',
+      meetingBase: decrypted.meetingBase || '',
+      tokenExpiresAt: decrypted.tokenExpiresAt instanceof Date ? decrypted.tokenExpiresAt.toISOString() : String(decrypted.tokenExpiresAt || ''),
+      reason: staffKeyMatch
+        ? 'Valid 3-segment AES-256-GCM envelope; decrypted and verified staffKey/refreshToken/zsoid.'
+        : `Envelope decrypted cleanly, but stored staffKey (${decrypted.staffKey}) does not match current user (${expectedStaffKey}).`,
+    };
+  };
+
   const hydrateZohoConnectionsFromKv = async () => {
     if (zohoKvHydrated) return;
     try {
@@ -4099,7 +4432,7 @@ Preserve the author's exact wording wherever present in the document. If a list 
         try {
           const envHost = new URL(envBase).hostname.toLowerCase();
           const clientHost = new URL(safeClientOrigin).hostname.toLowerCase();
-          if (envHost.startsWith('ais-dev-') && (clientHost.startsWith('ais-pre-') || clientHost.endsWith('.vercel.app'))) {
+          if (envHost.startsWith('ais-dev-') && clientHost !== envHost) {
             return { redirectUri: `${safeClientOrigin}/api/zoho/oauth/callback`, source: 'CLIENT_ORIGIN' };
           }
         } catch {
@@ -4763,9 +5096,42 @@ Preserve the author's exact wording wherever present in the document. If a list 
         } else if (String(tokenJson?.error || '').toLowerCase().includes('redirect')) {
           detailMsg = `Redirect URI mismatch (${rawErr}). Add this exact Authorized Redirect URI in Zoho API Console: ${redirectUri}`;
         }
+        recordZohoServerEvent({
+          stage: 'OAUTH_CALLBACK_TOKEN_EXCHANGE',
+          category: 'API_HANDSHAKE',
+          ok: false,
+          httpStatus: tokenRes.status || 400,
+          durationMs: 0,
+          staffKey: verifiedState.staffKey,
+          redirectUri,
+          accountsServer: activeDc.accounts,
+          meetingBase: activeDc.meeting,
+          summary: `Zoho token exchange rejected (${tokenJson?.error || tokenRes.status}): ${detailMsg}`,
+          details: {
+            zohoError: tokenJson?.error || '',
+            zohoErrorDescription: tokenJson?.error_description || '',
+            queryLocation,
+            queryAccountsServer,
+            clientIdPreview,
+            clientSecretLength,
+            secretLooksLikeClientId,
+          },
+        });
         return res.status(400).send(
           renderZohoPopupHtml(
-            { type: 'ZOHO_OAUTH_ERROR', error: detailMsg, redirectUri },
+            {
+              type: 'ZOHO_OAUTH_ERROR',
+              error: detailMsg,
+              redirectUri,
+              diagnostics: {
+                stage: 'TOKEN_EXCHANGE',
+                category: 'API_HANDSHAKE',
+                zohoHttpStatus: tokenRes.status,
+                zohoError: tokenJson?.error || '',
+                accountsServer: activeDc.accounts,
+                location: queryLocation || 'default',
+              },
+            },
             false,
             'Token Exchange Failed',
             detailMsg
@@ -4800,8 +5166,12 @@ Preserve the author's exact wording wherever present in the document. If a list 
       ).trim();
 
       let resolvedZsoid = String(userDetails?.zsoid || '').trim();
+      let zsoidSource = resolvedZsoid ? 'zoho_meeting_user_api' : '';
       if (!resolvedZsoid) {
         resolvedZsoid = await findSharedOrgZsoid(activeDc.meeting, verifiedState.sharedOrgZsoid);
+        if (resolvedZsoid) {
+          zsoidSource = verifiedState.sharedOrgZsoid ? 'state_shared_org_zsoid' : 'server_shared_org_zsoid';
+        }
       }
 
       if (!resolvedZsoid || !resolvedZuid) {
@@ -4811,9 +5181,40 @@ Preserve the author's exact wording wherever present in the document. If a list 
           (!resolvedZsoid
             ? `Your Zoho account (${resolvedZohoEmail || 'non-admin member'}) authorized successfully, but Zoho did not return an Organization ID (zsoid) from ${activeDc.meeting}. Make sure this email is invited to your Zoho Meeting organization (Manage Organization -> Users) and that the Zoho Organization Admin has connected their account once in Admin Settings (or set ZOHO_ORG_ID).`
             : `Could not retrieve Zoho User ID (ZUID) from ${activeDc.accounts}.`);
+        recordZohoServerEvent({
+          stage: 'OAUTH_CALLBACK_ORG_LOOKUP',
+          category: 'API_HANDSHAKE',
+          ok: false,
+          httpStatus: meetingUserOutcome.status || 400,
+          durationMs: 0,
+          staffKey: verifiedState.staffKey,
+          redirectUri,
+          accountsServer: activeDc.accounts,
+          meetingBase: activeDc.meeting,
+          summary: `Org/User lookup failed: ${apiMsg}`,
+          details: {
+            meetingUserStatus: meetingUserOutcome.status,
+            meetingUserMessage: userJson?.message || userJson?.error?.message || '',
+            oauthUserInfoResolved: Boolean(oauthUserInfo),
+            resolvedZuidPresent: Boolean(resolvedZuid),
+            resolvedZsoidPresent: Boolean(resolvedZsoid),
+            stateSharedOrgZsoidPresent: Boolean(verifiedState.sharedOrgZsoid),
+          },
+        });
         return res.status(400).send(
           renderZohoPopupHtml(
-            { type: 'ZOHO_OAUTH_ERROR', error: apiMsg },
+            {
+              type: 'ZOHO_OAUTH_ERROR',
+              error: apiMsg,
+              diagnostics: {
+                stage: 'ORG_USER_LOOKUP',
+                category: 'API_HANDSHAKE',
+                meetingUserStatus: meetingUserOutcome.status,
+                oauthUserInfoResolved: Boolean(oauthUserInfo),
+                resolvedZuidPresent: Boolean(resolvedZuid),
+                resolvedZsoidPresent: Boolean(resolvedZsoid),
+              },
+            },
             false,
             'Zoho Meeting Organization Lookup',
             apiMsg
@@ -4825,9 +5226,33 @@ Preserve the author's exact wording wherever present in the document. If a list 
       const refreshToken = tokenJson.refresh_token || existing?.refreshToken || '';
       if (!refreshToken) {
         const msg = 'Zoho did not issue a refresh token. Please retry and click Accept on the Zoho consent prompt.';
+        recordZohoServerEvent({
+          stage: 'OAUTH_CALLBACK_REFRESH_TOKEN',
+          category: 'TOKEN_STORAGE',
+          ok: false,
+          httpStatus: 400,
+          durationMs: 0,
+          staffKey: verifiedState.staffKey,
+          redirectUri,
+          accountsServer: activeDc.accounts,
+          meetingBase: activeDc.meeting,
+          summary: msg,
+          details: {
+            tokenResponseKeys: Object.keys(tokenJson || {}),
+            hadExistingConnection: Boolean(existing),
+          },
+        });
         return res.status(400).send(
           renderZohoPopupHtml(
-            { type: 'ZOHO_OAUTH_ERROR', error: msg },
+            {
+              type: 'ZOHO_OAUTH_ERROR',
+              error: msg,
+              diagnostics: {
+                stage: 'REFRESH_TOKEN_MISSING',
+                category: 'TOKEN_STORAGE',
+                tokenResponseKeys: Object.keys(tokenJson || {}),
+              },
+            },
             false,
             'Missing Refresh Token',
             msg
@@ -4856,6 +5281,27 @@ Preserve the author's exact wording wherever present in the document. If a list 
       await upsertZohoConnectionRecord(connectionPayload);
       const sealedVault = sealZohoVault(connectionPayload);
 
+      recordZohoServerEvent({
+        stage: 'OAUTH_CALLBACK_COMPLETE',
+        category: 'API_HANDSHAKE',
+        ok: true,
+        httpStatus: 200,
+        durationMs: 0,
+        staffKey: verifiedState.staffKey,
+        redirectUri,
+        accountsServer: activeDc.accounts,
+        meetingBase: activeDc.meeting,
+        summary: `Connected ${resolvedZohoEmail || resolvedDisplayName} (zsoid=${resolvedZsoid} via ${zsoidSource})`,
+        details: {
+          meetingUserStatus: meetingUserOutcome.status,
+          usedOAuthUserInfoFallback: !meetingUserOutcome.ok || !userDetails?.zsoid,
+          zsoidSource,
+          sealedVaultLength: sealedVault.length,
+          sealedVaultSegments: sealedVault ? sealedVault.split('.').length : 0,
+          expiresInSec,
+        },
+      });
+
       res.send(
         renderZohoPopupHtml(
           {
@@ -4872,6 +5318,11 @@ Preserve the author's exact wording wherever present in the document. If a list 
             connectedAt: new Date().toISOString(),
             tokenExpiresAt: tokenExpiresAt.toISOString(),
             sealedVault,
+            diagnostics: {
+              meetingUserStatus: meetingUserOutcome.status,
+              zsoidSource,
+              sealedVaultLength: sealedVault.length,
+            },
           },
           true,
           'Zoho Meeting Connected',
@@ -4880,9 +5331,29 @@ Preserve the author's exact wording wherever present in the document. If a list 
       );
     } catch (err: any) {
       const msg = err?.message || 'Unexpected error during Zoho OAuth callback';
+      recordZohoServerEvent({
+        stage: 'OAUTH_CALLBACK_EXCEPTION',
+        category: 'SERVER_RUNTIME',
+        ok: false,
+        httpStatus: 500,
+        durationMs: 0,
+        summary: msg,
+        details: {
+          errorName: err?.name || 'Error',
+          stackTop: typeof err?.stack === 'string' ? err.stack.split('\n').slice(0, 4).join(' | ') : '',
+        },
+      });
       res.status(500).send(
         renderZohoPopupHtml(
-          { type: 'ZOHO_OAUTH_ERROR', error: msg },
+          {
+            type: 'ZOHO_OAUTH_ERROR',
+            error: msg,
+            diagnostics: {
+              stage: 'CALLBACK_EXCEPTION',
+              category: 'SERVER_RUNTIME',
+              errorName: err?.name || 'Error',
+            },
+          },
           false,
           'Connection Error',
           msg
@@ -5143,6 +5614,278 @@ Preserve the author's exact wording wherever present in the document. If a list 
     }
   });
 
+  // 4d. Comprehensive Zoho OAuth Diagnostic Probe (isolates Runtime vs Auth vs Token Storage Format vs API Handshake)
+  app.post("/api/zoho/diagnostics/probe", requireAuth, async (req: AuthRequest, res) => {
+    const probeStartedAt = Date.now();
+    const stages: Array<{
+      stage: string;
+      category: 'SERVER_RUNTIME' | 'AUTH_SESSION' | 'TOKEN_STORAGE' | 'API_HANDSHAKE';
+      status: 'pass' | 'warn' | 'fail';
+      durationMs: number;
+      summary: string;
+      data?: Record<string, any>;
+    }> = [];
+
+    try {
+      // Stage 1: Runtime & Environment Readiness
+      const s1Start = Date.now();
+      const creds = getZohoCreds();
+      const { redirectUri, source: redirectUriSource } = getZohoRedirectUriInfo(req);
+      const scopes = getZohoOAuthScopes();
+      const envOk = Boolean(creds.clientId && creds.clientSecret && !creds.secretLooksLikeClientId);
+      stages.push({
+        stage: 'Server Runtime & OAuth Config',
+        category: 'SERVER_RUNTIME',
+        status: envOk ? 'pass' : 'fail',
+        durationMs: Date.now() - s1Start,
+        summary: envOk
+          ? `Server ready (${process.env.VERCEL ? 'vercel-serverless' : 'node-server'} · ${redirectUriSource})`
+          : !creds.clientId || !creds.clientSecret
+          ? 'Missing ZOHO_CLIENT_ID or ZOHO_CLIENT_SECRET in server environment.'
+          : 'ZOHO_CLIENT_SECRET appears to contain a Client ID instead of the Client Secret.',
+        data: {
+          runtime: process.env.VERCEL ? 'vercel-serverless' : 'node-server',
+          nodeVersion: process.version,
+          vercelRegion: process.env.VERCEL_REGION || 'local',
+          hasClientId: Boolean(creds.clientId),
+          clientIdPreview: creds.clientIdPreview,
+          clientIdValidFormat: creds.clientIdValidFormat,
+          hasClientSecret: Boolean(creds.clientSecret),
+          clientSecretLength: creds.clientSecretLength,
+          secretLooksLikeClientId: creds.secretLooksLikeClientId,
+          redirectUri,
+          redirectUriSource,
+          scopes,
+          zohoAccountsBase: ZOHO_ACCOUNTS_BASE,
+          zohoMeetingBase: ZOHO_MEETING_BASE,
+          hasAdminServiceAccount: hasAdminServiceAccount(),
+          hasSqlEnv: hasSqlEnv(),
+        },
+      });
+
+      // Stage 2: Firebase Auth & Staff Identity Resolution
+      const s2Start = Date.now();
+      const staff = await resolveStaffIdentity(req);
+      const adminCaller = staff ? await isAdminCaller(staff, req) : false;
+      stages.push({
+        stage: 'Firebase Auth & Staff Identity',
+        category: 'AUTH_SESSION',
+        status: staff ? 'pass' : 'fail',
+        durationMs: Date.now() - s2Start,
+        summary: staff
+          ? `Verified ${staff.staffKey} (${adminCaller ? 'Admin' : 'Counselor/Staff'})`
+          : 'Could not resolve signed-in staff identity from Firebase token.',
+        data: {
+          firebaseUid: req.user?.uid || '',
+          firebaseEmail: req.user?.email || '',
+          headerStaffEmail: typeof req.headers['x-staff-email'] === 'string' ? req.headers['x-staff-email'] : '',
+          resolvedStaffKey: staff?.staffKey || '',
+          isAdminCaller: adminCaller,
+        },
+      });
+
+      // Stage 3: Token Storage Format & Cryptography Self-Test
+      const s3Start = Date.now();
+      const headerVault = typeof req.headers['x-zoho-sealed-vault'] === 'string' ? req.headers['x-zoho-sealed-vault'] : '';
+      const bodyVault = typeof req.body?.sealedVault === 'string' ? req.body.sealedVault : '';
+      const rawVaultToInspect = bodyVault || headerVault;
+      const vaultAudit = inspectSealedVaultFormat(rawVaultToInspect, staff?.staffKey);
+
+      // Verify server AES-256-GCM seal/unseal & HMAC state signing round-trip
+      let cryptoRoundTripOk = false;
+      let stateRoundTripOk = false;
+      try {
+        const probeSealed = sealZohoVault({
+          staffKey: 'probe@check.local',
+          refreshToken: 'probe_rt_123',
+          zsoid: '00000000',
+          zuid: '00000000',
+        });
+        const probeUnsealed = unsealZohoVault(probeSealed);
+        cryptoRoundTripOk = Boolean(probeUnsealed && probeUnsealed.staffKey === 'probe@check.local');
+      } catch {
+        cryptoRoundTripOk = false;
+      }
+      try {
+        const probeState = signZohoState({ staffKey: 'probe@check.local', ts: Date.now() });
+        const verifiedProbeState = verifyZohoState(probeState);
+        stateRoundTripOk = Boolean(verifiedProbeState && verifiedProbeState.staffKey === 'probe@check.local');
+      } catch {
+        stateRoundTripOk = false;
+      }
+
+      const activeConn = staff ? await getZohoConnectionByKey(staff.staffKey, req) : null;
+      const sharedOrgZsoid = await findSharedOrgZsoid();
+      const vaultHasFormatIssue = vaultAudit.present && (!vaultAudit.validEnvelopeFormat || !vaultAudit.decryptOk || vaultAudit.staffKeyMatch === false);
+      const storageStatus: 'pass' | 'warn' | 'fail' =
+        !cryptoRoundTripOk || !stateRoundTripOk || vaultHasFormatIssue
+          ? 'fail'
+          : activeConn
+          ? 'pass'
+          : 'warn';
+
+      stages.push({
+        stage: 'Token Storage Format & Crypto Audit',
+        category: 'TOKEN_STORAGE',
+        status: storageStatus,
+        durationMs: Date.now() - s3Start,
+        summary: vaultHasFormatIssue
+          ? `Token storage format error: ${vaultAudit.reason}`
+          : !cryptoRoundTripOk || !stateRoundTripOk
+          ? 'Server encryption (AES-256-GCM) or OAuth state HMAC self-test failed.'
+          : activeConn
+          ? `Stored connection valid for ${staff?.staffKey} (zsoid=${activeConn.zsoid}, refreshToken=${activeConn.refreshToken ? 'present' : 'missing'})`
+          : `Crypto/state format healthy; no active connection stored yet for ${staff?.staffKey || 'user'}.`,
+        data: {
+          cryptoRoundTripOk,
+          stateRoundTripOk,
+          sealedVaultAudit: vaultAudit,
+          memoryCacheHasUser: Boolean(staff && zohoConnectionsMemory.has(staff.staffKey)),
+          memoryCacheTotalUsers: zohoConnectionsMemory.size,
+          sharedOrgZsoidResolved: Boolean(sharedOrgZsoid),
+          sharedOrgZsoid: sharedOrgZsoid || '',
+          activeConnectionSummary: activeConn
+            ? {
+                staffKey: activeConn.staffKey,
+                zohoEmail: activeConn.zohoEmail || '',
+                zsoid: activeConn.zsoid || '',
+                zuid: activeConn.zuid || '',
+                accountsServer: activeConn.accountsServer || '',
+                meetingBase: activeConn.meetingBase || '',
+                hasRefreshToken: Boolean(activeConn.refreshToken),
+                tokenExpiresAt:
+                  activeConn.tokenExpiresAt instanceof Date
+                    ? activeConn.tokenExpiresAt.toISOString()
+                    : String(activeConn.tokenExpiresAt || ''),
+              }
+            : null,
+        },
+      });
+
+      // Stage 4: Zoho API Handshake & Upstream Reachability
+      const s4Start = Date.now();
+      let upstreamReachable = false;
+      let upstreamStatus = 0;
+      let upstreamError = '';
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 4500);
+        try {
+          const pingRes = await fetch(`${ZOHO_ACCOUNTS_BASE}/.well-known/openid-configuration`, {
+            method: 'GET',
+            signal: controller.signal,
+          });
+          upstreamStatus = pingRes.status;
+          upstreamReachable = pingRes.status > 0 && pingRes.status < 500;
+        } finally {
+          clearTimeout(timer);
+        }
+      } catch (e: any) {
+        upstreamError = e?.message || 'Failed to reach Zoho Accounts server';
+      }
+
+      let liveRefreshDetail: Record<string, any> | null = null;
+      let handshakeOk = upstreamReachable && envOk;
+      if (activeConn && envOk) {
+        try {
+          const accessToken = await refreshZohoAccessToken(activeConn, false);
+          const meetingBase = activeConn.meetingBase || ZOHO_MEETING_BASE;
+          const accountsServer = activeConn.accountsServer || ZOHO_ACCOUNTS_BASE;
+          const [meetingRes, oauthInfo] = await Promise.all([
+            fetch(`${meetingBase}/api/v2/user.json`, {
+              method: 'GET',
+              headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+            })
+              .then(async (r) => ({ ok: r.ok, status: r.status, body: await r.json().catch(() => ({})) }))
+              .catch((e: any) => ({ ok: false, status: 0, body: { error: e?.message } })),
+            fetchZohoOAuthUserInfo(accountsServer, accessToken),
+          ]);
+          const verifiedViaFallback = Boolean(oauthInfo && activeConn.zsoid);
+          liveRefreshDetail = {
+            tokenRefreshOk: true,
+            meetingUserApiStatus: meetingRes.status,
+            meetingUserApiOk: meetingRes.ok,
+            meetingUserApiMessage: meetingRes.body?.message || meetingRes.body?.error?.message || '',
+            oauthUserInfoFallbackOk: Boolean(oauthInfo),
+            verifiedViaFallback,
+          };
+          handshakeOk = Boolean(meetingRes.ok || verifiedViaFallback);
+        } catch (refreshErr: any) {
+          liveRefreshDetail = {
+            tokenRefreshOk: false,
+            error: refreshErr?.message || 'Token refresh failed',
+          };
+          handshakeOk = false;
+        }
+      }
+
+      stages.push({
+        stage: 'Zoho Upstream API Handshake',
+        category: 'API_HANDSHAKE',
+        status: handshakeOk ? 'pass' : 'fail',
+        durationMs: Date.now() - s4Start,
+        summary: !upstreamReachable
+          ? `Cannot reach ${ZOHO_ACCOUNTS_BASE}: ${upstreamError || `HTTP ${upstreamStatus}`}`
+          : liveRefreshDetail
+          ? liveRefreshDetail.tokenRefreshOk
+            ? liveRefreshDetail.meetingUserApiOk
+              ? `Live Zoho Meeting API handshake succeeded (HTTP ${liveRefreshDetail.meetingUserApiStatus}).`
+              : liveRefreshDetail.verifiedViaFallback
+              ? `Non-admin Zoho presenter verified via /oauth/user/info fallback (/api/v2/user.json returned HTTP ${liveRefreshDetail.meetingUserApiStatus}).`
+              : `Zoho Meeting API returned HTTP ${liveRefreshDetail.meetingUserApiStatus}: ${liveRefreshDetail.meetingUserApiMessage}`
+            : `Zoho token refresh failed: ${liveRefreshDetail.error}`
+          : `Zoho Accounts endpoint reachable (HTTP ${upstreamStatus}); ready for OAuth authorize redirect.`,
+        data: {
+          accountsBase: ZOHO_ACCOUNTS_BASE,
+          upstreamReachable,
+          upstreamStatus,
+          upstreamError: upstreamError || undefined,
+          liveRefreshDetail,
+        },
+      });
+
+      const failedStage = stages.find((s) => s.status === 'fail');
+      const verdict = failedStage
+        ? {
+            status: 'fail' as const,
+            rootCauseCategory: failedStage.category,
+            headline: `Issue isolated in ${failedStage.stage}`,
+            recommendation: failedStage.summary,
+          }
+        : {
+            status: 'pass' as const,
+            rootCauseCategory: 'NONE',
+            headline: activeConn
+              ? 'All storage format, auth, runtime, and Zoho API handshake checks passed.'
+              : 'Server runtime, crypto storage format, and Zoho upstream reachability are healthy.',
+            recommendation: activeConn
+              ? 'Connection is healthy and ready to generate Zoho Meeting links.'
+              : 'Click Connect My Zoho Account to complete the browser OAuth consent flow.',
+          };
+
+      const filteredServerEvents = adminCaller
+        ? recentZohoServerEvents.slice(0, 20)
+        : recentZohoServerEvents.filter((e) => !e.staffKey || e.staffKey === staff?.staffKey).slice(0, 15);
+
+      res.json({
+        ok: !failedStage,
+        checkedAt: new Date().toISOString(),
+        totalDurationMs: Date.now() - probeStartedAt,
+        verdict,
+        stages,
+        recentServerEvents: filteredServerEvents,
+      });
+    } catch (err: any) {
+      res.status(500).json({
+        ok: false,
+        checkedAt: new Date().toISOString(),
+        totalDurationMs: Date.now() - probeStartedAt,
+        error: err?.message || 'Zoho diagnostic probe failed',
+        stages,
+      });
+    }
+  });
+
   // 5. Create an automated Zoho Meeting under the signed-in counselor's Zoho account
   app.post("/api/zoho/meetings", requireAuth, async (req: AuthRequest, res) => {
     try {
@@ -5251,11 +5994,207 @@ Preserve the author's exact wording wherever present in the document. If a list 
   });
 
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+    res.json({ status: "ok", runtime: process.env.VERCEL ? "vercel-serverless" : "node-server" });
   });
 
-  // Vite middleware for development
+  if (process.env.VERCEL) {
+    app.all("/api/*", (_req, res) => {
+      res.status(404).json({ error: "API endpoint not found." });
+    });
+    app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+      console.error("[Express Serverless Error]", err?.message || err);
+      if (res.headersSent) return;
+      res.status(err?.status || 500).json({
+        error: err?.message || "Internal server error",
+      });
+    });
+  }
+
+  return app;
+}
+
+async function startLocalServer() {
+  const SERVER_INSTANCE_ID = crypto.randomUUID();
+  const PORT = Number(process.env.PORT) || 3000;
+  const { WebSocketServer, WebSocket } = await import("ws");
+
+  type AliveWebSocket = InstanceType<typeof WebSocket> & { isAlive?: boolean };
+  let wss: InstanceType<typeof WebSocketServer> | null = null;
+
+  const sendToLocalWsClients = (serializedPayload: string) => {
+    if (!wss) return;
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(serializedPayload);
+        } catch {
+          // Ignore send errors on closing sockets
+        }
+      }
+    });
+  };
+
+  const app = createExpressApp({
+    sendToLocalWsClients,
+    serverInstanceId: SERVER_INSTANCE_ID,
+  });
+
+  const httpServer = http.createServer(app);
+  wss = new WebSocketServer({ server: httpServer, path: "/ws/realtime" });
+
+  // Cross-instance Cloud Run & Preview<->Published PostgreSQL LISTEN/NOTIFY bridge
+  let pgListenClient: any = null;
+  let pgListenConnecting = false;
+  let pgIdleReleaseTimer: ReturnType<typeof setTimeout> | null = null;
+  let pgReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const releasePgListener = () => {
+    if (pgReconnectTimer) {
+      clearTimeout(pgReconnectTimer);
+      pgReconnectTimer = null;
+    }
+    if (pgListenClient) {
+      const clientToRelease = pgListenClient;
+      pgListenClient = null;
+      clientToRelease.removeAllListeners("notification");
+      clientToRelease.removeAllListeners("error");
+      clientToRelease.removeAllListeners("end");
+      clientToRelease.query("UNLISTEN uppseekers_realtime").catch(() => {}).finally(() => {
+        try {
+          clientToRelease.release();
+        } catch {
+          // Ignore release errors
+        }
+      });
+    }
+  };
+
+  const ensurePgListener = async () => {
+    if (!wss || !hasSqlEnv() || pgListenClient || pgListenConnecting || wss.clients.size === 0) {
+      return;
+    }
+    pgListenConnecting = true;
+    try {
+      const pool = createPool();
+      const client = await pool.connect();
+      if (!wss || wss.clients.size === 0) {
+        client.release();
+        pgListenConnecting = false;
+        return;
+      }
+      pgListenClient = client;
+
+      client.on("notification", (msg: any) => {
+        if (msg?.channel !== "uppseekers_realtime" || !msg.payload) return;
+        try {
+          const parsed = JSON.parse(msg.payload);
+          if (!parsed || parsed.instanceId === SERVER_INSTANCE_ID) return;
+          const { instanceId: _ignored, ...cleanEvent } = parsed;
+          sendToLocalWsClients(JSON.stringify(cleanEvent));
+        } catch {
+          // Ignore malformed notification payloads
+        }
+      });
+
+      const handleDisconnect = () => {
+        if (pgListenClient === client) {
+          pgListenClient = null;
+          try {
+            client.release(true);
+          } catch {
+            // Ignore release errors
+          }
+          if (wss && wss.clients.size > 0 && !pgReconnectTimer) {
+            pgReconnectTimer = setTimeout(() => {
+              pgReconnectTimer = null;
+              void ensurePgListener();
+            }, 3000);
+          }
+        }
+      };
+
+      client.on("error", handleDisconnect);
+      client.on("end", handleDisconnect);
+
+      await client.query("LISTEN uppseekers_realtime");
+    } catch {
+      if (wss && wss.clients.size > 0 && !pgReconnectTimer) {
+        pgReconnectTimer = setTimeout(() => {
+          pgReconnectTimer = null;
+          void ensurePgListener();
+        }, 4000);
+      }
+    } finally {
+      pgListenConnecting = false;
+    }
+  };
+
+  wss.on("connection", (ws: AliveWebSocket) => {
+    ws.isAlive = true;
+    if (pgIdleReleaseTimer) {
+      clearTimeout(pgIdleReleaseTimer);
+      pgIdleReleaseTimer = null;
+    }
+    void ensurePgListener();
+
+    ws.on("pong", () => {
+      ws.isAlive = true;
+    });
+    ws.on("message", (raw) => {
+      ws.isAlive = true;
+      try {
+        const msg = JSON.parse(String(raw));
+        if (msg?.type === "ping" && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "pong", timestamp: new Date().toISOString() }));
+        }
+      } catch {
+        // Ignore malformed client frames
+      }
+    });
+    ws.on("close", () => {
+      if (wss && wss.clients.size === 0 && !pgIdleReleaseTimer) {
+        pgIdleReleaseTimer = setTimeout(() => {
+          pgIdleReleaseTimer = null;
+          if (wss && wss.clients.size === 0) {
+            releasePgListener();
+          }
+        }, 30000);
+      }
+    });
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(
+        JSON.stringify({
+          type: "connected",
+          timestamp: new Date().toISOString(),
+        })
+      );
+    }
+  });
+
+  const wsHeartbeat = setInterval(() => {
+    wss?.clients.forEach((client) => {
+      const ws = client as AliveWebSocket;
+      if (ws.isAlive === false) {
+        ws.terminate();
+        return;
+      }
+      ws.isAlive = false;
+      try {
+        ws.ping();
+      } catch {
+        // Ignore ping errors on closing sockets
+      }
+    });
+  }, 25000);
+
+  wss.on("close", () => {
+    clearInterval(wsHeartbeat);
+    releasePgListener();
+  });
+
+  // Vite middleware for local development only (never loaded on Vercel serverless)
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
@@ -5265,7 +6204,6 @@ Preserve the author's exact wording wherever present in the document. If a list 
     });
     app.use(vite.middlewares);
 
-    // SPA wildcard route fallback for dev mode
     app.use("*", async (req, res, next) => {
       try {
         const url = req.originalUrl;
@@ -5277,37 +6215,82 @@ Preserve the author's exact wording wherever present in the document. If a list 
       }
     });
   } else {
-    const distPath = path.join(process.cwd(), 'dist');
+    const distPath = path.join(process.cwd(), "dist");
     app.use(
       express.static(distPath, {
         setHeaders: (res, filePath) => {
-          if (filePath.endsWith('.html')) {
-            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+          if (filePath.endsWith(".html")) {
+            res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
           }
         },
       })
     );
-    app.all('/api/*', (_req, res) => {
-      res.status(404).json({ error: 'API endpoint not found.' });
+    app.all("/api/*", (_req, res) => {
+      res.status(404).json({ error: "API endpoint not found." });
     });
-    app.get('*', (req, res) => {
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-      res.sendFile(path.join(distPath, 'index.html'));
+    app.get("*", (_req, res) => {
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
-  if (!process.env.VERCEL) {
-    httpServer.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://0.0.0.0:${PORT}`);
+  app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    console.error("[Express Error]", err?.message || err);
+    if (res.headersSent) return;
+    res.status(err?.status || 500).json({
+      error: err?.message || "Internal server error",
     });
-  }
+  });
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  });
 
   return app;
 }
 
-const appPromise = startServer();
-export default async function handler(req: any, res: any) {
-  const app = await appPromise;
-  return app(req, res);
+let cachedServerlessApp: express.Express | null = null;
+function getServerlessApp(): express.Express {
+  if (!cachedServerlessApp) {
+    cachedServerlessApp = createExpressApp();
+  }
+  return cachedServerlessApp;
+}
+
+if (!process.env.VERCEL) {
+  void startLocalServer();
+}
+
+export default function handler(req: any, res: any): Promise<void> {
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+
+    res.once("finish", finish);
+    res.once("close", finish);
+
+    try {
+      const app = getServerlessApp();
+      app(req, res, (err: any) => {
+        if (err && !res.headersSent) {
+          console.error("[Vercel Handler Error]", err?.message || err);
+          res.status(500).json({ error: err?.message || "Internal server error" });
+        } else if (!res.headersSent) {
+          res.status(404).json({ error: "API endpoint not found." });
+        }
+        finish();
+      });
+    } catch (err: any) {
+      console.error("[Vercel Handler Sync Error]", err?.message || err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: err?.message || "Server initialization error" });
+      }
+      finish();
+    }
+  });
 }
 

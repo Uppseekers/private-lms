@@ -55,9 +55,10 @@ export default function BulkCounselorTransferModal({
 
   const selectedStudents = students.filter(s => selectedStudentIds.includes(s.id));
 
-  // Categorize staff members
-  const counselors = (staff || []).filter(s => {
-    const r = (s.role || '').toUpperCase();
+  // Categorize staff members (allow ANY staff member including Category Managers in every role dropdown)
+  const activeStaff = (staff || []).filter(s => (s.role || '').toUpperCase() !== 'STUDENT');
+  const counselors = activeStaff.filter(s => {
+    const r = (s.role || '').toUpperCase().replace(/[\s-]+/g, '_');
     return (
       r === 'COUNSELOR' ||
       r === 'LEAD_COUNSELOR' ||
@@ -66,36 +67,16 @@ export default function BulkCounselorTransferModal({
       r === 'SYSTEM_ADMIN' ||
       r === 'ADMIN' ||
       r === 'CATEGORY_MANAGER' ||
+      r === 'CATEGORY_LEAD' ||
       r === 'OPERATIONS_LEAD' ||
       r === 'OPS_LEAD' ||
+      r === 'ACADEMIC_DIRECTOR' ||
       r === 'APPLICATION_SPECIALIST'
     );
   });
 
-  const researchMentors = (staff || []).filter(s => {
-    const r = (s.role || '').toUpperCase();
-    return (
-      r === 'RESEARCH_GUIDE' ||
-      r === 'RESEARCH_MENTOR' ||
-      r === 'COUNSELOR' ||
-      r === 'LEAD_COUNSELOR' ||
-      r === 'SYSTEM_ADMIN' ||
-      r === 'ADMIN'
-    );
-  });
-
-  const satFaculty = (staff || []).filter(s => {
-    const r = (s.role || '').toUpperCase();
-    return (
-      r === 'SAT_MATH_FACULTY' ||
-      r === 'SAT_VERBAL_FACULTY' ||
-      r === 'SAT_FACULTY' ||
-      r === 'TEACHER' ||
-      r === 'SYSTEM_ADMIN' ||
-      r === 'ADMIN' ||
-      r === 'COUNSELOR'
-    );
-  });
+  const researchMentors = activeStaff;
+  const satFaculty = activeStaff;
 
   // Helper to count active directly assigned students per staff member
   const getStudentCount = (staffMember: StaffMember) => {

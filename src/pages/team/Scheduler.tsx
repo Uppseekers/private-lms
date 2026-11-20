@@ -18,7 +18,8 @@ import {
 } from '@/lib/zohoClient';
 import { cn } from '@/lib/utils';
 import { MeetingMOM, MeetingResourceLink, MeetingTask, OperationalLog, BatchClassSession } from '@/types';
-import { canStaffAccessAllStudents, isUserAdmin, isStudentAssignedToStaff, canStaffAccessEvent } from '@/lib/staffPermissions';
+import { canStaffAccessAllStudents, isUserAdmin, isStudentAssignedToStaff, canStaffAccessEvent, resolveCounselorForStudent } from '@/lib/staffPermissions';
+import FormattedMomText, { appendBulletPoint } from '@/components/FormattedMomText';
 import { 
   DAY_OF_WEEK_OPTIONS, 
   SCHEDULE_DAY_PRESETS, 
@@ -28,8 +29,59 @@ import {
   formatPreviewDate
 } from '@/lib/recurringSchedule';
 
+function parseClockToMinutes(raw: string, fallback = 0): number {
+  const s = String(raw || '').trim();
+  if (!s) return fallback;
+  const ampmMatch = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
+  if (ampmMatch) {
+    let hh = parseInt(ampmMatch[1], 10);
+    const mm = parseInt(ampmMatch[2], 10);
+    const mer = ampmMatch[3].toUpperCase();
+    if (mer === 'PM' && hh < 12) hh += 12;
+    if (mer === 'AM' && hh === 12) hh = 0;
+    return hh * 60 + mm;
+  }
+  const hmMatch = s.match(/^(\d{1,2}):(\d{2})/);
+  if (hmMatch) {
+    return parseInt(hmMatch[1], 10) * 60 + parseInt(hmMatch[2], 10);
+  }
+  return fallback;
+}
+
+function normalizeEventDateYMD(evt: any): string {
+  const raw = String(evt?.day || evt?.date || '').trim();
+  if (!raw) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (raw.toLowerCase() === 'today') return new Date().toISOString().split('T')[0];
+  const d = new Date(raw);
+  if (!isNaN(d.getTime())) return d.toISOString().split('T')[0];
+  return raw;
+}
+
+function getEventTimeWindow(evt: any): { date: string; startMin: number; endMin: number } {
+  const date = normalizeEventDateYMD(evt);
+  const timeStr = String(evt?.time || '').trim();
+  const parts = timeStr.split(/\s*[-–]\s*/);
+  const startMin = parseClockToMinutes(parts[0] || '', 0);
+  const endMin = parts[1] ? parseClockToMinutes(parts[1], startMin + 60) : startMin + 60;
+  return {
+    date,
+    startMin,
+    endMin: endMin > startMin ? endMin : startMin + 60,
+  };
+}
+
+function getEventSortTimestamp(evt: any): number {
+  const { date, startMin } = getEventTimeWindow(evt);
+  const base = date && /^\d{4}-\d{2}-\d{2}$/.test(date)
+    ? Date.parse(`${date}T00:00:00`)
+    : Date.parse(String(evt?.day || evt?.date || ''));
+  const dayMs = Number.isFinite(base) ? base : 0;
+  return dayMs + startMin * 60 * 1000;
+}
+
 export default function TeamScheduler() {
-  const { events, setEvents, currentUser, batches, setBatches, students, updateStudent, permissionsMatrix } = useDatabase();
+  const { events, setEvents, currentUser, batches, setBatches, students, staff, updateStudent, permissionsMatrix } = useDatabase();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   
@@ -307,8 +359,12 @@ export default function TeamScheduler() {
     const q = searchQuery.toLowerCase();
     return (e.title || '').toLowerCase().includes(q) || 
            (e.students || '').toLowerCase().includes(q) ||
-           (e.stream || '').toLowerCase().includes(q);
-  }).sort((a: any, b: any) => new Date(a.day || a.date).getTime() - new Date(b.day || b.date).getTime());
+           (e.stream || '').toLowerCase().includes(q) ||
+           (e.host || '').toLowerCase().includes(q);
+  }).sort((a: any, b: any) => {
+    const diff = getEventSortTimestamp(a) - getEventSortTimestamp(b);
+    return horizonFilter === 'past' ? -diff : diff;
+  });
 
   const handleOpenModal = (preselectedBatchId?: string) => {
     setEditingEventId(null);
@@ -517,10 +573,61 @@ export default function TeamScheduler() {
       ? (targetBatch?.name || 'Batch Cohort') 
       : (targetStudent ? targetStudent.name : '');
 
+    // Always resolve Host to the student's assigned Primary Counselor for 1-on-1 sessions
+    const resolvedHostName = (() => {
+      if (audienceType === 'individual' && targetStudent) {
+        const assignedCounselor = resolveCounselorForStudent(targetStudent, staff);
+        if (assignedCounselor?.name) return assignedCounselor.name;
+        if (targetStudent.counselor && targetStudent.counselor.trim().toLowerCase() !== 'unassigned') {
+          return targetStudent.counselor.trim();
+        }
+      }
+      if (audienceType === 'batch' && targetBatch && Array.isArray(targetBatch.mentors) && targetBatch.mentors[0]) {
+        return targetBatch.mentors[0];
+      }
+      return currentUser?.name || 'Counselor';
+    })();
+
     const durationMinutes = formData.durationMinutes || computeDurationMinutes(formData.startTime, formData.endTime);
-    const durationStr = formData.endTime
-      ? `${formData.startTime} - ${formData.endTime} (${durationMinutes} min)`
-      : `${durationMinutes} min`;
+    const computedEndTime = formData.endTime || computeEndTimeFromDuration(formData.startTime, durationMinutes);
+    const durationStr = `${formData.startTime} - ${computedEndTime} (${durationMinutes} min)`;
+
+    // Conflict validation: block overlapping sessions for the same host/counselor (or same individual student)
+    const proposedStartMin = parseClockToMinutes(formData.startTime, 0);
+    const proposedEndMin = Math.max(proposedStartMin + 15, parseClockToMinutes(computedEndTime, proposedStartMin + durationMinutes));
+    const normalizedHost = resolvedHostName.trim().toLowerCase();
+
+    for (const dateStr of occurrences) {
+      const conflictingEvt = (events || []).find((existing: any) => {
+        if (!existing) return false;
+        if (editingEventId && existing.id === editingEventId) return false;
+        const st = String(existing.status || '').toLowerCase();
+        if (st === 'canceled' || st === 'cancelled') return false;
+
+        const existingWindow = getEventTimeWindow(existing);
+        if (existingWindow.date !== dateStr) return false;
+
+        const overlaps = proposedStartMin < existingWindow.endMin && existingWindow.startMin < proposedEndMin;
+        if (!overlaps) return false;
+
+        const existingHost = String(existing.host || '').trim().toLowerCase();
+        const hostConflict = Boolean(normalizedHost && existingHost && existingHost === normalizedHost);
+        const studentConflict = Boolean(
+          audienceType === 'individual' &&
+          selectedStudentId &&
+          existing.studentId &&
+          existing.studentId === selectedStudentId
+        );
+        return hostConflict || studentConflict;
+      });
+
+      if (conflictingEvt) {
+        setModalError(
+          `Scheduling conflict detected on ${dateStr} (${formData.startTime} - ${computedEndTime}): "${conflictingEvt.title}" with ${conflictingEvt.students || 'another student'} (Host: ${conflictingEvt.host || resolvedHostName}, ${conflictingEvt.time || ''}) already overlaps this time slot. Please choose a different time.`
+        );
+        return;
+      }
+    }
 
     let locationLink = formData.location.trim() || 'https://meet.google.com';
     let hostStartLink: string | undefined;
@@ -588,6 +695,7 @@ export default function TeamScheduler() {
             batch: audienceType === 'batch' ? selectedBatchId : undefined,
             studentId: audienceType === 'individual' ? selectedStudentId : undefined,
             students: studentLabel,
+            host: resolvedHostName,
             videoProvider: videoProvider === 'zoho' ? 'zoho' : (e.videoProvider || 'manual'),
             zohoMeetingKey: zohoMeetingKey || e.zohoMeetingKey,
             hostStartLink: hostStartLink || e.hostStartLink,
@@ -624,7 +732,7 @@ export default function TeamScheduler() {
           location: locationLink, // Single persistent meeting join link across all instances
           notes: formData.notes,
           assignments: formData.assignments,
-          host: currentUser?.name || 'Staff Mentor',
+          host: resolvedHostName,
           status: 'Scheduled' as const,
           isRecurring: true,
           seriesId,
@@ -711,7 +819,7 @@ export default function TeamScheduler() {
         location: locationLink,
         notes: formData.notes,
         assignments: formData.assignments,
-        host: currentUser?.name || 'Staff Mentor',
+        host: resolvedHostName,
         status: 'Scheduled' as const,
         videoProvider,
         zohoMeetingKey,
@@ -2018,35 +2126,129 @@ export default function TeamScheduler() {
               {/* TAB 1: MOM */}
               {activeTab === 'mom' && (
                 <div className="space-y-6">
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-3">
-                    <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">Add Meeting Notes / Minutes of Meeting (MOM)</h4>
+                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">Add Meeting Notes / Minutes of Meeting (MOM)</h4>
+                      <span className="text-[11px] text-slate-500">
+                        Use one bullet per line (starts with <code className="bg-white px-1 rounded border border-slate-200">-</code> or <code className="bg-white px-1 rounded border border-slate-200">•</code>). Students only see <strong>Key Discussion Points</strong> &amp; <strong>Next Steps</strong>.
+                      </span>
+                    </div>
+
                     <div>
-                      <label className="block text-[11px] font-bold text-slate-700 mb-1">Key Discussion Points *</label>
-                      <textarea value={momKeyPoints} onChange={e => setMomKeyPoints(e.target.value)} rows={2} placeholder="Summary of main discussion topics during the meeting..." className="w-full bg-white border border-slate-200 rounded-lg p-2.5 text-xs focus:ring-2 focus:ring-blue-500" />
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block text-[11px] font-bold text-slate-700">
+                          Key Discussion Points * <span className="font-normal text-emerald-700">(Visible to Student)</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setMomKeyPoints((prev) => appendBulletPoint(prev))}
+                          className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
+                        >
+                          + Add Bullet
+                        </button>
+                      </div>
+                      <textarea
+                        value={momKeyPoints}
+                        onChange={e => setMomKeyPoints(e.target.value)}
+                        rows={4}
+                        placeholder={"• Reviewed target university list and early decision deadlines\n• Discussed Common App personal statement angle\n• Confirmed SAT retake timeline"}
+                        className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                      />
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+
+                    <div className="grid grid-cols-1 gap-4">
                       <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Student Progress Notes</label>
-                        <input value={momProgress} onChange={e => setMomProgress(e.target.value)} placeholder="e.g. Common App draft is 80% finished" className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs" />
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[11px] font-bold text-slate-700">
+                            Next Steps <span className="font-normal text-emerald-700">(Visible to Student)</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setMomNextSteps((prev) => appendBulletPoint(prev))}
+                            className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
+                          >
+                            + Add Bullet
+                          </button>
+                        </div>
+                        <textarea
+                          value={momNextSteps}
+                          onChange={e => setMomNextSteps(e.target.value)}
+                          rows={4}
+                          placeholder={"• Complete 2nd draft of Common App essay by Friday\n• Shortlist 3 safety universities in the US and UK\n• Upload Grade 11 transcript to Student Vault"}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                        />
                       </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Mentor Observations</label>
-                        <input value={momObservations} onChange={e => setMomObservations(e.target.value)} placeholder="e.g. Needs focus on essay hook and tone" className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs" />
+
+                      <div className="pt-2 border-t border-slate-200 space-y-4">
+                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                          Internal Counselor &amp; Team Notes (Hidden from Student Portal)
+                        </p>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-[11px] font-bold text-slate-700">Student Progress Notes (Internal)</label>
+                            <button
+                              type="button"
+                              onClick={() => setMomProgress((prev) => appendBulletPoint(prev))}
+                              className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
+                            >
+                              + Add Bullet
+                            </button>
+                          </div>
+                          <textarea
+                            value={momProgress}
+                            onChange={e => setMomProgress(e.target.value)}
+                            rows={3}
+                            placeholder={"• Common App draft is 80% complete\n• Strong improvement in SAT reading comprehension"}
+                            className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-[11px] font-bold text-slate-700">Mentor Observations (Internal)</label>
+                            <button
+                              type="button"
+                              onClick={() => setMomObservations((prev) => appendBulletPoint(prev))}
+                              className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
+                            >
+                              + Add Bullet
+                            </button>
+                          </div>
+                          <textarea
+                            value={momObservations}
+                            onChange={e => setMomObservations(e.target.value)}
+                            rows={3}
+                            placeholder={"• Needs sharper opening hook in personal essay\n• Responds well to structured weekly deadlines"}
+                            className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          />
+                        </div>
+
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-[11px] font-bold text-slate-700">Follow-up Actions (Internal)</label>
+                            <button
+                              type="button"
+                              onClick={() => setMomFollowUp((prev) => appendBulletPoint(prev))}
+                              className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
+                            >
+                              + Add Bullet
+                            </button>
+                          </div>
+                          <textarea
+                            value={momFollowUp}
+                            onChange={e => setMomFollowUp(e.target.value)}
+                            rows={3}
+                            placeholder={"• Check in with parents next Tuesday\n• Coordinate with SAT verbal mentor before mock review"}
+                            className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          />
+                        </div>
                       </div>
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Next Steps</label>
-                        <input value={momNextSteps} onChange={e => setMomNextSteps(e.target.value)} placeholder="e.g. Complete 2nd draft by Friday" className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs" />
-                      </div>
-                      <div>
-                        <label className="block text-[11px] font-bold text-slate-700 mb-1">Follow-up Actions</label>
-                        <input value={momFollowUp} onChange={e => setMomFollowUp(e.target.value)} placeholder="e.g. Schedule follow-up line review next Tuesday" className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs" />
-                      </div>
-                    </div>
+
                     <div className="flex justify-end pt-1">
                       <Button size="sm" onClick={handleAddMOM} disabled={!momKeyPoints.trim()} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4">
-                        Save Session MOM
+                        Save Session MOM &amp; Mark Completed
                       </Button>
                     </div>
                   </div>
@@ -2056,22 +2258,44 @@ export default function TeamScheduler() {
                     <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">Recorded Session MOM History</h4>
                     {activeSessionModalEvt.moms && activeSessionModalEvt.moms.length > 0 ? (
                       activeSessionModalEvt.moms.map((m: MeetingMOM) => (
-                        <div key={m.id} className="bg-white border border-slate-200 rounded-xl p-4 space-y-2 shadow-sm">
+                        <div key={m.id} className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-sm">
                           <div className="flex justify-between items-center text-slate-500 text-[11px] border-b border-slate-100 pb-2">
                             <span>Recorded by <strong>{m.authorName}</strong> ({m.authorRole})</span>
                             <span>{m.date}</span>
                           </div>
-                          <p className="text-slate-800 font-medium text-xs leading-relaxed">"{m.keyPoints}"</p>
-                          {(m.studentProgress || m.observations) && (
-                            <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-50 p-2 rounded border border-slate-100 mt-2">
-                              {m.studentProgress && <div><strong className="text-slate-700">Progress:</strong> {m.studentProgress}</div>}
-                              {m.observations && <div><strong className="text-slate-700">Observations:</strong> {m.observations}</div>}
+
+                          <div>
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Key Discussion Points</p>
+                            <FormattedMomText text={m.keyPoints} className="text-xs text-slate-800" />
+                          </div>
+
+                          {m.nextSteps && (
+                            <div className="bg-blue-50/60 p-3 rounded-lg border border-blue-100">
+                              <p className="text-[10px] font-bold uppercase tracking-wider text-blue-800 mb-1">Next Steps</p>
+                              <FormattedMomText text={m.nextSteps} className="text-xs text-blue-950" />
                             </div>
                           )}
-                          {(m.nextSteps || m.followUpActions) && (
-                            <div className="text-[11px] text-blue-900 bg-blue-50/50 p-2 rounded border border-blue-100 flex flex-wrap gap-4">
-                              {m.nextSteps && <div><strong>Next Steps:</strong> {m.nextSteps}</div>}
-                              {m.followUpActions && <div><strong>Follow-up:</strong> {m.followUpActions}</div>}
+
+                          {(m.studentProgress || m.observations || m.followUpActions) && (
+                            <div className="grid grid-cols-1 gap-2.5 bg-slate-50 p-3 rounded-lg border border-slate-100">
+                              {m.studentProgress && (
+                                <div>
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Student Progress Notes (Internal)</p>
+                                  <FormattedMomText text={m.studentProgress} className="text-xs text-slate-700" />
+                                </div>
+                              )}
+                              {m.observations && (
+                                <div>
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Mentor Observations (Internal)</p>
+                                  <FormattedMomText text={m.observations} className="text-xs text-slate-700" />
+                                </div>
+                              )}
+                              {m.followUpActions && (
+                                <div>
+                                  <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Follow-up Actions (Internal)</p>
+                                  <FormattedMomText text={m.followUpActions} className="text-xs text-slate-700" />
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>

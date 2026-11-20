@@ -28,7 +28,8 @@ import { cn } from '@/lib/utils';
 import { Student, Task, ShortlistUniversity, Batch, BatchClassSession, OperationalLog } from '@/types';
 import NotificationDetailsModal, { NotificationDetailData } from '@/components/NotificationDetailsModal';
 import { useDatabase } from '@/context/DatabaseContext';
-import { canStudentAccessEvent } from '@/lib/staffPermissions';
+import { canStudentAccessEvent, resolveCounselorForStudent } from '@/lib/staffPermissions';
+import FormattedMomText from '@/components/FormattedMomText';
 
 export type ActivityCategory = 'ALL' | 'TASK' | 'UNIVERSITY' | 'BATCH' | 'DEADLINE' | 'GUIDANCE';
 
@@ -78,7 +79,7 @@ export default function StudentActivityLogSection({
   isStandalonePage = false
 }: StudentActivityLogSectionProps) {
   const navigate = useNavigate();
-  const { events = [] } = useDatabase();
+  const { events = [], staff = [] } = useDatabase();
   const [activeCategory, setActiveCategory] = useState<ActivityCategory>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
@@ -306,31 +307,39 @@ export default function StudentActivityLogSection({
     });
 
     // F. COUNSELLOR SESSIONS & MINUTES OF MEETING (MOM)
+    const primaryCounselor = student ? resolveCounselorForStudent(student, staff) : null;
+    const stripRole = (name?: string) => String(name || '').replace(/\s*\((Mentor|Counselor|Counsellor|Staff|Advisor|Coach)\)\s*$/i, '').trim();
+    const primaryCounselorName = stripRole(primaryCounselor?.name || student?.counselor || '');
+
     const studentEvents = (events || []).filter(e => canStudentAccessEvent(e, student, batches));
     studentEvents.forEach(evt => {
       const eDate = parseDate(evt.day || evt.date);
       const hasMOM = Array.isArray(evt.moms) && evt.moms.length > 0;
-      const momSummary = hasMOM ? evt.moms[0].keyPoints || evt.moms[0].studentProgress : '';
+      const momSummary = hasMOM ? evt.moms[0].keyPoints || evt.moms[0].nextSteps || '' : '';
+      const isBatchSession = Boolean(evt.batch || (evt as any).batchId || (evt as any).batchName);
+      const resolvedHost = (!isBatchSession && primaryCounselorName)
+        ? primaryCounselorName
+        : (stripRole(evt.host) || primaryCounselorName || 'Counselor');
       list.push({
         id: `meeting_evt_${evt.id}`,
         category: 'GUIDANCE',
         title: `Counsellor Meeting: ${evt.title}`,
-        summary: `${evt.day || evt.date} ${evt.time ? `at ${evt.time}` : ''} · Host: ${evt.host || 'Counsellor'}${hasMOM ? ' · MOM Recorded' : ''}`,
-        description: evt.notes || momSummary || `Session with ${evt.host || 'Counsellor'} on ${evt.stream || 'Admissions Strategy'}.`,
+        summary: `${evt.day || evt.date} ${evt.time ? `at ${evt.time}` : ''} · Host: ${resolvedHost}${hasMOM ? ' · MOM Recorded' : ''}`,
+        description: evt.notes || momSummary || `Session with ${resolvedHost} on ${evt.stream || 'Admissions Strategy'}.`,
         timestamp: `${evt.day || evt.date} ${evt.time || ''}`,
         dateObj: eDate,
         statusBadge: hasMOM ? 'MOM Recorded' : (evt.status || 'Scheduled'),
         statusType: hasMOM ? 'success' : 'info',
-        performedBy: evt.host || student?.counselor || 'Counsellor',
-        role: 'Admissions Counsellor',
-        eventSession: evt,
+        performedBy: resolvedHost,
+        role: 'Admissions Counselor',
+        eventSession: { ...evt, host: resolvedHost },
         link: evt.location || '/student/schedules',
         actionLabel: evt.location ? 'Join Meeting / Notes' : 'View Schedule'
       });
     });
 
     return list;
-  }, [student, batches, events]);
+  }, [student, batches, events, staff]);
 
   // 2. FILTERING & SEARCH
   const filteredEvents = useMemo(() => {
@@ -701,41 +710,27 @@ export default function StudentActivityLogSection({
                               <span>Minutes of Meeting (MOM Report)</span>
                             </span>
                             {event.eventSession.moms.map((mom: any, mIdx: number) => (
-                              <div key={mIdx} className="bg-emerald-50/40 p-4 rounded-xl border border-emerald-200 space-y-2.5 text-xs">
+                              <div key={mIdx} className="bg-emerald-50/40 p-4 rounded-xl border border-emerald-200 space-y-3 text-xs">
                                 <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-100 pb-1.5">
                                   <span className="font-bold text-emerald-950">
-                                    Documented by {mom.authorName || event.eventSession.host || 'Counsellor'} ({mom.authorRole || 'Counsellor'})
+                                    Session Summary
                                   </span>
                                   {mom.date && <span className="text-slate-500 font-medium">{mom.date}</span>}
                                 </div>
                                 {mom.keyPoints && (
                                   <div>
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-0.5">1. Key Discussion Points:</span>
-                                    <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-2.5 rounded-lg border border-slate-200 leading-relaxed">{mom.keyPoints}</p>
-                                  </div>
-                                )}
-                                {mom.studentProgress && (
-                                  <div>
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-0.5">2. Student Progress & Achievements:</span>
-                                    <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-2.5 rounded-lg border border-slate-200 leading-relaxed">{mom.studentProgress}</p>
-                                  </div>
-                                )}
-                                {mom.observations && (
-                                  <div>
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-0.5">3. Observations & Concerns:</span>
-                                    <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-2.5 rounded-lg border border-slate-200 leading-relaxed">{mom.observations}</p>
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-1">Key Discussion Points</span>
+                                    <div className="bg-white p-3 rounded-lg border border-slate-200">
+                                      <FormattedMomText text={mom.keyPoints} className="text-slate-800" />
+                                    </div>
                                   </div>
                                 )}
                                 {mom.nextSteps && (
                                   <div>
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-0.5">4. Recommended Next Steps:</span>
-                                    <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-2.5 rounded-lg border border-slate-200 leading-relaxed">{mom.nextSteps}</p>
-                                  </div>
-                                )}
-                                {mom.followUpActions && (
-                                  <div>
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block mb-0.5">5. Follow-Up Action Items:</span>
-                                    <p className="text-slate-800 font-sans whitespace-pre-wrap bg-white p-2.5 rounded-lg border border-slate-200 leading-relaxed">{mom.followUpActions}</p>
+                                    <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700 block mb-1">Next Steps</span>
+                                    <div className="bg-blue-50/40 p-3 rounded-lg border border-blue-200">
+                                      <FormattedMomText text={mom.nextSteps} className="text-blue-950 font-medium" />
+                                    </div>
                                   </div>
                                 )}
                               </div>

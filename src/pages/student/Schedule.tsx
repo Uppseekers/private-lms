@@ -23,14 +23,59 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SessionRating } from '@/types';
-import { canStudentAccessEvent } from '@/lib/staffPermissions';
+import { canStudentAccessEvent, resolveCounselorForStudent } from '@/lib/staffPermissions';
+import FormattedMomText from '@/components/FormattedMomText';
+
+const stripRoleBracketSuffix = (name?: string): string => {
+  if (!name) return '';
+  return String(name).replace(/\s*\((Mentor|Counselor|Counsellor|Staff|Advisor|Coach)\)\s*$/i, '').trim();
+};
+
+const parseClockToMinutes = (timeStr?: string): number => {
+  if (!timeStr) return 0;
+  const startPart = String(timeStr).split(/[-–—]/)[0]?.trim() || '';
+  const match = startPart.match(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (!match) return 0;
+  let hours = parseInt(match[1], 10);
+  const mins = parseInt(match[2] || '0', 10);
+  const meridiem = (match[3] || '').toLowerCase();
+  if (meridiem === 'pm' && hours < 12) hours += 12;
+  if (meridiem === 'am' && hours === 12) hours = 0;
+  return hours * 60 + mins;
+};
+
+const normalizeEventDateYMD = (rawDate?: string): string => {
+  const s = String(rawDate || '').trim();
+  if (!s || s.toLowerCase() === 'today') {
+    const now = new Date();
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const parsed = new Date(s);
+  if (!isNaN(parsed.getTime())) {
+    return `${parsed.getFullYear()}-${String(parsed.getMonth() + 1).padStart(2, '0')}-${String(parsed.getDate()).padStart(2, '0')}`;
+  }
+  return s;
+};
+
+const getEventSortTimestamp = (e: any): number => {
+  const ymd = normalizeEventDateYMD(e.day || e.date);
+  const mins = parseClockToMinutes(e.time);
+  const parts = ymd.split('-').map(Number);
+  if (parts.length === 3 && !parts.some(isNaN)) {
+    const dt = new Date(parts[0], parts[1] - 1, parts[2], Math.floor(mins / 60), mins % 60, 0, 0);
+    return dt.getTime();
+  }
+  const fallback = Date.parse(ymd);
+  return isNaN(fallback) ? 0 : fallback + mins * 60 * 1000;
+};
 
 export default function StudentSchedule() {
-  const { currentUser, events, setEvents, batches, students } = useDatabase();
-  const student = students.find(s => 
-    (currentUser?.id && s.id === currentUser.id) || 
+  const { currentUser, events, setEvents, batches, students, staff } = useDatabase();
+  const student = students.find(s =>
+    (currentUser?.id && s.id === currentUser.id) ||
     (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
-  ) || students[0] || (currentUser as any);
+  ) || (currentUser as any);
 
   const [view, setView] = useState<'list' | 'calendar'>('list');
   const [horizon, setHorizon] = useState<'upcoming' | 'past' | 'canceled'>('upcoming');
@@ -41,6 +86,7 @@ export default function StudentSchedule() {
   const [selectedMeetingModal, setSelectedMeetingModal] = useState<any | null>(null);
   const [starCount, setStarCount] = useState<number>(5);
   const [ratingComment, setRatingComment] = useState<string>('');
+  const [feedbackToast, setFeedbackToast] = useState<string>('');
   
   const streams = ['All Streams', 'Counselling (1-on-1)', 'SAT Prep', 'Research Mentoring'];
 
@@ -50,39 +96,66 @@ export default function StudentSchedule() {
   // 3. Different students MUST NEVER see scheduled sessions of other students
   const studentEvents = events.filter((e: any) => canStudentAccessEvent(e, student, batches));
 
-  const formattedEvents = studentEvents.map((e: any) => ({
-    ...e,
-    id: e.id,
-    type: e.stream || e.type || 'Counselling (1-on-1)',
-    title: e.title || 'Scheduled Session',
-    date: e.day || e.date || 'Today',
-    time: e.time || '4:00 PM - 5:00 PM',
-    staff: e.host ? { name: e.host, role: 'Mentor', avatar: e.host.slice(0, 2).toUpperCase() } : { name: 'Staff Counselor', role: 'Counselor', avatar: 'SC' },
-    link: e.location || e.link || 'https://meet.google.com',
-    location: e.location || e.link || 'https://meet.google.com'
-  }));
+  const primaryCounselor = student ? resolveCounselorForStudent(student, staff) : null;
+  const primaryCounselorName = stripRoleBracketSuffix(primaryCounselor?.name || student?.counselor || '');
+
+  const resolveHostName = (e: any): string => {
+    const isBatchSession = Boolean(e.batch || e.batchId || e.batchName);
+    if (!isBatchSession && primaryCounselorName) {
+      return primaryCounselorName;
+    }
+    const rawHost = stripRoleBracketSuffix(e.host);
+    if (rawHost) return rawHost;
+    return primaryCounselorName || 'Counselor';
+  };
+
+  const formattedEvents = studentEvents.map((e: any) => {
+    const resolvedHost = resolveHostName(e);
+    return {
+      ...e,
+      id: e.id,
+      type: e.stream || e.type || 'Counselling (1-on-1)',
+      title: e.title || 'Scheduled Session',
+      date: e.day || e.date || 'Today',
+      time: e.time || '4:00 PM - 5:00 PM',
+      host: resolvedHost,
+      staff: {
+        name: resolvedHost,
+        role: '',
+        avatar: resolvedHost.slice(0, 2).toUpperCase() || 'CO'
+      },
+      link: e.location || e.link || 'https://meet.google.com',
+      location: e.location || e.link || 'https://meet.google.com'
+    };
+  });
 
   const isEventInPast = (e: any): boolean => {
     if (e.status === 'Completed') return true;
     if (e.status === 'Canceled') return false;
     const dateStr = e.day || e.date;
-    if (!dateStr || dateStr.toLowerCase() === 'today') return false;
+    if (!dateStr || String(dateStr).toLowerCase() === 'today') return false;
     try {
-      const evtDate = new Date(dateStr);
-      if (!isNaN(evtDate.getTime())) {
+      const ymd = normalizeEventDateYMD(dateStr);
+      const parts = ymd.split('-').map(Number);
+      if (parts.length === 3 && !parts.some(isNaN)) {
+        const evtMidnight = new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0);
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const evtMidnight = new Date(evtDate);
-        evtMidnight.setHours(0, 0, 0, 0);
         if (evtMidnight.getTime() < today.getTime()) return true;
       }
-    } catch(err) {}
+    } catch (err) {}
     return false;
   };
 
-  const upcomingClassesFiltered = formattedEvents.filter(e => !isEventInPast(e) && e.status !== 'Canceled');
-  const pastClassesFiltered = formattedEvents.filter(e => isEventInPast(e));
-  const canceledClassesFiltered = formattedEvents.filter(e => e.status === 'Canceled');
+  const upcomingClassesFiltered = formattedEvents
+    .filter(e => !isEventInPast(e) && e.status !== 'Canceled')
+    .sort((a, b) => getEventSortTimestamp(a) - getEventSortTimestamp(b));
+  const pastClassesFiltered = formattedEvents
+    .filter(e => isEventInPast(e))
+    .sort((a, b) => getEventSortTimestamp(b) - getEventSortTimestamp(a));
+  const canceledClassesFiltered = formattedEvents
+    .filter(e => e.status === 'Canceled')
+    .sort((a, b) => getEventSortTimestamp(b) - getEventSortTimestamp(a));
 
   const displayedClasses = horizon === 'upcoming' ? upcomingClassesFiltered : (horizon === 'past' ? pastClassesFiltered : canceledClassesFiltered);
   const filteredClasses = displayedClasses.filter(c => activeStream === 'All Streams' || c.type === activeStream);
@@ -164,11 +237,23 @@ export default function StudentSchedule() {
     setEvents(updatedEvents);
     setRatingEventId(null);
     setRatingComment('');
-    alert('Thank you! Your feedback and star rating have been submitted.');
+    setFeedbackToast('Thank you! Your feedback and star rating have been saved.');
+    setTimeout(() => setFeedbackToast(''), 4000);
   };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 pb-12">
+      {feedbackToast && (
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-xl text-xs font-semibold flex items-center justify-between shadow-2xs">
+          <span className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            {feedbackToast}
+          </span>
+          <button onClick={() => setFeedbackToast('')} className="text-emerald-600 hover:text-emerald-800">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
       {/* Top Controls */}
       <div className="flex flex-col gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4">
@@ -356,22 +441,22 @@ export default function StudentSchedule() {
                           {cls.title}
                           <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-blue-600 opacity-0 group-hover:opacity-100 transition-all" />
                         </h3>
-                        <p className="text-xs text-slate-500">Host: {cls.staff.name} ({cls.staff.role})</p>
+                        <p className="text-xs text-slate-500">Host: {cls.staff.name}</p>
                       </div>
 
                       <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
                         {horizon === 'upcoming' && (
-                          <Button 
-                            size="sm" 
-                            onClick={() => {
-                              const meetingUrl = cls.location || cls.link || 'https://meet.google.com';
-                              window.open(meetingUrl.startsWith('http') ? meetingUrl : `https://${meetingUrl}`, '_blank');
-                            }}
-                            className="bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 px-3 font-semibold shadow-sm"
+                          <a
+                            href={(cls.location || cls.link || 'https://meet.google.com').startsWith('http')
+                              ? (cls.location || cls.link || 'https://meet.google.com')
+                              : `https://${cls.location || cls.link}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-700 text-white text-xs h-8 px-3 font-semibold shadow-sm transition-colors"
                           >
                             <Video className="w-3.5 h-3.5 mr-1.5" />
                             Join Call
-                          </Button>
+                          </a>
                         )}
 
                         {horizon === 'past' && (
@@ -406,17 +491,27 @@ export default function StudentSchedule() {
                   </div>
                 )}
 
-                {/* Display Meeting Notes (MOM) if recorded by mentor */}
+                {/* Display Meeting Notes (MOM) — Student view strictly shows ONLY Key Discussion Points & Next Steps */}
                 {cls.moms && cls.moms.length > 0 && (
-                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2 text-xs">
+                  <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-2.5 text-xs">
                     <p className="font-bold text-slate-900 uppercase tracking-wider text-[10px] flex items-center gap-1">
                       <FileText className="w-3.5 h-3.5 text-blue-600" /> Session Minutes of Meeting (MOM)
                     </p>
                     {cls.moms.map((m: any) => (
-                      <div key={m.id} className="bg-white p-3 rounded-lg border border-slate-200 space-y-1">
-                        <p className="font-medium text-slate-800">"{m.keyPoints}"</p>
-                        {m.nextSteps && <p className="text-blue-900 text-[11px] font-semibold mt-1">Next Steps: {m.nextSteps}</p>}
-                        <p className="text-[10px] text-slate-400">Added by {m.authorName} ({m.authorRole}) • {m.date}</p>
+                      <div key={m.id} className="bg-white p-3.5 rounded-lg border border-slate-200 space-y-2.5">
+                        {m.keyPoints && (
+                          <div className="space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Key Discussion Points</p>
+                            <FormattedMomText text={m.keyPoints} className="text-slate-800" />
+                          </div>
+                        )}
+                        {m.nextSteps && (
+                          <div className="space-y-1 pt-2 border-t border-slate-100">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Next Steps</p>
+                            <FormattedMomText text={m.nextSteps} className="text-blue-950 font-medium" />
+                          </div>
+                        )}
+                        <p className="text-[10px] text-slate-400 pt-1">Recorded on {m.date}</p>
                       </div>
                     ))}
                   </div>
@@ -527,7 +622,7 @@ export default function StudentSchedule() {
                 </span>
                 <h3 className="text-xl font-bold mt-2 text-white">{selectedMeetingModal.title}</h3>
                 <p className="text-xs text-slate-300 mt-1 flex items-center gap-2">
-                  <span>Host: <strong>{selectedMeetingModal.staff?.name || selectedMeetingModal.host}</strong></span>
+                  <span>Host: <strong>{stripRoleBracketSuffix(selectedMeetingModal.staff?.name || selectedMeetingModal.host)}</strong></span>
                   <span>•</span>
                   <span>{selectedMeetingModal.date} ({selectedMeetingModal.time})</span>
                 </p>
@@ -556,15 +651,16 @@ export default function StudentSchedule() {
                     <CheckCircle2 className="w-3.5 h-3.5 text-slate-500" /> Call Ended
                   </span>
                 ) : (
-                  <Button 
-                    onClick={() => {
-                      const meetingUrl = selectedMeetingModal.location || selectedMeetingModal.link || 'https://meet.google.com';
-                      window.open(meetingUrl.startsWith('http') ? meetingUrl : `https://${meetingUrl}`, '_blank');
-                    }}
-                    className="bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs"
+                  <a
+                    href={(selectedMeetingModal.location || selectedMeetingModal.link || 'https://meet.google.com').startsWith('http')
+                      ? (selectedMeetingModal.location || selectedMeetingModal.link || 'https://meet.google.com')
+                      : `https://${selectedMeetingModal.location || selectedMeetingModal.link}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center rounded-md bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs px-4 py-2 transition-colors"
                   >
                     <Video className="w-4 h-4 mr-1.5" /> Join Call
-                  </Button>
+                  </a>
                 )}
               </div>
 
@@ -576,17 +672,31 @@ export default function StudentSchedule() {
                 </div>
               )}
 
-              {/* Minutes of Meeting */}
+              {/* Minutes of Meeting — Strictly display ONLY Key Discussion Points & Next Steps */}
               <div className="space-y-3">
                 <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
                   <FileText className="w-4 h-4 text-blue-600" /> Recorded Minutes of Meeting (MOM)
                 </h4>
                 {selectedMeetingModal.moms && selectedMeetingModal.moms.length > 0 ? (
                   selectedMeetingModal.moms.map((m: any) => (
-                    <div key={m.id} className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2">
-                      <p className="font-semibold text-slate-800 text-xs">"{m.keyPoints}"</p>
-                      {m.nextSteps && <p className="text-blue-900 font-bold text-[11px]">Next Steps: {m.nextSteps}</p>}
-                      <p className="text-[10px] text-slate-400">Added by {m.authorName} ({m.authorRole}) • {m.date}</p>
+                    <div key={m.id} className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                      {m.keyPoints && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">Key Discussion Points</span>
+                          <div className="bg-white p-3 rounded-lg border border-slate-200">
+                            <FormattedMomText text={m.keyPoints} className="text-slate-800" />
+                          </div>
+                        </div>
+                      )}
+                      {m.nextSteps && (
+                        <div className="space-y-1">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700 block">Next Steps</span>
+                          <div className="bg-blue-50/40 p-3 rounded-lg border border-blue-200">
+                            <FormattedMomText text={m.nextSteps} className="text-blue-950 font-medium" />
+                          </div>
+                        </div>
+                      )}
+                      <p className="text-[10px] text-slate-400">Recorded on {m.date}</p>
                     </div>
                   ))
                 ) : (

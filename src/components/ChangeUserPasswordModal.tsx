@@ -12,7 +12,6 @@ import {
   X,
   Mail,
   CheckCircle2,
-  Send,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
@@ -26,7 +25,7 @@ export interface TargetUserForPassword {
 
 export type SavePasswordHandlerResult =
   | void
-  | { ok?: boolean; mode?: 'direct' | 'reset_email'; error?: string };
+  | { ok?: boolean; mode?: 'direct'; requiresRecentLogin?: boolean; error?: string };
 
 interface ChangeUserPasswordModalProps {
   isOpen: boolean;
@@ -38,7 +37,6 @@ interface ChangeUserPasswordModalProps {
     newPassword: string,
     currentPasswordForReauth?: string
   ) => Promise<SavePasswordHandlerResult> | SavePasswordHandlerResult;
-  onSendResetEmail?: (email: string) => Promise<void> | void;
   isSelf?: boolean;
 }
 
@@ -47,17 +45,16 @@ export default function ChangeUserPasswordModal({
   onClose,
   targetUser,
   onSavePassword,
-  onSendResetEmail,
   isSelf = false,
 }: ChangeUserPasswordModalProps) {
   const [currentPassword, setCurrentPassword] = useState('');
+  const [needsCurrentPassword, setNeedsCurrentPassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
-  const [showNewPassword, setShowNewPassword] = useState(true);
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(!isSelf);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [successMode, setSuccessMode] = useState<'direct' | 'reset_email'>('direct');
-  const [triggeredByResetButton, setTriggeredByResetButton] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
   if (!isOpen || !targetUser) return null;
@@ -72,6 +69,7 @@ export default function ChangeUserPasswordModal({
     const numPart = Math.floor(100 + Math.random() * 900);
     const generated = `${prefix}@${numPart}${randPart}`;
     setNewPassword(generated);
+    setConfirmPassword(generated);
     setShowNewPassword(true);
     setValidationError(null);
   };
@@ -87,12 +85,17 @@ export default function ChangeUserPasswordModal({
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isSelf && !currentPassword.trim()) {
+    const cleanNew = newPassword.trim();
+    if (isSelf && needsCurrentPassword && !currentPassword.trim()) {
       setValidationError('Please enter your current password to verify your identity.');
       return;
     }
-    if (!newPassword || newPassword.trim().length < 6) {
+    if (!cleanNew || cleanNew.length < 6) {
       setValidationError('Password must be at least 6 characters long.');
+      return;
+    }
+    if (isSelf && cleanNew !== confirmPassword.trim()) {
+      setValidationError('New password and Confirm Password do not match.');
       return;
     }
 
@@ -102,38 +105,18 @@ export default function ChangeUserPasswordModal({
       const res = await onSavePassword(
         targetUser.id,
         targetUser.type,
-        newPassword.trim(),
-        isSelf ? currentPassword : undefined
+        cleanNew,
+        isSelf && currentPassword.trim() ? currentPassword.trim() : undefined
       );
       if (res && res.ok === false) {
+        if (res.requiresRecentLogin) {
+          setNeedsCurrentPassword(true);
+        }
         throw new Error(res.error || 'Failed to update password.');
       }
-      const resolvedMode = (res && res.mode) || 'direct';
-      setTriggeredByResetButton(false);
-      setSuccessMode(resolvedMode);
-      setSuccessMessage(
-        resolvedMode === 'reset_email'
-          ? `Typed password was NOT applied — Firebase Reset Link sent to ${targetUser.email} instead.`
-          : `Password successfully updated for ${targetUser.name}!`
-      );
+      setSuccessMessage(`Password successfully updated for ${targetUser.name}!`);
     } catch (err: any) {
       setValidationError(err?.message || 'Failed to update password. Please try again.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleDispatchResetEmail = async () => {
-    if (!onSendResetEmail) return;
-    try {
-      setIsSubmitting(true);
-      setValidationError(null);
-      await onSendResetEmail(targetUser.email);
-      setTriggeredByResetButton(true);
-      setSuccessMode('reset_email');
-      setSuccessMessage(`Firebase password reset link sent to ${targetUser.email}.`);
-    } catch (err: any) {
-      setValidationError(err?.message || 'Could not send reset email.');
     } finally {
       setIsSubmitting(false);
     }
@@ -162,13 +145,13 @@ Please log in and keep your credentials secure.`;
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base font-bold tracking-tight text-white">
-                  {isSelf ? 'Change Your Password' : 'Reset User Password'}
+                  {isSelf ? 'Change Your Password' : 'Set / Reset User Password'}
                 </h3>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                  <Shield className="w-3 h-3" /> {isSelf ? 'Firebase Account' : 'Admin Password Reset'}
+                  <Shield className="w-3 h-3" /> Direct Update
                 </span>
               </div>
-              <p className="text-xs text-slate-300">Managed via Firebase Authentication (no plaintext storage)</p>
+              <p className="text-xs text-slate-300">Direct Firebase Authentication update (no automated emails)</p>
             </div>
           </div>
           <button
@@ -204,71 +187,41 @@ Please log in and keep your credentials secure.`;
           </div>
 
           {successMessage ? (
-            <div
-              className={`p-4 border rounded-xl space-y-3 animate-in zoom-in-95 duration-200 ${
-                successMode === 'reset_email' && !triggeredByResetButton
-                  ? 'bg-amber-50 border-amber-300'
-                  : 'bg-emerald-50 border-emerald-200'
-              }`}
-            >
-              <div
-                className={`flex items-center gap-2 font-bold text-sm ${
-                  successMode === 'reset_email' && !triggeredByResetButton ? 'text-amber-900' : 'text-emerald-800'
-                }`}
-              >
-                {successMode === 'reset_email' && !triggeredByResetButton ? (
-                  <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
-                ) : (
-                  <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                )}
+            <div className="p-4 border rounded-xl space-y-3 animate-in zoom-in-95 duration-200 bg-emerald-50 border-emerald-200">
+              <div className="flex items-center gap-2 font-bold text-sm text-emerald-800">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                 <span>{successMessage}</span>
               </div>
 
-              {successMode === 'reset_email' ? (
-                triggeredByResetButton ? (
-                  <p className="text-xs text-emerald-700 leading-relaxed">
-                    The user has received a Firebase password reset link at <strong>{targetUser.email}</strong> to set their new password securely.
-                  </p>
-                ) : (
-                  <div className="text-xs text-amber-800 leading-relaxed space-y-1.5">
-                    <p>
-                      <strong>{targetUser.email}</strong> already has a Firebase Authentication account. For security, Firebase does not allow overwriting an existing user&apos;s password directly without server Admin SDK credentials.
-                    </p>
-                    <p>
-                      Instead, a <strong>Firebase password reset link</strong> has been emailed to <strong>{targetUser.email}</strong>. Ask the user to open that email (check Inbox &amp; Spam) and set their new password—it will work immediately on the login page.
-                    </p>
+              <p className="text-xs text-emerald-700">
+                The new password is now active in Firebase Authentication and works immediately across all browsers and Incognito windows—no email verification required.
+              </p>
+
+              {!isSelf && (
+                <div className="p-3 bg-white rounded-lg border border-emerald-200 text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Shareable Credentials</span>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleCopy(loginInstructions, 'instructions')}
+                      className="h-7 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                    >
+                      {copiedField === 'instructions' ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 mr-1 text-emerald-600" /> Copied!
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5 mr-1" /> Copy Login Message
+                        </>
+                      )}
+                    </Button>
                   </div>
-                )
-              ) : (
-                <>
-                  <p className="text-xs text-emerald-700">
-                    The new password is now active in Firebase Authentication and works immediately across all browsers and devices—no email verification required.
-                  </p>
-                  <div className="p-3 bg-white rounded-lg border border-emerald-200 text-xs space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Shareable Credentials</span>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleCopy(loginInstructions, 'instructions')}
-                        className="h-7 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                      >
-                        {copiedField === 'instructions' ? (
-                          <>
-                            <Check className="w-3.5 h-3.5 mr-1 text-emerald-600" /> Copied!
-                          </>
-                        ) : (
-                          <>
-                            <Copy className="w-3.5 h-3.5 mr-1" /> Copy Login Message
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                    <div className="font-mono text-[11px] text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 whitespace-pre-line select-all">
-                      {loginInstructions}
-                    </div>
+                  <div className="font-mono text-[11px] text-slate-600 bg-slate-50 p-2 rounded border border-slate-100 whitespace-pre-line select-all">
+                    {loginInstructions}
                   </div>
-                </>
+                </div>
               )}
 
               <div className="flex justify-end pt-2">
@@ -279,7 +232,7 @@ Please log in and keep your credentials secure.`;
             </div>
           ) : (
             <form onSubmit={handleSave} className="space-y-4">
-              {isSelf && (
+              {isSelf && needsCurrentPassword && (
                 <div>
                   <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5 mb-1.5">
                     <Lock className="w-3.5 h-3.5 text-slate-500" />
@@ -327,7 +280,7 @@ Please log in and keep your credentials secure.`;
                     }}
                     placeholder="Enter new password (min. 6 characters)"
                     className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500 pr-20"
-                    autoFocus={!isSelf}
+                    autoFocus
                   />
                   <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
                     {newPassword && (
@@ -350,61 +303,64 @@ Please log in and keep your credentials secure.`;
                     </button>
                   </div>
                 </div>
-
-                {validationError && (
-                  <p className="text-xs text-red-600 mt-1.5 flex items-center gap-1">
-                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
-                    {validationError}
-                  </p>
-                )}
               </div>
+
+              {isSelf && (
+                <div>
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5 mb-1.5">
+                    <Lock className="w-3.5 h-3.5 text-indigo-600" />
+                    Confirm New Password
+                  </label>
+                  <input
+                    type={showNewPassword ? 'text' : 'password'}
+                    value={confirmPassword}
+                    onChange={(e) => {
+                      setConfirmPassword(e.target.value);
+                      if (validationError) setValidationError(null);
+                    }}
+                    placeholder="Re-enter new password"
+                    className="w-full bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    required
+                  />
+                </div>
+              )}
+
+              {validationError && (
+                <p className="text-xs text-red-600 flex items-center gap-1">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                  {validationError}
+                </p>
+              )}
 
               <div className="bg-amber-50/60 border border-amber-200/80 rounded-xl p-3 text-xs text-amber-900 space-y-1">
                 <p className="font-bold flex items-center gap-1 text-amber-800">
                   <Shield className="w-3.5 h-3.5 text-amber-600" />
-                  {isSelf ? 'Firebase Identity Verification' : 'Firebase Authentication Update'}
+                  Direct Password Sync
                 </p>
                 <p className="text-[11px] text-amber-700 leading-relaxed">
                   {isSelf
-                    ? 'Passwords are encrypted and stored solely inside Firebase Authentication. Your current password is required for security verification.'
-                    : 'Updates the user password via Firebase Admin SDK if configured, or automatically dispatches a secure Firebase password reset email.'}
+                    ? 'Updates your password immediately in Firebase Authentication with no email verification links.'
+                    : 'Sets this password directly in Firebase Authentication and updates the student credential record immediately without sending any emails.'}
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
-                {onSendResetEmail ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handleDispatchResetEmail}
-                    disabled={isSubmitting}
-                    className="text-xs font-semibold text-blue-700 border-blue-200 hover:bg-blue-50 flex items-center gap-1.5"
-                  >
-                    <Send className="w-3.5 h-3.5" />
-                    Send Reset Email Instead
-                  </Button>
-                ) : (
-                  <span />
-                )}
-
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={onClose}
-                    disabled={isSubmitting}
-                    className="text-xs font-bold text-slate-600 hover:bg-slate-100"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="submit"
-                    disabled={isSubmitting || !newPassword.trim()}
-                    className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
-                  >
-                    {isSubmitting ? 'Updating Password...' : 'Save New Password'}
-                  </Button>
-                </div>
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={onClose}
+                  disabled={isSubmitting}
+                  className="text-xs font-bold text-slate-600 hover:bg-slate-100"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={isSubmitting || !newPassword.trim()}
+                  className="bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold shadow-sm"
+                >
+                  {isSubmitting ? 'Updating Password...' : 'Save New Password'}
+                </Button>
               </div>
             </form>
           )}

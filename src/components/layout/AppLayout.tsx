@@ -43,9 +43,8 @@ import {
   EmailAuthProvider,
   reauthenticateWithCredential,
   updatePassword,
-  sendPasswordResetEmail,
 } from 'firebase/auth';
-import { auth } from '@/lib/firebase';
+import { auth, getFirebaseIdToken } from '@/lib/firebase';
 import NotificationDetailsModal, { NotificationDetailData } from '@/components/NotificationDetailsModal';
 
 interface SidebarItem {
@@ -116,6 +115,8 @@ export default function AppLayout() {
     signOutAll,
   } = useDatabase();
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
+  const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const userMenuRef = useRef<HTMLDivElement>(null);
 
   const handleSaveCurrentUserPassword = async (
     _userId: string,
@@ -127,15 +128,50 @@ export default function AppLayout() {
     if (!fbUser || !fbUser.email) {
       return { ok: false, error: 'Your Firebase session has expired. Please sign in again.' };
     }
-    if (!currentPasswordForReauth) {
-      return { ok: false, error: 'Please enter your current password to verify your identity.' };
-    }
     try {
-      const cred = EmailAuthProvider.credential(fbUser.email, currentPasswordForReauth);
-      await reauthenticateWithCredential(fbUser, cred);
+      const idToken = await getFirebaseIdToken();
+      if (idToken) {
+        const res = await fetch('/api/auth/self-change-password', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${idToken}`,
+          },
+          body: JSON.stringify({
+            newPassword,
+            currentPassword: currentPasswordForReauth || undefined,
+          }),
+        });
+        const json = await res.json().catch(() => null);
+        if (res.ok && json?.ok) {
+          return { ok: true, mode: 'direct' as const };
+        }
+        if (json?.requiresRecentLogin) {
+          return {
+            ok: false,
+            requiresRecentLogin: true,
+            error: 'Please enter your current password to verify your identity.',
+          };
+        }
+        if (res.status === 400 && json?.error) {
+          return { ok: false, error: json.error };
+        }
+      }
+
+      if (currentPasswordForReauth) {
+        const cred = EmailAuthProvider.credential(fbUser.email, currentPasswordForReauth);
+        await reauthenticateWithCredential(fbUser, cred);
+      }
       await updatePassword(fbUser, newPassword);
       return { ok: true, mode: 'direct' as const };
     } catch (err: any) {
+      if (err?.code === 'auth/requires-recent-login') {
+        return {
+          ok: false,
+          requiresRecentLogin: true,
+          error: 'Please enter your current password to verify your identity.',
+        };
+      }
       if (err?.code === 'auth/wrong-password' || err?.code === 'auth/invalid-credential') {
         return { ok: false, error: 'Current password is incorrect.' };
       }
@@ -143,10 +179,11 @@ export default function AppLayout() {
     }
   };
 
-  // Close mobile drawer and notifications on navigation/click-outside
+  // Close mobile drawer, notifications, and user menu on navigation/click-outside
   useEffect(() => {
     setIsMobileMenuOpen(false);
     setIsNotificationOpen(false);
+    setIsUserMenuOpen(false);
   }, [location.pathname]);
 
   useEffect(() => {
@@ -154,12 +191,15 @@ export default function AppLayout() {
       if (notifDropdownRef.current && !notifDropdownRef.current.contains(e.target as Node)) {
         setIsNotificationOpen(false);
       }
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setIsUserMenuOpen(false);
+      }
     };
-    if (isNotificationOpen) {
+    if (isNotificationOpen || isUserMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isNotificationOpen]);
+  }, [isNotificationOpen, isUserMenuOpen]);
 
   const markAllAsRead = () => {
     const allIds = notifications.map(n => n.id);
@@ -615,31 +655,13 @@ export default function AppLayout() {
         </div>
         
         <div className="p-3 border-t border-slate-100">
-          <div className="flex items-center justify-between p-2 rounded-xl bg-slate-50 border border-slate-200/80">
-            <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
-              <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-xs shrink-0">
-                {currentUser?.name?.charAt(0) || 'U'}
-              </div>
-              <div className="overflow-hidden min-w-0">
-                <p className="text-xs font-bold truncate text-slate-900">{isTeam ? (currentUser?.name || 'Team Member') : (currentUser?.name || 'Student')}</p>
-                <p className="text-[10px] text-slate-400 truncate">{isTeam ? (currentUser?.role || 'Staff') : 'Student Portal'}</p>
-              </div>
+          <div className="flex items-center gap-2.5 p-2 rounded-xl bg-slate-50 border border-slate-200/80 overflow-hidden min-w-0">
+            <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-xs shrink-0">
+              {userInitials}
             </div>
-            <div className="flex items-center gap-1 shrink-0">
-              <button
-                onClick={() => setIsChangePasswordOpen(true)}
-                title="Direct Password Change"
-                className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-              >
-                <KeyRound className="w-4 h-4" />
-              </button>
-              <button
-                onClick={handleLogout}
-                title="Sign Out"
-                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-              </button>
+            <div className="overflow-hidden min-w-0 flex-1">
+              <p className="text-xs font-bold truncate text-slate-900">{accountName}</p>
+              <p className="text-[10px] text-slate-400 truncate">{isTeam ? (currentUser?.role || 'Staff') : 'Student Portal'}</p>
             </div>
           </div>
         </div>
@@ -701,35 +723,14 @@ export default function AppLayout() {
               </nav>
             </div>
 
-            <div className="p-4 border-t border-slate-100 bg-slate-50 space-y-2">
-              <div className="flex items-center justify-between p-2.5 w-full bg-white rounded-xl border border-slate-200 shadow-2xs">
-                <div className="flex items-center gap-2.5 overflow-hidden min-w-0">
-                  <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-xs shrink-0">
-                    {currentUser?.name?.charAt(0) || 'U'}
-                  </div>
-                  <div className="overflow-hidden min-w-0">
-                    <p className="text-xs font-bold truncate text-slate-900">{isTeam ? (currentUser?.name || 'Team Member') : (currentUser?.name || 'Student')}</p>
-                    <p className="text-[10px] text-slate-400 truncate">{isTeam ? (currentUser?.role || 'Staff') : 'Student Portal'}</p>
-                  </div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50">
+              <div className="flex items-center gap-2.5 p-2.5 w-full bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden min-w-0">
+                <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-xs shrink-0">
+                  {userInitials}
                 </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <button
-                    onClick={() => {
-                      setIsMobileMenuOpen(false);
-                      setIsChangePasswordOpen(true);
-                    }}
-                    title="Direct Password Change"
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
-                  >
-                    <KeyRound className="w-4 h-4" />
-                  </button>
-                  <button
-                    onClick={handleLogout}
-                    title="Sign Out"
-                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                  >
-                    <LogOut className="w-4 h-4" />
-                  </button>
+                <div className="overflow-hidden min-w-0 flex-1">
+                  <p className="text-xs font-bold truncate text-slate-900">{accountName}</p>
+                  <p className="text-[10px] text-slate-400 truncate">{isTeam ? (currentUser?.role || 'Staff') : 'Student Portal'}</p>
                 </div>
               </div>
             </div>
@@ -961,28 +962,50 @@ export default function AppLayout() {
               )}
             </div>
 
-            {/* Direct Password Change Button */}
-            <button
-              onClick={() => setIsChangePasswordOpen(true)}
-              title="Change Password (Direct - No Email Trigger)"
-              className="w-8 h-8 rounded-full flex items-center justify-center transition-all border shadow-2xs bg-slate-100 hover:bg-amber-50 hover:border-amber-300 text-slate-600 hover:text-amber-600 border-slate-200 cursor-pointer shrink-0"
-            >
-              <KeyRound className="w-4 h-4" />
-            </button>
+            {/* Unified Top-Right Account Menu (Single Change Password + Sign Out entry point) */}
+            <div className="relative" ref={userMenuRef}>
+              <button
+                type="button"
+                onClick={() => setIsUserMenuOpen((prev) => !prev)}
+                title={`${accountName} - Account Options`}
+                className="w-8 h-8 rounded-full bg-indigo-100 hover:bg-indigo-200 transition-all flex items-center justify-center text-indigo-700 font-bold text-xs relative cursor-pointer shadow-2xs border border-indigo-200 shrink-0"
+              >
+                {userInitials}
+                <div className="absolute top-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></div>
+              </button>
 
-            <div 
-              onClick={() => {
-                if (isTeam) {
-                  navigate('/team/users');
-                } else {
-                  navigate('/student/profile');
-                }
-              }}
-              title={`${accountName} - Click to view Profile`}
-              className="w-8 h-8 rounded-full bg-indigo-100 hover:bg-indigo-200 hover:scale-105 transition-all flex items-center justify-center text-indigo-700 font-bold text-xs relative cursor-pointer shadow-2xs border border-indigo-200 shrink-0"
-            >
-              {userInitials}
-              <div className="absolute top-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full"></div>
+              {isUserMenuOpen && (
+                <div className="absolute right-0 mt-2 w-56 bg-white border border-slate-200 rounded-2xl shadow-xl z-50 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+                  <div className="px-4 py-3 bg-slate-50 border-b border-slate-100">
+                    <p className="text-xs font-bold text-slate-900 truncate">{accountName}</p>
+                    <p className="text-[11px] text-slate-500 truncate">{currentUser?.email || ''}</p>
+                  </div>
+                  <div className="p-1.5 space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        setIsChangePasswordOpen(true);
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-amber-50 hover:text-amber-800 rounded-xl transition-colors text-left"
+                    >
+                      <KeyRound className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Change Password</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsUserMenuOpen(false);
+                        void handleLogout();
+                      }}
+                      className="w-full flex items-center gap-2.5 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 rounded-xl transition-colors text-left"
+                    >
+                      <LogOut className="w-4 h-4 shrink-0" />
+                      <span>Sign Out</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </header>
@@ -1278,9 +1301,6 @@ export default function AppLayout() {
               type: (currentUser.role === 'STUDENT' || !isTeam) ? 'student' : 'staff',
             }}
             onSavePassword={handleSaveCurrentUserPassword}
-            onSendResetEmail={async (em) => {
-              await sendPasswordResetEmail(auth, em, { url: `${window.location.origin}/login` });
-            }}
           />
         )}
 

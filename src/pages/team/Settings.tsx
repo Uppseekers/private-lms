@@ -610,7 +610,7 @@ export default function TeamSettings() {
 
   if (!isAdmin) {
     return (
-      <div className="max-w-3xl mx-auto my-8 space-y-6 animate-in fade-in duration-300">
+      <div className="max-w-5xl mx-auto my-8 space-y-6 animate-in fade-in duration-300">
         {currentUser && <ZohoSetupDiagnosticsPanel currentUser={currentUser} employeeOnlyMode />}
 
         <div className="p-8 bg-white border border-rose-200 rounded-2xl shadow-sm text-center">
@@ -1855,9 +1855,6 @@ export default function TeamSettings() {
           onClose={() => setUserForPasswordChange(null)}
           targetUser={userForPasswordChange}
           onSavePassword={handleSaveUserPassword}
-          onSendResetEmail={async (em) => {
-            await resetPortalUserPassword({ email: em, name: userForPasswordChange.name, userType: 'staff' });
-          }}
         />
       )}
     </div>

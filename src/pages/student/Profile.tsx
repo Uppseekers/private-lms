@@ -69,7 +69,9 @@ const fullIntakeOptions = intakeYears.flatMap(yr => intakeTerms.map(term => `${t
 
 export default function StudentProfile() {
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingActivity, setIsSavingActivity] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
+  const [saveError, setSaveError] = useState('');
   const [isDirty, setIsDirty] = useState(false);
   const { updateStudent, currentUser, students, staff } = useDatabase();
   
@@ -257,8 +259,10 @@ export default function StudentProfile() {
     setIsActivityModalOpen(true);
   };
 
-  const handleSaveActivity = () => {
+  const handleSaveActivity = async () => {
     if (!actTitle.trim()) return;
+    setSaveError('');
+    setIsSavingActivity(true);
     const yearCoverageStr = actSelectedClasses.length > 0 ? actSelectedClasses.join(', ') : actYears;
     const newAct = {
       id: editingActivityIdx !== null ? activities[editingActivityIdx].id : 'act_' + Date.now(),
@@ -274,22 +278,50 @@ export default function StudentProfile() {
       weeksPerYear: actWeeksPerYear.trim()
     };
 
+    let updatedActivities: any[];
     if (editingActivityIdx !== null) {
-      const updated = [...activities];
-      updated[editingActivityIdx] = newAct;
-      setActivities(updated);
+      updatedActivities = [...activities];
+      updatedActivities[editingActivityIdx] = newAct;
     } else {
-      if (activities.length < 16) {
-        setActivities([...activities, newAct]);
+      if (activities.length >= 16) {
+        setIsSavingActivity(false);
+        return;
       }
+      updatedActivities = [...activities, newAct];
     }
-    setIsDirty(true);
-    setIsActivityModalOpen(false);
+
+    try {
+      await updateStudent({
+        ...student,
+        id: student?.id || currentUser?.id,
+        extracurriculars: updatedActivities
+      });
+      setActivities(updatedActivities);
+      setIsActivityModalOpen(false);
+      setSaveMessage(editingActivityIdx !== null ? 'Activity updated & synced!' : 'Activity saved & synced across portals!');
+      setTimeout(() => setSaveMessage(''), 3500);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Could not save activity to database. Please try again.');
+    } finally {
+      setIsSavingActivity(false);
+    }
   };
 
-  const handleRemoveActivity = (idx: number) => {
-    setIsDirty(true);
-    setActivities(activities.filter((_, i) => i !== idx));
+  const handleRemoveActivity = async (idx: number) => {
+    setSaveError('');
+    const updatedActivities = activities.filter((_, i) => i !== idx);
+    try {
+      await updateStudent({
+        ...student,
+        id: student?.id || currentUser?.id,
+        extracurriculars: updatedActivities
+      });
+      setActivities(updatedActivities);
+      setSaveMessage('Activity removed & synced!');
+      setTimeout(() => setSaveMessage(''), 3000);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Could not remove activity. Please try again.');
+    }
   };
 
   let score = 0;
@@ -363,11 +395,17 @@ export default function StudentProfile() {
         extracurriculars: activities,
         activities: student?.activities || []
       };
-      await Promise.resolve(updateStudent(updated));
-      setIsDirty(false);
-      setIsSaving(false);
-      setSaveMessage('Profile saved & synced across devices!');
-      setTimeout(() => setSaveMessage(''), 3500);
+      setSaveError('');
+      try {
+        await updateStudent(updated);
+        setIsDirty(false);
+        setSaveMessage('Profile saved & synced across devices!');
+        setTimeout(() => setSaveMessage(''), 3500);
+      } catch (err: any) {
+        setSaveError(err?.message || 'Failed to save profile changes. Please try again.');
+      } finally {
+        setIsSaving(false);
+      }
     }} className="max-w-5xl mx-auto space-y-8 pb-12">
       {/* Progress & Gamification */}
       <Card className="bg-gradient-to-r from-blue-600 to-indigo-700 text-white border-none shadow-md">
@@ -773,7 +811,7 @@ export default function StudentProfile() {
         </div>
       </Section>
 
-      <Section title="7. Account Security & Password" description="Manage your login credentials. You can trigger an email with a secure password reset link and verification code.">
+      <Section title="7. Account Security & Password" description="Manage your portal login credentials directly inside the app.">
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
           <div className="space-y-1">
             <div className="flex items-center gap-2">
@@ -781,7 +819,7 @@ export default function StudentProfile() {
               <span className="font-mono text-xs bg-white px-2.5 py-1 rounded-md border border-slate-200 text-slate-700 font-semibold">{student?.email || currentUser?.email || 'N/A'}</span>
             </div>
             <p className="text-xs text-slate-500">
-              Need to update your password? Click below to send a secure reset link and code to your registered email ID.
+              Update your password immediately using our direct in-app form — no email verification links required.
             </p>
           </div>
           <Button
@@ -790,7 +828,7 @@ export default function StudentProfile() {
             className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shrink-0 shadow-sm"
           >
             <Key className="w-3.5 h-3.5 mr-1.5" />
-            Change Password (Send Email)
+            Change Password
           </Button>
         </div>
       </Section>
@@ -952,17 +990,18 @@ export default function StudentProfile() {
             </div>
 
             <div className="flex justify-end gap-2 p-4 sm:px-6 border-t border-slate-200 shrink-0 bg-slate-50/80">
-              <Button type="button" variant="outline" onClick={() => setIsActivityModalOpen(false)}>Cancel</Button>
-              <Button type="button" onClick={handleSaveActivity} disabled={!actTitle.trim()} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
-                {editingActivityIdx !== null ? 'Save Changes' : 'Add Activity'}
+              <Button type="button" variant="outline" onClick={() => setIsActivityModalOpen(false)} disabled={isSavingActivity}>Cancel</Button>
+              <Button type="button" onClick={handleSaveActivity} disabled={!actTitle.trim() || isSavingActivity} className="bg-blue-600 hover:bg-blue-700 text-white font-bold">
+                {isSavingActivity ? 'Saving...' : (editingActivityIdx !== null ? 'Save Changes' : 'Add Activity')}
               </Button>
             </div>
           </div>
         </div>
       )}
 
-      <div className="flex justify-end gap-4 mt-8 items-center">
-        {saveMessage && <span className="text-emerald-600 font-semibold">{saveMessage}</span>}
+      <div className="flex justify-end gap-4 mt-8 items-center flex-wrap">
+        {saveError && <span className="text-rose-600 font-semibold text-sm">{saveError}</span>}
+        {saveMessage && <span className="text-emerald-600 font-semibold text-sm">{saveMessage}</span>}
         <Button
           variant="outline"
           size="lg"

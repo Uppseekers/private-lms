@@ -13,6 +13,7 @@ import { useDatabase, EventItem } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
 import { Student, StaffMember, MeetingMOM, MeetingTask, OperationalLog } from '@/types';
 import { isUserAdmin, canStaffAccessAllStudents, isStudentAssignedToStaff, canStaffAccessReports, isStaffCounselor, isStaffMentorOrFaculty } from '@/lib/staffPermissions';
+import FormattedMomText from '@/components/FormattedMomText';
 
 // RFC-4180 compliant CSV export helper
 function exportToCSV(filename: string, headers: string[], rows: (string | number | undefined | null)[][]) {
@@ -1315,15 +1316,15 @@ export default function TeamReports() {
 
                                     {/* Key Points */}
                                     <div>
-                                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Key Discussion Points</p>
-                                      <p className="text-xs text-slate-800 font-medium mt-0.5 leading-relaxed">{mom.keyPoints}</p>
+                                      <p className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Key Discussion Points</p>
+                                      <FormattedMomText text={mom.keyPoints} className="text-xs text-slate-800" />
                                     </div>
 
                                     {/* Student Progress */}
                                     {mom.studentProgress && (
                                       <div>
-                                        <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600">Student Progress & Diagnostic Evaluation</p>
-                                        <p className="text-xs text-slate-800 font-medium mt-0.5 leading-relaxed">{mom.studentProgress}</p>
+                                        <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-600 mb-1">Student Progress & Diagnostic Evaluation</p>
+                                        <FormattedMomText text={mom.studentProgress} className="text-xs text-slate-800" />
                                       </div>
                                     )}
 
@@ -1331,18 +1332,25 @@ export default function TeamReports() {
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                                       {mom.observations && (
                                         <div className="bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Counselor Observations</p>
-                                          <p className="text-xs text-slate-700 mt-1">{mom.observations}</p>
+                                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Counselor Observations</p>
+                                          <FormattedMomText text={mom.observations} className="text-xs text-slate-700" />
                                         </div>
                                       )}
 
                                       {mom.nextSteps && (
                                         <div className="bg-blue-50/50 p-2.5 rounded-lg border border-blue-100">
-                                          <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Next Steps & Action Plan</p>
-                                          <p className="text-xs text-slate-800 mt-1 font-medium">{mom.nextSteps}</p>
+                                          <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700 mb-1">Next Steps & Action Plan</p>
+                                          <FormattedMomText text={mom.nextSteps} className="text-xs text-slate-800" />
                                         </div>
                                       )}
                                     </div>
+
+                                    {mom.followUpActions && (
+                                      <div className="bg-amber-50/50 p-2.5 rounded-lg border border-amber-100">
+                                        <p className="text-[10px] font-bold uppercase tracking-wider text-amber-800 mb-1">Follow-up Actions</p>
+                                        <FormattedMomText text={mom.followUpActions} className="text-xs text-slate-800" />
+                                      </div>
+                                    )}
                                   </div>
                                 ))}
                               </div>

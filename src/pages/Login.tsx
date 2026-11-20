@@ -9,6 +9,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
+  signOut,
 } from 'firebase/auth';
 
 const BOOTSTRAP_ADMIN_EMAIL = 'uppseekers@gmail.com';
@@ -19,13 +20,13 @@ function mapFirebaseAuthError(err: any): string {
     case 'auth/invalid-credential':
     case 'auth/wrong-password':
     case 'auth/user-not-found':
-      return 'Invalid email or password. Double-check your credentials or use Forgot Password below.';
+      return 'Invalid email or password. Double-check your credentials or ask your Category Manager / Admin to update your password.';
     case 'auth/invalid-email':
       return 'Please enter a valid email address.';
     case 'auth/user-disabled':
       return 'This account has been disabled. Please contact your administrator.';
     case 'auth/too-many-requests':
-      return 'Too many failed attempts. Please wait a few minutes or reset your password.';
+      return 'Too many failed attempts. Please wait a few minutes and try again.';
     case 'auth/operation-not-allowed':
       return 'Email/Password sign-in is not enabled yet in Firebase Console Authentication -> Sign-in method.';
     case 'auth/network-request-failed':
@@ -37,7 +38,7 @@ function mapFirebaseAuthError(err: any): string {
 
 export default function Login() {
   const navigate = useNavigate();
-  const { isAuthenticated, currentUser, isFirebaseAuthReady, authError, clearAuthError } = useDatabase();
+  const { isAuthenticated, currentUser, isFirebaseAuthReady, authError, clearAuthError, signOutAll } = useDatabase();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -71,8 +72,56 @@ export default function Login() {
 
     setLoading(true);
     try {
-      await signInWithEmailAndPassword(auth, cleanEmail, password);
-      // DatabaseContext onAuthStateChanged resolves the Firestore role & profile automatically
+      // Strictly clear any previous account session & browser storage before signing in
+      if (auth.currentUser && normalizeEmail(auth.currentUser.email) !== cleanEmail) {
+        await signOutAll();
+      } else {
+        try {
+          window.sessionStorage?.clear();
+          if (window.localStorage) {
+            const keys: string[] = [];
+            for (let i = 0; i < window.localStorage.length; i++) {
+              const k = window.localStorage.key(i);
+              if (k && k !== 'uppseekers_zoho_diagnostic_trace_v1') keys.push(k);
+            }
+            keys.forEach((k) => window.localStorage.removeItem(k));
+          }
+        } catch {
+          // ignore storage cleanup failure
+        }
+        if (auth.currentUser) {
+          await signOut(auth).catch(() => {});
+        }
+      }
+
+      try {
+        await signInWithEmailAndPassword(auth, cleanEmail, password);
+        // DatabaseContext onAuthStateChanged resolves the Firestore role & profile automatically
+      } catch (firstErr: any) {
+        const firstCode = firstErr?.code || '';
+        // Attempt seamless legacy student/staff credential migration if account wasn't yet synced to Firebase Auth
+        if (
+          firstCode === 'auth/invalid-credential' ||
+          firstCode === 'auth/user-not-found' ||
+          firstCode === 'auth/wrong-password'
+        ) {
+          try {
+            const migRes = await fetch('/api/auth/migrate-legacy-login', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ email: cleanEmail, password }),
+            });
+            const migJson = await migRes.json().catch(() => null);
+            if (migRes.ok && migJson?.ok && migJson?.migrated) {
+              await signInWithEmailAndPassword(auth, cleanEmail, password);
+              return;
+            }
+          } catch {
+            // Fall through to normal error handling
+          }
+        }
+        throw firstErr;
+      }
     } catch (err: any) {
       const code = err?.code || '';
       setError(mapFirebaseAuthError(err));

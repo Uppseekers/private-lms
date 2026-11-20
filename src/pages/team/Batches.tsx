@@ -54,11 +54,26 @@ export default function Batches() {
 
   const isAdmin = isUserAdmin(currentUser);
   const hasGlobalScope = isAdmin || canStaffAccessAllStudents(currentUser, permissionsMatrix);
+  const hasBatchPermissionFromMatrix = (() => {
+    if (!currentUser || !permissionsMatrix) return false;
+    const roleUpper = (currentUser.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    const rolePerms = permissionsMatrix[currentUser.role] || permissionsMatrix[roleUpper];
+    if (!Array.isArray(rolePerms)) return false;
+    const batchCat = rolePerms.find((c) => c.id === 'batch');
+    const tabCat = rolePerms.find((c) => c.id === 'tab_visibility');
+    const hasBatchAction = Boolean(batchCat?.items?.some((i) => i.enabled));
+    const hasTabBatch = Boolean(tabCat?.items?.find((i) => i.id === 'tab_batches')?.enabled);
+    return hasBatchAction || hasTabBatch;
+  })();
+  const canManageBatches = isAdmin || hasGlobalScope || hasBatchPermissionFromMatrix;
 
   // Filter batches based on role, tab, search query, and subject filter
-  const visibleBatches = batches.filter(batch => {
-    // Non-global staff can only see batches where they are assigned as mentor
-    if (!hasGlobalScope && !batch.mentors.some(m => m.toLowerCase() === (currentUser?.name || '').toLowerCase())) {
+  const visibleBatches = (batches || []).filter(batch => {
+    if (!batch) return false;
+    const batchMentors = Array.isArray(batch.mentors) ? batch.mentors : [];
+
+    // Non-global staff without batch management permission can only see batches where they are assigned as mentor
+    if (!hasGlobalScope && !hasBatchPermissionFromMatrix && !batchMentors.some(m => (m || '').toLowerCase() === (currentUser?.name || '').toLowerCase())) {
       return false;
     }
     
@@ -66,22 +81,28 @@ export default function Batches() {
     if (activeTab === 'master' && batch.type !== 'Master Batch') return false;
     if (activeTab === 'sub' && batch.type !== 'Sub-Batch') return false;
     
-    // Subject filter
-    if (subjectFilter !== 'All' && (batch.subject || 'SAT') !== subjectFilter) return false;
+    // Subject filter (case-insensitive / flexible match so e.g. 'SAT' matches 'SAT' or 'SAT Prep')
+    if (subjectFilter !== 'All') {
+      const normalizedSubj = String(batch.subject || 'SAT').trim().toLowerCase();
+      const normalizedFilter = subjectFilter.trim().toLowerCase();
+      if (normalizedSubj !== normalizedFilter && !normalizedSubj.includes(normalizedFilter)) {
+        return false;
+      }
+    }
     
     // Search query
-    const query = searchQuery.toLowerCase();
-    const matchesName = batch.name.toLowerCase().includes(query);
-    const matchesId = batch.id.toLowerCase().includes(query);
-    const matchesMentor = batch.mentors.some(m => m.toLowerCase().includes(query));
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return true;
+    const matchesName = (batch.name || '').toLowerCase().includes(query);
+    const matchesId = (batch.id || '').toLowerCase().includes(query);
+    const matchesMentor = batchMentors.some(m => (m || '').toLowerCase().includes(query));
     return matchesName || matchesId || matchesMentor;
   });
 
-  // Batch deletion handlers (Admin only)
+  // Batch deletion handlers (Admin & Category Manager)
   const handleDeleteSingleBatch = (batchId: string, batchName?: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!isAdmin) {
-      alert('Only administrators have permission to delete batches.');
+    if (!canManageBatches) {
       return;
     }
     const nameStr = batchName ? ` "${batchName}"` : '';
@@ -97,8 +118,7 @@ export default function Batches() {
   };
 
   const handleDeleteSelectedBatches = () => {
-    if (!isAdmin) {
-      alert('Only administrators have permission to delete batches.');
+    if (!canManageBatches) {
       return;
     }
     if (selectedBatchIds.length === 0) return;
@@ -126,11 +146,10 @@ export default function Batches() {
     }
   };
 
-  // Student allocation handlers (Admin can remove any student from batch)
+  // Student allocation handlers (Admin & Category Manager can remove any student from batch)
   const handleRemoveStudentFromBatch = (batchId: string, studentId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!isAdmin) {
-      alert('Only administrators have permission to remove students from batches.');
+    if (!canManageBatches) {
       return;
     }
     if (window.confirm('Remove this student from the cohort?')) {
@@ -209,8 +228,7 @@ export default function Batches() {
 
   const handleDeleteSession = (batchId: string, sessionId: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
-    if (!isAdmin) {
-      alert('Only administrators have permission to delete sessions.');
+    if (!canManageBatches) {
       return;
     }
     if (window.confirm('Are you sure you want to permanently delete this class session record?')) {
@@ -262,7 +280,7 @@ export default function Batches() {
       capacity: parseInt(newBatchCapacity) || 20,
       totalSessions: parseInt(newBatchTotalSessions) || 10,
       completedSessions: parseInt(newBatchCompletedSessions) || 0,
-      mentors: newBatchMentor ? [newBatchMentor] : (isAdmin ? [] : [currentUser?.name || 'Admin']),
+      mentors: newBatchMentor ? [newBatchMentor] : (canManageBatches ? [] : [currentUser?.name || 'Admin']),
       students: [],
       meetingLink: meetingLink.trim() || ('https://meet.google.com/' + Math.random().toString(36).substring(2, 5) + '-' + Math.random().toString(36).substring(2, 6) + '-' + Math.random().toString(36).substring(2, 5)),
       scheduleDayTime: newBatchSchedule.trim(),
@@ -345,9 +363,9 @@ export default function Batches() {
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-bold text-slate-900 tracking-tight">Batches & Cohorts Management</h2>
-              {isAdmin ? (
-                <span className="px-2 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-extrabold rounded-md uppercase tracking-wider">
-                  Admin Full Access & Delete Controls
+              {canManageBatches ? (
+                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-extrabold rounded-md uppercase tracking-wider">
+                  Full Batch Management Access
                 </span>
               ) : (
                 <span className="px-2 py-0.5 bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-bold rounded-md uppercase tracking-wider">
@@ -360,8 +378,8 @@ export default function Batches() {
         </div>
 
         <div className="flex items-center gap-2.5 flex-wrap">
-          {/* Admin Bulk Delete Button */}
-          {isAdmin && selectedBatchIds.length > 0 && (
+          {/* Bulk Delete Button */}
+          {canManageBatches && selectedBatchIds.length > 0 && (
             <Button 
               onClick={handleDeleteSelectedBatches}
               className="bg-red-600 hover:bg-red-700 text-white font-bold shadow-sm"
@@ -371,7 +389,7 @@ export default function Batches() {
             </Button>
           )}
 
-          {isAdmin && (
+          {canManageBatches && (
             <Button 
               onClick={() => setIsCreateModalOpen(true)} 
               className="bg-indigo-600 hover:bg-indigo-700 text-white shadow-sm font-bold"
@@ -467,7 +485,7 @@ export default function Batches() {
             <table className="w-full text-left text-sm whitespace-nowrap">
               <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
                 <tr>
-                  {isAdmin && (
+                  {canManageBatches && (
                     <th className="px-4 py-4 w-10 text-center">
                       <input 
                         type="checkbox"
@@ -496,7 +514,7 @@ export default function Batches() {
                     )}
                     onClick={() => setSelectedBatchDetail(batch)}
                   >
-                    {isAdmin && (
+                    {canManageBatches && (
                       <td className="px-4 py-4 text-center" onClick={(e) => e.stopPropagation()}>
                         <input 
                           type="checkbox"
@@ -616,7 +634,7 @@ export default function Batches() {
                       </Button>
 
                       {/* Add Students */}
-                      {isAdmin && (
+                      {canManageBatches && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -629,7 +647,7 @@ export default function Batches() {
                       )}
 
                       {/* Edit Batch */}
-                      {isAdmin && (
+                      {canManageBatches && (
                         <Button
                           variant="outline"
                           size="sm"
@@ -641,8 +659,8 @@ export default function Batches() {
                         </Button>
                       )}
 
-                      {/* Admin Delete Batch */}
-                      {isAdmin && (
+                      {/* Delete Batch */}
+                      {canManageBatches && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -677,7 +695,7 @@ export default function Batches() {
               <h3 className="font-bold text-slate-900">Class Sessions & Live Schedules</h3>
               <p className="text-xs text-slate-500">Track and manage individual sessions, class links, and attendance records for all cohorts.</p>
             </div>
-            {isAdmin && (
+            {canManageBatches && (
               <Button 
                 onClick={() => {
                   if (batches.length > 0) {
@@ -718,7 +736,7 @@ export default function Batches() {
                     >
                       <Repeat className="w-3 h-3 text-purple-600" /> Recurring Scheduler
                     </Button>
-                    {isAdmin && (
+                    {canManageBatches && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -731,7 +749,7 @@ export default function Batches() {
                         <Plus className="w-3 h-3 mr-1" /> Add Session
                       </Button>
                     )}
-                    {isAdmin && (
+                    {canManageBatches && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -788,7 +806,7 @@ export default function Batches() {
                               <Video className="w-3 h-3 mr-1" /> Join
                             </Button>
                           )}
-                          {isAdmin && (
+                          {canManageBatches && (
                             <Button
                               variant="ghost"
                               size="sm"
@@ -820,7 +838,7 @@ export default function Batches() {
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
             <div>
               <h3 className="font-bold text-slate-900">Student Allocation & Enrollment Roster</h3>
-              <p className="text-xs text-slate-500">View enrolled students by cohort. Admins can remove students or assign them across batches.</p>
+              <p className="text-xs text-slate-500">View enrolled students by cohort. Managers and admins can remove students or assign them across batches.</p>
             </div>
           </div>
 
@@ -835,7 +853,7 @@ export default function Batches() {
                       </CardTitle>
                       <span className="text-[10px] font-mono text-slate-400">{batch.id}</span>
                     </div>
-                    {isAdmin && (
+                    {canManageBatches && (
                       <div className="flex items-center gap-1">
                         <Button
                           variant="outline"
@@ -888,8 +906,8 @@ export default function Batches() {
                               </div>
                             </div>
 
-                            {/* Admin Remove Student from Cohort */}
-                            {isAdmin && (
+                            {/* Remove Student from Cohort */}
+                            {canManageBatches && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -1155,7 +1173,7 @@ export default function Batches() {
             </div>
 
             <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
-              {isAdmin ? (
+              {canManageBatches ? (
                 <Button 
                   variant="destructive"
                   size="sm"
@@ -1389,7 +1407,7 @@ export default function Batches() {
                   <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                     Enrolled Students ({selectedBatchDetail.students.length})
                   </h4>
-                  {isAdmin && (
+                  {canManageBatches && (
                     <Button 
                       size="sm" 
                       variant="outline"
@@ -1410,7 +1428,7 @@ export default function Batches() {
                           <p className="font-bold text-slate-900 text-xs">{st ? st.name : studentId}</p>
                           <p className="text-[10px] text-slate-500">{st?.email || studentId}</p>
                         </div>
-                        {isAdmin && (
+                        {canManageBatches && (
                           <Button
                             size="sm"
                             variant="ghost"
@@ -1428,9 +1446,9 @@ export default function Batches() {
               </div>
             </div>
 
-            {/* Drawer Footer with Admin Delete Batch */}
+            {/* Drawer Footer with Delete Batch */}
             <div className="p-4 border-t border-slate-100 bg-slate-50 flex items-center justify-between">
-              {isAdmin ? (
+              {canManageBatches ? (
                 <Button 
                   variant="destructive"
                   size="sm"
@@ -1442,7 +1460,7 @@ export default function Batches() {
               ) : <div />}
 
               <div className="flex gap-2">
-                {isAdmin && (
+                {canManageBatches && (
                   <Button 
                     variant="outline"
                     size="sm"

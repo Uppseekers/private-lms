@@ -11,30 +11,55 @@ interface FirebaseAppletConfig {
   [key: string]: any;
 }
 
+const DEFAULT_FIREBASE_APPLET_CONFIG: FirebaseAppletConfig = {
+  projectId: 'continual-bus-9w1xt',
+  apiKey: 'AIzaSyBl077aH7inl8JWhPf78AZua8tAsnxWfgk',
+  firestoreDatabaseId: 'ai-studio-uppseeekersstude-b87d90a0-49bf-4266-9b2c-411586d81e1b',
+};
+
 function loadFirebaseAppletConfig(): FirebaseAppletConfig {
-  const candidates: string[] = [path.resolve(process.cwd(), 'firebase-applet-config.json')];
-  if (typeof __dirname !== 'undefined') {
-    candidates.push(
-      path.resolve(__dirname, '../../firebase-applet-config.json'),
-      path.resolve(__dirname, '../firebase-applet-config.json')
-    );
-  }
-  for (const candidate of candidates) {
-    try {
-      if (fs.existsSync(candidate)) {
-        const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
-        if (parsed && typeof parsed.projectId === 'string') {
-          return parsed;
-        }
+  // Direct literal path first so @vercel/nft traces firebase-applet-config.json into serverless bundles
+  try {
+    const directPath = path.resolve(process.cwd(), 'firebase-applet-config.json');
+    if (fs.existsSync(directPath)) {
+      const parsed = JSON.parse(fs.readFileSync(directPath, 'utf8'));
+      if (parsed && typeof parsed.projectId === 'string') {
+        return {
+          ...DEFAULT_FIREBASE_APPLET_CONFIG,
+          ...parsed,
+        };
       }
-    } catch {
-      // Try next candidate path
+    }
+  } catch {
+    // Try secondary candidate paths below
+  }
+
+  if (typeof __dirname !== 'undefined') {
+    const fallbackCandidates = [
+      path.resolve(__dirname, '../../firebase-applet-config.json'),
+      path.resolve(__dirname, '../firebase-applet-config.json'),
+    ];
+    for (const candidate of fallbackCandidates) {
+      try {
+        if (fs.existsSync(candidate)) {
+          const parsed = JSON.parse(fs.readFileSync(candidate, 'utf8'));
+          if (parsed && typeof parsed.projectId === 'string') {
+            return {
+              ...DEFAULT_FIREBASE_APPLET_CONFIG,
+              ...parsed,
+            };
+          }
+        }
+      } catch {
+        // Try next candidate path
+      }
     }
   }
+
   return {
-    projectId: process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || 'continual-bus-9w1xt',
-    apiKey: process.env.VITE_FIREBASE_API_KEY || '',
-    firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || '(default)',
+    projectId: process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || DEFAULT_FIREBASE_APPLET_CONFIG.projectId,
+    apiKey: process.env.VITE_FIREBASE_API_KEY || DEFAULT_FIREBASE_APPLET_CONFIG.apiKey,
+    firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID || DEFAULT_FIREBASE_APPLET_CONFIG.firestoreDatabaseId,
   };
 }
 
@@ -70,27 +95,48 @@ function parseServiceAccount(): Record<string, any> | null {
   return null;
 }
 
-const serviceAccount = parseServiceAccount();
+const parsedServiceAccount = parseServiceAccount();
+let validServiceAccountActive = false;
 
-export function hasAdminServiceAccount(): boolean {
-  return Boolean(serviceAccount);
+function initAdminAppSafely(): App {
+  if (getApps().length > 0) {
+    validServiceAccountActive = Boolean(parsedServiceAccount);
+    return getApp();
+  }
+  if (parsedServiceAccount) {
+    try {
+      const app = initializeApp({
+        credential: cert(parsedServiceAccount as any),
+        projectId: firebaseAppletConfig.projectId,
+      });
+      validServiceAccountActive = true;
+      return app;
+    } catch (err: any) {
+      console.warn('[Firebase Admin] Service account initialization failed, falling back to project-only init:', err?.message || err);
+      validServiceAccountActive = false;
+    }
+  }
+  return initializeApp({
+    projectId: firebaseAppletConfig.projectId,
+  });
 }
 
-const adminApp: App = getApps().length
-  ? getApp()
-  : serviceAccount
-  ? initializeApp({
-      credential: cert(serviceAccount as any),
-      projectId: firebaseAppletConfig.projectId,
-    })
-  : initializeApp({
-      projectId: firebaseAppletConfig.projectId,
-    });
+export function hasAdminServiceAccount(): boolean {
+  return validServiceAccountActive;
+}
 
-export const firebaseWebApiKey: string = String(firebaseAppletConfig.apiKey || '');
+const adminApp: App = initAdminAppSafely();
+
+export const firebaseWebApiKey: string = String(firebaseAppletConfig.apiKey || DEFAULT_FIREBASE_APPLET_CONFIG.apiKey || '');
 
 export const adminAuth: Auth = getAuth(adminApp);
-export const adminDb: Firestore =
-  firebaseAppletConfig.firestoreDatabaseId && firebaseAppletConfig.firestoreDatabaseId !== '(default)'
-    ? getFirestore(adminApp, firebaseAppletConfig.firestoreDatabaseId)
-    : getFirestore(adminApp);
+export const adminDb: Firestore = (() => {
+  try {
+    if (firebaseAppletConfig.firestoreDatabaseId && firebaseAppletConfig.firestoreDatabaseId !== '(default)') {
+      return getFirestore(adminApp, firebaseAppletConfig.firestoreDatabaseId);
+    }
+  } catch (err: any) {
+    console.warn('[Firebase Admin] Named Firestore init failed, using default database:', err?.message || err);
+  }
+  return getFirestore(adminApp);
+})();

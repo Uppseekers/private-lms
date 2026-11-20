@@ -15,6 +15,8 @@ async function verifyViaIdentityToolkitRest(idToken: string): Promise<AuthReques
   const apiKey = firebaseWebApiKey;
   if (!apiKey) return null;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
   try {
     const res = await fetch(
       `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(apiKey)}`,
@@ -22,6 +24,7 @@ async function verifyViaIdentityToolkitRest(idToken: string): Promise<AuthReques
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ idToken }),
+        signal: controller.signal,
       }
     );
     if (!res.ok) return null;
@@ -36,6 +39,8 @@ async function verifyViaIdentityToolkitRest(idToken: string): Promise<AuthReques
     };
   } catch {
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -44,52 +49,59 @@ export const requireAuth = async (
   res: Response,
   next: NextFunction
 ) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    res.status(401).json({ error: 'Unauthorized: Missing Bearer ID token.' });
-    return;
-  }
-
-  const token = authHeader.slice('Bearer '.length).trim();
-  if (!token) {
-    res.status(401).json({ error: 'Unauthorized: Empty Bearer token.' });
-    return;
-  }
-
-  // Never trust legacy mock custom tokens
-  if (
-    token.startsWith('custom_') ||
-    token.startsWith('token_') ||
-    token.startsWith('user_') ||
-    token === 'admin_token'
-  ) {
-    res.status(401).json({ error: 'Unauthorized: Legacy session tokens are no longer accepted. Please sign in again.' });
-    return;
-  }
-
-  // Primary path: verifyIdToken(token) verifies JWT signatures against Google's public certs
-  // and needs NO IAM or service account, nor is it blocked by browser API key HTTP referrer restrictions.
   try {
-    const decodedToken = await adminAuth.verifyIdToken(token);
-    req.user = {
-      ...decodedToken,
-      uid: decodedToken.uid,
-      email: (decodedToken.email || '').toLowerCase(),
-      email_verified: Boolean(decodedToken.email_verified),
-      name: decodedToken.name,
-    };
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      res.status(401).json({ error: 'Unauthorized: Missing Bearer ID token.' });
+      return;
+    }
+
+    const token = authHeader.slice('Bearer '.length).trim();
+    if (!token) {
+      res.status(401).json({ error: 'Unauthorized: Empty Bearer token.' });
+      return;
+    }
+
+    // Never trust legacy mock custom tokens
+    if (
+      token.startsWith('custom_') ||
+      token.startsWith('token_') ||
+      token.startsWith('user_') ||
+      token === 'admin_token'
+    ) {
+      res.status(401).json({ error: 'Unauthorized: Legacy session tokens are no longer accepted. Please sign in again.' });
+      return;
+    }
+
+    // Primary path: verifyIdToken(token) verifies JWT signatures against Google's public certs
+    // and needs NO IAM or service account, nor is it blocked by browser API key HTTP referrer restrictions.
+    try {
+      const decodedToken = await adminAuth.verifyIdToken(token);
+      req.user = {
+        ...decodedToken,
+        uid: decodedToken.uid,
+        email: (decodedToken.email || '').toLowerCase(),
+        email_verified: Boolean(decodedToken.email_verified),
+        name: decodedToken.name,
+      };
+      next();
+      return;
+    } catch {
+      // Fallback to Identity Toolkit REST lookup if public cert fetch fails in restricted network
+    }
+
+    const verifiedUser = await verifyViaIdentityToolkitRest(token);
+    if (!verifiedUser) {
+      res.status(401).json({ error: 'Unauthorized: Invalid or expired Firebase ID token.' });
+      return;
+    }
+
+    req.user = verifiedUser;
     next();
-    return;
-  } catch {
-    // Fallback to Identity Toolkit REST lookup if public cert fetch fails in restricted network
+  } catch (err: any) {
+    console.error('[Auth Middleware Error]', err?.message || err);
+    if (!res.headersSent) {
+      res.status(401).json({ error: 'Unauthorized: Authentication verification failed.' });
+    }
   }
-
-  const verifiedUser = await verifyViaIdentityToolkitRest(token);
-  if (!verifiedUser) {
-    res.status(401).json({ error: 'Unauthorized: Invalid or expired Firebase ID token.' });
-    return;
-  }
-
-  req.user = verifiedUser;
-  next();
 };

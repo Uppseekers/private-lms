@@ -23,6 +23,7 @@ import {
   zohoAuthenticatedFetch,
 } from '@/lib/zohoClient';
 import { cn } from '@/lib/utils';
+import ZohoOAuthDiagnosticConsole from './ZohoOAuthDiagnosticConsole';
 
 interface ZohoConnectionSummary {
   staffKey: string;
@@ -77,6 +78,7 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser, employeeOnlyMod
   const [isTesting, setIsTesting] = useState(false);
   const [disconnectingKey, setDisconnectingKey] = useState<string | null>(null);
   const [actionBanner, setActionBanner] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
+  const [showEmployeeDiagnostics, setShowEmployeeDiagnostics] = useState(false);
   const [testResult, setTestResult] = useState<{
     ok: boolean;
     zohoEmail?: string;
@@ -194,6 +196,9 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser, employeeOnlyMod
     try {
       const { ok, status, data } = await zohoAuthenticatedFetch('/api/zoho/auth/url', { method: 'GET' }, currentUser);
       if (!ok || !data.url) {
+        if (employeeOnlyMode) {
+          setShowEmployeeDiagnostics(true);
+        }
         setActionBanner({
           type: 'error',
           message:
@@ -430,6 +435,28 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser, employeeOnlyMod
                   ? `Handshake Verified (${testResult.zohoEmail} · zsoid ${testResult.zsoid})`
                   : `Test Failed: ${testResult.error}`}
               </span>
+            </div>
+          )}
+
+          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-3">
+            <span className="text-xs text-slate-500">
+              Seeing an HTTP 500 or connection error? Run the live OAuth trace &amp; token storage inspector.
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setShowEmployeeDiagnostics((prev) => !prev)}
+              className="bg-white border-slate-300 text-slate-800 text-xs h-8 px-3 whitespace-nowrap shrink-0"
+            >
+              <Activity className="w-3.5 h-3.5 mr-1.5 text-indigo-600" />
+              {showEmployeeDiagnostics ? 'Hide OAuth Trace Utility' : 'Open OAuth Trace Utility'}
+            </Button>
+          </div>
+
+          {showEmployeeDiagnostics && (
+            <div className="pt-2">
+              <ZohoOAuthDiagnosticConsole currentUser={currentUser} compact />
             </div>
           )}
         </CardContent>
@@ -878,6 +905,9 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser, employeeOnlyMod
           )}
         </CardContent>
       </Card>
+
+      {/* Row 3: Full Request/Response Cycle & Token Storage Diagnostic Utility */}
+      <ZohoOAuthDiagnosticConsole currentUser={currentUser} />
     </div>
   );
 }

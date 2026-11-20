@@ -5,6 +5,7 @@ import {
   PieChart, 
   Pie, 
   Cell, 
+  Tooltip,
   ResponsiveContainer, 
   RadialBarChart, 
   RadialBar 
@@ -27,7 +28,7 @@ import {
 } from 'lucide-react';
 import { useDatabase } from '@/context/DatabaseContext';
 import { cn } from '@/lib/utils';
-import { canStudentAccessEvent } from '@/lib/staffPermissions';
+import { canStudentAccessEvent, resolveCounselorForStudent } from '@/lib/staffPermissions';
 import NotificationDetailsModal, { NotificationDetailData } from '@/components/NotificationDetailsModal';
 import StudentActivityLogSection from '@/components/student/StudentActivityLogSection';
 
@@ -63,17 +64,17 @@ interface NotificationItem extends NotificationDetailData {
 }
 
 export default function StudentDashboard() {
-  const { currentUser, events, batches, students, appNotifications } = useDatabase();
+  const { currentUser, events, batches, students, staff, appNotifications } = useDatabase();
   const [activityFilter, setActivityFilter] = useState<'ALL' | 'MEETING' | 'TASK' | 'ESSAY' | 'COUNSELOR_LOG'>('ALL');
   const [notificationFilter, setNotificationFilter] = useState<'ALL' | 'UNREAD' | 'URGENT'>('ALL');
   const [showAllNotifications, setShowAllNotifications] = useState(false);
   const [readNotificationIds, setReadNotificationIds] = useState<string[]>([]);
   const [selectedNotification, setSelectedNotification] = useState<NotificationDetailData | null>(null);
 
-  const student = students.find(s => 
-    (currentUser?.id && s.id === currentUser.id) || 
+  const student = students.find(s =>
+    (currentUser?.id && s.id === currentUser.id) ||
     (currentUser?.email && s.email?.toLowerCase() === currentUser.email?.toLowerCase())
-  ) || students[0] || (currentUser as any);
+  ) || (currentUser as any);
   const tasks = student?.tasks || [];
   const shortlist = student?.shortlist || [];
   const essays = student?.essays || [];
@@ -84,59 +85,78 @@ export default function StudentDashboard() {
   const studentBatches = batches.filter(b => b.students?.includes(student?.id) || b.students?.includes(student?.name));
   const studentEvents = events.filter(e => canStudentAccessEvent(e, student, batches));
 
+  const primaryCounselor = student ? resolveCounselorForStudent(student, staff) : null;
+  const stripRoleLabel = (name?: string) =>
+    String(name || '').replace(/\s*\((Mentor|Counselor|Counsellor|Staff|Advisor|Coach)\)\s*$/i, '').trim();
+  const primaryCounselorName = stripRoleLabel(primaryCounselor?.name || student?.counselor || '');
+
+  const resolveSessionHost = (evt: any): string => {
+    const isBatchSession = Boolean(evt.batch || evt.batchId || evt.batchName);
+    if (!isBatchSession && primaryCounselorName) {
+      return primaryCounselorName;
+    }
+    return stripRoleLabel(evt.host) || primaryCounselorName || 'Counselor';
+  };
+
   // --- 1. TASK BREAKDOWN DATA ---
-  const completedTasks = tasks.filter((t: any) => t.stage === 'COMPLETED').length;
-  const inProgressTasks = tasks.filter((t: any) => t.stage === 'IN_PROGRESS').length;
-  const pendingTasks = tasks.filter((t: any) => t.stage === 'TO_DO').length;
-  const needsRevisionTasks = tasks.filter((t: any) => t.stage === 'NEEDS_REVISION').length;
+  const normalizeStage = (rawStage?: string): 'TO_DO' | 'IN_PROGRESS' | 'SUBMITTED' | 'NEEDS_REVISION' | 'COMPLETED' => {
+    const s = String(rawStage || 'TO_DO').trim().toUpperCase().replace(/[\s-]+/g, '_');
+    if (['COMPLETED', 'VERIFIED_COMPLETED', 'DONE', 'APPROVED'].includes(s)) return 'COMPLETED';
+    if (['SUBMITTED', 'UNDER_REVIEW', 'IN_REVIEW', 'REVIEW'].includes(s)) return 'SUBMITTED';
+    if (['IN_PROGRESS', 'ACTIVE', 'WORKING'].includes(s)) return 'IN_PROGRESS';
+    if (['NEEDS_REVISION', 'REVISION', 'CHANGES_REQUESTED'].includes(s)) return 'NEEDS_REVISION';
+    return 'TO_DO';
+  };
 
-  const taskData = [];
-  if (completedTasks > 0) taskData.push({ name: 'Completed', value: completedTasks, color: '#10b981' });
-  if (inProgressTasks > 0) taskData.push({ name: 'In Progress', value: inProgressTasks, color: '#3b82f6' });
-  if (pendingTasks > 0) taskData.push({ name: 'Pending', value: pendingTasks, color: '#f59e0b' });
-  if (needsRevisionTasks > 0) taskData.push({ name: 'Needs Revision', value: needsRevisionTasks, color: '#ef4444' });
+  const todoTasks = tasks.filter((t: any) => normalizeStage(t.stage) === 'TO_DO').length;
+  const inProgressTasks = tasks.filter((t: any) => normalizeStage(t.stage) === 'IN_PROGRESS').length;
+  const submittedTasks = tasks.filter((t: any) => normalizeStage(t.stage) === 'SUBMITTED').length;
+  const needsRevisionTasks = tasks.filter((t: any) => normalizeStage(t.stage) === 'NEEDS_REVISION').length;
+  const completedTasks = tasks.filter((t: any) => normalizeStage(t.stage) === 'COMPLETED').length;
 
-  if (taskData.length === 0) {
-    taskData.push({ name: 'No Tasks', value: 1, color: '#e2e8f0' });
-  }
+  const taskBreakdownSummary = [
+    { name: 'To-Do', value: todoTasks, color: '#f59e0b' },
+    { name: 'In Progress', value: inProgressTasks, color: '#3b82f6' },
+    { name: 'Submitted', value: submittedTasks, color: '#8b5cf6' },
+    { name: 'Completed', value: completedTasks, color: '#10b981' },
+    ...(needsRevisionTasks > 0 ? [{ name: 'Needs Revision', value: needsRevisionTasks, color: '#ef4444' }] : []),
+  ];
+
+  const activeTaskData = taskBreakdownSummary.filter(item => item.value > 0);
+  const taskChartData = activeTaskData.length > 0
+    ? activeTaskData
+    : [{ name: 'No Tasks', value: 1, color: '#e2e8f0' }];
 
   // --- 2. DEADLINE COUNTDOWN DATA ---
   const now = new Date();
-  const upcomingDeadlines: { date: Date; name: string }[] = [];
+  const uniDeadlines: { date: Date; name: string }[] = [];
 
   shortlist.forEach((uni: any) => {
     if (uni.deadline) {
       const d = new Date(uni.deadline);
-      if (!isNaN(d.getTime())) upcomingDeadlines.push({ date: d, name: uni.name });
+      if (!isNaN(d.getTime())) uniDeadlines.push({ date: d, name: uni.name });
     }
   });
 
-  tasks.forEach((t: any) => {
-    if (t.dueDate && t.stage !== 'COMPLETED') {
-      const d = new Date(t.dueDate);
-      if (!isNaN(d.getTime())) upcomingDeadlines.push({ date: d, name: t.name });
-    }
-  });
+  const futureUniDeadlines = uniDeadlines
+    .filter(item => item.date.getTime() >= now.getTime())
+    .sort((a, b) => a.date.getTime() - b.date.getTime());
 
-  const futureDeadlines = upcomingDeadlines.filter(item => item.date.getTime() >= now.getTime());
-  futureDeadlines.sort((a, b) => a.date.getTime() - b.date.getTime());
+  let daysLeft: number | null = null;
+  let targetLabel = 'No University Deadlines Yet';
+  let countdownProgress = 0;
 
-  let daysLeft = 0;
-  let targetLabel = 'No upcoming deadlines';
-
-  if (futureDeadlines.length > 0) {
-    const closest = futureDeadlines[0];
+  if (shortlist.length > 0 && futureUniDeadlines.length > 0) {
+    const closest = futureUniDeadlines[0];
     const diffMs = closest.date.getTime() - now.getTime();
     daysLeft = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
     targetLabel = `Next: ${closest.name}`;
-  } else {
-    daysLeft = 30;
-    targetLabel = 'Target Intake Prep';
+    countdownProgress = Math.max(5, Math.min(100, Math.round(100 - Math.min(daysLeft, 180) / 1.8)));
   }
 
   const countdownData = [
-    { name: 'Remaining', value: daysLeft, fill: '#3b82f6' },
-    { name: 'Total', value: 100, fill: '#f1f5f9' }
+    { name: 'Progress', value: countdownProgress, fill: daysLeft !== null ? '#3b82f6' : '#cbd5e1' },
+    { name: 'Max', value: 100, fill: '#f1f5f9' }
   ];
 
   const currentBatch = studentBatches.length > 0 ? studentBatches[0].name : 'Not Assigned';
@@ -177,13 +197,14 @@ export default function StudentDashboard() {
 
     // Meetings
     studentEvents.forEach((evt: any) => {
+      const resolvedHost = resolveSessionHost(evt);
       feed.push({
         id: evt.id,
         category: 'MEETING',
         title: evt.title || 'Counseling Session',
-        description: `${evt.date || 'Scheduled'} at ${evt.time || 'TBD'} (${evt.location || 'Zoom'})`,
-        timestamp: evt.date || 'Upcoming Meeting',
-        performedBy: evt.host || 'Counselor',
+        description: `${evt.date || evt.day || 'Scheduled'} at ${evt.time || 'TBD'} (${evt.location || 'Video Call'})`,
+        timestamp: evt.date || evt.day || 'Upcoming Meeting',
+        performedBy: resolvedHost,
         statusBadge: evt.status || 'Scheduled',
         statusColor: 'bg-blue-100 text-blue-800'
       });
@@ -433,18 +454,19 @@ export default function StudentDashboard() {
 
     // 4. LECTURE SCHEDULE & UPCOMING SESSIONS
     studentEvents.forEach((evt: any) => {
+      const resolvedHost = resolveSessionHost(evt);
       list.push({
         id: 'notif_evt_' + evt.id,
-        title: `Lecture Schedule: ${evt.title}`,
-        message: `Scheduled Lecture: "${evt.title}"\nDate: ${evt.date || evt.day || 'Upcoming'}\nTime: ${evt.time || 'TBD'}\nInstructor: ${evt.host || 'Advisor'}\nFormat: ${evt.stream || '1-on-1 Class'}${evt.location ? `\nMeeting Link: ${evt.location}` : ''}`,
+        title: `Scheduled Session: ${evt.title}`,
+        message: `Scheduled Session: "${evt.title}"\nDate: ${evt.date || evt.day || 'Upcoming'}\nTime: ${evt.time || 'TBD'}\nHost: ${resolvedHost}\nFormat: ${evt.stream || '1-on-1 Class'}${evt.location ? `\nMeeting Link: ${evt.location}` : ''}`,
         type: 'SYSTEM',
         category: 'LECTURE',
-        timestamp: evt.date || 'Scheduled',
+        timestamp: evt.date || evt.day || 'Scheduled',
         read: readNotificationIds.includes('notif_evt_' + evt.id),
         link: '/student/schedules',
-        actionText: 'Open Schedule & Join Lecture',
-        meeting: evt,
-        performedBy: evt.host || 'Counselor / Faculty'
+        actionText: 'Open Schedule & Join Session',
+        meeting: { ...evt, host: resolvedHost },
+        performedBy: resolvedHost
       });
     });
 
@@ -737,24 +759,44 @@ export default function StudentDashboard() {
             </CardTitle>
             <CardDescription className="text-xs">Active task distribution by stage</CardDescription>
           </CardHeader>
-          <CardContent className="flex-1 min-h-[220px] flex items-center justify-center">
-            <ResponsiveContainer width="100%" height="100%">
-              <PieChart>
-                <Pie
-                  data={taskData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={55}
-                  outerRadius={75}
-                  paddingAngle={4}
-                  dataKey="value"
-                >
-                  {taskData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
-                  ))}
-                </Pie>
-              </PieChart>
-            </ResponsiveContainer>
+          <CardContent className="flex-1 flex flex-col items-center justify-between pt-2">
+            <div className="w-full h-[180px] relative">
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie
+                    data={taskChartData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={52}
+                    outerRadius={74}
+                    paddingAngle={activeTaskData.length > 1 ? 3 : 0}
+                    dataKey="value"
+                  >
+                    {taskChartData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  {tasks.length > 0 && <Tooltip formatter={(value: any, name: any) => [`${value} task(s)`, name]} />}
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <span className="text-2xl font-extrabold text-slate-900">{tasks.length}</span>
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                  {tasks.length === 1 ? 'Task' : 'Tasks'}
+                </span>
+              </div>
+            </div>
+            <div className="w-full grid grid-cols-2 gap-x-3 gap-y-1.5 pt-2 border-t border-slate-100 text-[11px]">
+              {taskBreakdownSummary.map(item => (
+                <div key={item.name} className="flex items-center justify-between gap-1.5">
+                  <span className="flex items-center gap-1.5 text-slate-600 truncate">
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: item.color }} />
+                    <span className="truncate">{item.name}</span>
+                  </span>
+                  <span className="font-bold text-slate-900">{item.value}</span>
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
 
@@ -764,31 +806,47 @@ export default function StudentDashboard() {
             <CardTitle className="text-base font-bold text-slate-900 flex items-center gap-2">
               <Clock className="w-4 h-4 text-blue-600" /> Application Countdown
             </CardTitle>
-            <CardDescription className="text-xs">Days remaining until nearest milestone</CardDescription>
+            <CardDescription className="text-xs">Days remaining until nearest university deadline</CardDescription>
           </CardHeader>
-          <CardContent className="flex-1 min-h-[220px] flex flex-col items-center justify-center relative">
-            <ResponsiveContainer width="100%" height="100%">
-              <RadialBarChart 
-                cx="50%" 
-                cy="50%" 
-                innerRadius="70%" 
-                outerRadius="100%" 
-                barSize={18} 
-                data={countdownData}
-                startAngle={180}
-                endAngle={0}
-              >
-                <RadialBar
-                  background
-                  dataKey="value"
-                  cornerRadius={10}
-                />
-              </RadialBarChart>
-            </ResponsiveContainer>
-            <div className="absolute inset-0 flex flex-col items-center justify-center mt-6 text-center px-4">
-              <span className="text-3xl font-extrabold text-slate-900">{daysLeft}</span>
-              <span className="text-xs text-slate-500 font-medium">Days Left</span>
-              <span className="text-[11px] text-blue-600 font-bold truncate max-w-[180px] mt-0.5">{targetLabel}</span>
+          <CardContent className="flex-1 flex flex-col items-center justify-center relative pt-2">
+            <div className="w-full h-[180px] relative">
+              <ResponsiveContainer width="100%" height={180}>
+                <RadialBarChart
+                  cx="50%"
+                  cy="62%"
+                  innerRadius="70%"
+                  outerRadius="100%"
+                  barSize={16}
+                  data={countdownData}
+                  startAngle={180}
+                  endAngle={0}
+                >
+                  <RadialBar
+                    background
+                    dataKey="value"
+                    cornerRadius={10}
+                  />
+                </RadialBarChart>
+              </ResponsiveContainer>
+              <div className="absolute inset-0 flex flex-col items-center justify-center mt-5 text-center px-4">
+                {daysLeft !== null ? (
+                  <>
+                    <span className="text-3xl font-extrabold text-slate-900">{daysLeft}</span>
+                    <span className="text-xs text-slate-500 font-medium">Days Left</span>
+                    <span className="text-[11px] text-blue-600 font-bold truncate max-w-[190px] mt-0.5">{targetLabel}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-xl font-extrabold text-slate-400">—</span>
+                    <span className="text-xs font-bold text-slate-700 mt-1">No University Deadlines Yet</span>
+                    <span className="text-[11px] text-slate-400 mt-0.5 max-w-[200px]">
+                      {shortlist.length === 0
+                        ? 'Shortlist universities to track application deadlines'
+                        : 'Add deadline dates to your shortlisted universities'}
+                    </span>
+                  </>
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
