@@ -1,37 +1,40 @@
 {
   "version": 2,
-  "builds": [
+  "buildCommand": "npm run build:vercel",
+  "outputDirectory": "dist",
+  "functions": {
+    "api/index.mjs": {
+      "includeFiles": "{firebase-applet-config.json,api/_server.cjs}"
+    }
+  },
+  "headers": [
     {
-      "src": "server.ts",
-      "use": "@vercel/node",
-      "config": {
-        "includeFiles": [
-          "firebase-applet-config.json"
-        ]
-      }
+      "source": "/index.html",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, no-cache, must-revalidate"
+        }
+      ]
     },
     {
-      "src": "package.json",
-      "use": "@vercel/static-build",
-      "config": {
-        "distDir": "dist"
-      }
+      "source": "/((?!api/|assets/).*)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, no-cache, must-revalidate"
+        }
+      ]
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "server.ts"
+      "source": "/api/(.*)",
+      "destination": "/api/index"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "headers": {
-        "Cache-Control": "no-store, no-cache, must-revalidate"
-      },
-      "dest": "/index.html"
+      "source": "/((?!api/|assets/|favicon\\.svg).*)",
+      "destination": "/index.html"
     }
   ]
 }

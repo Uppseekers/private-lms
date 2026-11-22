@@ -26,6 +26,7 @@
   },
   "exclude": [
     "dist",
+    "api",
     "node_modules",
     "public/assets/aistudio"
   ]
