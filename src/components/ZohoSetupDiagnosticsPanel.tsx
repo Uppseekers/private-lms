@@ -58,6 +58,8 @@ interface Props {
   employeeOnlyMode?: boolean;
 }
 
+const PRODUCTION_ORIGIN = 'https://users.uppseekers.com';
+const PRODUCTION_CALLBACK_URL = `${PRODUCTION_ORIGIN}/api/zoho/oauth/callback`;
 const DEV_ORIGIN = 'https://ais-dev-ad6i7xzq6z67b7dvfben3e-916026696776.asia-southeast1.run.app';
 const SHARED_ORIGIN = 'https://ais-pre-ad6i7xzq6z67b7dvfben3e-916026696776.asia-southeast1.run.app';
 const DEV_CALLBACK_URL = `${DEV_ORIGIN}/api/zoho/oauth/callback`;
@@ -525,13 +527,13 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser, employeeOnlyMod
                   <div className="flex items-center justify-between gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50/70">
                     <div className="min-w-0">
                       <span className="text-[11px] text-slate-500 block">Homepage URL</span>
-                      <span className="font-mono text-slate-900 truncate block">{SHARED_ORIGIN}</span>
+                      <span className="font-mono text-slate-900 truncate block">{PRODUCTION_ORIGIN}</span>
                     </div>
                     <Button
                       type="button"
                       variant="outline"
                       size="sm"
-                      onClick={() => handleCopy('homepage', SHARED_ORIGIN)}
+                      onClick={() => handleCopy('homepage', PRODUCTION_ORIGIN)}
                       className="h-7 px-2.5 text-[11px] shrink-0 bg-white"
                     >
                       {copiedKey === 'homepage' ? <Check className="w-3 h-3 mr-1 text-emerald-600" /> : <Copy className="w-3 h-3 mr-1" />}
@@ -544,10 +546,31 @@ export default function ZohoSetupDiagnosticsPanel({ currentUser, employeeOnlyMod
               <div className="flex items-start gap-3 pt-3 border-t border-slate-100">
                 <span className="font-mono tabular-nums font-bold text-slate-900 shrink-0">03.</span>
                 <div className="flex-1 min-w-0 space-y-2">
-                  <p className="font-semibold text-slate-900">Add Both Authorized Redirect URIs</p>
+                  <p className="font-semibold text-slate-900">Add All Authorized Redirect URIs</p>
                   <p className="text-slate-600">
-                    Click <span className="font-semibold">Add URI</span> so both Development and Shared environments succeed:
+                    Click <span className="font-semibold">Add URI</span> so Production, Development, and Shared environments all succeed:
                   </p>
+                  <div className="flex items-center justify-between gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50/70">
+                    <div className="min-w-0">
+                      <span className="text-[11px] text-slate-500 block">
+                        Production Redirect URI
+                        {diag.redirectUri === PRODUCTION_CALLBACK_URL && (
+                          <span className="ml-1.5 text-emerald-700 font-semibold">(Active Now)</span>
+                        )}
+                      </span>
+                      <span className="font-mono text-slate-900 break-all block">{PRODUCTION_CALLBACK_URL}</span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleCopy('prodUri', PRODUCTION_CALLBACK_URL)}
+                      className="h-7 px-2.5 text-[11px] shrink-0 bg-white"
+                    >
+                      {copiedKey === 'prodUri' ? <Check className="w-3 h-3 mr-1 text-emerald-600" /> : <Copy className="w-3 h-3 mr-1" />}
+                      {copiedKey === 'prodUri' ? 'Copied' : 'Copy'}
+                    </Button>
+                  </div>
                   <div className="flex items-center justify-between gap-2 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50/70">
                     <div className="min-w-0">
                       <span className="text-[11px] text-slate-500 block">
