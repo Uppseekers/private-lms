@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Search, Filter, Plus, FileText, CheckCircle2, Clock, X, ChevronRight, ChevronDown, ChevronUp, Video, GraduationCap, AlertCircle, CalendarDays, MessageSquare, MapPin, Phone, Mail, MoreVertical, Trash2, Link as LinkIcon, Check, Upload, Download, FileSpreadsheet, UserCheck, Shield, Users as UsersIcon, ExternalLink, Eye, EyeOff, Copy, SlidersHorizontal, Award, Sparkles, CheckSquare, KeyRound, Send } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { normalizeEmail, normalizeEmailKey, toValidDocId } from '@/lib/firebase';
+import { sanitizeUserErrorMessage } from '@/lib/friendlyError';
 import { Student, StaffMember, Essay, EssayVersion, ShortlistUniversity, Activity, Task, TaskCategory, TaskStage, DocumentInfo } from '@/types';
 import {
   canStaffAccessAllStudents,
@@ -1060,7 +1061,7 @@ export default function TeamUsers() {
                     Confirm {pendingDelete.type === 'staff' ? 'Staff' : 'Student'} Deletion
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    This permanently removes the record from Cloud Firestore.
+                    This permanently removes the record from the portal database.
                   </p>
                 </div>
               </div>
@@ -3414,7 +3415,12 @@ function AddStudentModal({ onClose, onSave }: { onClose: () => void, onSave: (s:
 
       await onSave(newStudent, initialPassword);
     } catch (err: any) {
-      setSaveError(err?.message || 'Failed to save student to Firestore. Please try again.');
+      setSaveError(
+        sanitizeUserErrorMessage(
+          err,
+          'Unable to save this student right now. Please try again or talk to your Admin.'
+        )
+      );
     } finally {
       setIsSaving(false);
     }
@@ -3668,7 +3674,7 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
 
       if (selectedFile) {
         if (selectedFile.size > 650 * 1024) {
-          setUploadError('File exceeds 650 KB Firestore inline storage limit. Please compress the file or paste a Google Drive / cloud share link instead.');
+          setUploadError('File exceeds the 650 KB direct upload limit. Please compress the file or paste a Google Drive / cloud share link instead.');
           setIsUploading(false);
           return;
         }
@@ -3727,7 +3733,12 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
       setIsUploadFormOpen(false);
       setUploadSuccess(`Saved "${finalTitle}" to ${student.name}'s Document Vault.`);
     } catch (err: any) {
-      setUploadError(err?.message || 'Failed to save document to Firestore.');
+      setUploadError(
+        sanitizeUserErrorMessage(
+          err,
+          'Unable to save this document right now. Please try again or talk to your Admin.'
+        )
+      );
     } finally {
       setIsUploading(false);
     }
@@ -3777,7 +3788,7 @@ function VaultView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
               <h4 className="text-sm font-bold text-slate-900">Upload Document for {student.name} ({student.id})</h4>
-              <p className="text-xs text-slate-500">Saved directly to this student's Firestore Document Vault as {currentUser?.name || 'Team'}.</p>
+              <p className="text-xs text-slate-500">Saved directly to this student&apos;s Document Vault as {currentUser?.name || 'Team'}.</p>
             </div>
           </div>
 
@@ -4313,6 +4324,26 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
   const [isAssigning, setIsAssigning] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [previewAttachment, setPreviewAttachment] = useState<any | null>(null);
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
+
+  const handleDeleteTaskConfirm = () => {
+    if (!taskToDelete) return;
+    const remainingTasks = rawTasks.filter(t => t.id !== taskToDelete.id);
+    onUpdate({
+      ...student,
+      tasks: remainingTasks,
+      activities: [
+        {
+          id: Math.random().toString(),
+          date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+          type: 'UPDATE',
+          description: `Task deleted by counselor: ${taskToDelete.name}`
+        },
+        ...student.activities
+      ]
+    });
+    setTaskToDelete(null);
+  };
   
   // New Task / Assignment Form
   const [newTaskName, setNewTaskName] = useState('');
@@ -4722,6 +4753,42 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
           }}
         />
       )}
+      {taskToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl w-full max-w-md p-6 space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">
+                  Delete task?
+                </h3>
+                <p className="text-sm text-slate-600 mt-1">
+                  Are you sure you want to delete <span className="font-semibold text-slate-900">{taskToDelete.name}</span>? This action cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setTaskToDelete(null)}
+                className="border-slate-200"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleDeleteTaskConfirm}
+                className="bg-rose-600 hover:bg-rose-700 text-white"
+              >
+                Delete Task
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -4731,6 +4798,21 @@ function TasksView({ student, onUpdate }: { student: Student, onUpdate: (s: Stud
 function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate: (s: Student) => void }) {
   const { currentUser, staff, permissionsMatrix, resetPortalUserPassword, adminStudentPasswords, updateStudent } = useDatabase();
   const canManageStudentCredentials = isUserAdmin(currentUser) || canStaffAccessAllStudents(currentUser, permissionsMatrix);
+
+  const currentRoleUpper = (currentUser?.role || '').trim().toUpperCase().replace(/[\s-]+/g, '_');
+  const isCategoryManagerRole = currentRoleUpper === 'CATEGORY_MANAGER' || currentRoleUpper === 'CATEGORY_LEAD';
+  const isAssignedCounselorForStudent = Boolean(
+    currentUser &&
+      (
+        (student.counselorId && currentUser.id && student.counselorId === currentUser.id) ||
+        (student.counselorEmail && currentUser.email && normalizeEmail(student.counselorEmail) === normalizeEmail(currentUser.email)) ||
+        (student.counselor && doesValueMatchStaffMember(student.counselor, currentUser)) ||
+        (student.counsellor && doesValueMatchStaffMember(student.counsellor, currentUser))
+      )
+  );
+  const canEditAcademicSections =
+    isUserAdmin(currentUser) || isCategoryManagerRole || isAssignedCounselorForStudent;
+
   const [isEditing, setIsEditing] = useState(false);
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileFeedback, setProfileFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -4748,20 +4830,45 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
     : '';
   
   const resolvedGradeInfo = resolveStudentGrade(student);
-  const [formData, setFormData] = useState({
-    name: student.name,
-    email: student.email,
-    phone: student.phone,
-    school: student.school,
-    grade: student.grade || resolvedGradeInfo.grade,
-    intake: student.intake,
-    countries: (student.countries || []).join(', '),
-    counselor: student.counselor || '',
-    researchMentor: student.researchMentor || '',
-    satVerbalMentor: student.satVerbalMentor || '',
-    satMathMentor: student.satMathMentor || '',
-    taskSheetLink: student.taskSheetLink || ''
-  });
+  const buildInitialFormData = (stu: Student) => {
+    const gInfo = resolveStudentGrade(stu);
+    const countryList = Array.isArray(stu.countries) ? stu.countries.filter(Boolean) : [];
+    const derivedPrimary = stu.primaryCountry || stu.targetCountry || countryList[0] || '';
+    const derivedOther =
+      stu.otherCountries ||
+      countryList.filter((c) => c.toLowerCase() !== derivedPrimary.toLowerCase()).join(', ');
+    return {
+      name: stu.name || '',
+      email: stu.email || '',
+      phone: stu.phone || '',
+      school: stu.school || '',
+      grade: stu.grade || gInfo.grade,
+      curriculum: stu.curriculum || '',
+      gpa: stu.gpa || '',
+      classRank: stu.classRank || '',
+      graduationYear: stu.graduationYear || '',
+      satTotal: stu.satTotal || '',
+      satRw: stu.satRw || '',
+      satMath: stu.satMath || '',
+      actScore: stu.actScore || '',
+      engTest: stu.engTest || '',
+      engScore: stu.engScore || '',
+      intake: stu.intake || '',
+      primaryCountry: derivedPrimary,
+      otherCountries: derivedOther,
+      countries: countryList.join(', '),
+      major1: stu.major1 || '',
+      major2: stu.major2 || '',
+      targetDegree: stu.targetDegree || '',
+      counselor: stu.counselor || '',
+      researchMentor: stu.researchMentor || '',
+      satVerbalMentor: stu.satVerbalMentor || '',
+      satMathMentor: stu.satMathMentor || '',
+      taskSheetLink: stu.taskSheetLink || '',
+    };
+  };
+
+  const [formData, setFormData] = useState(() => buildInitialFormData(student));
 
   const defaultScores = [
     { grade: 'Grade 8', score: '', isProjected: false, notes: '' },
@@ -4788,21 +4895,7 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
 
   React.useEffect(() => {
     if (!isEditing) {
-      const gradeInfo = resolveStudentGrade(student);
-      setFormData({
-        name: student.name,
-        email: student.email,
-        phone: student.phone,
-        school: student.school,
-        grade: student.grade || gradeInfo.grade,
-        intake: student.intake,
-        countries: (student.countries || []).join(', '),
-        counselor: student.counselor || '',
-        researchMentor: student.researchMentor || '',
-        satVerbalMentor: student.satVerbalMentor || '',
-        satMathMentor: student.satMathMentor || '',
-        taskSheetLink: student.taskSheetLink || ''
-      });
+      setFormData(buildInitialFormData(student));
       setScores(student.academicScores || defaultScores);
       setNewPasswordDraft('');
     }
@@ -4838,15 +4931,52 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
         details: isTaskSheetChanged ? `Task Sheet Link set to: ${formData.taskSheetLink}` : undefined
       };
 
+      const mergedCountries = Array.from(
+        new Set(
+          [
+            formData.primaryCountry.trim(),
+            ...formData.otherCountries.split(',').map((s) => s.trim()),
+            ...formData.countries.split(',').map((s) => s.trim()),
+          ].filter(Boolean)
+        )
+      );
+
+      const academicPatch = canEditAcademicSections
+        ? {
+            school: formData.school,
+            grade: formData.grade,
+            curriculum: formData.curriculum.trim(),
+            gpa: formData.gpa.trim(),
+            classRank: formData.classRank.trim(),
+            graduationYear: formData.graduationYear.trim(),
+            satTotal: formData.satTotal.trim(),
+            satRw: formData.satRw.trim(),
+            satMath: formData.satMath.trim(),
+            actScore: formData.actScore.trim(),
+            engTest: formData.engTest.trim(),
+            engScore: formData.engScore.trim(),
+            intake: formData.intake.trim(),
+            primaryCountry: formData.primaryCountry.trim(),
+            targetCountry: formData.primaryCountry.trim() || mergedCountries[0] || '',
+            otherCountries: formData.otherCountries.trim(),
+            countries: mergedCountries,
+            major1: formData.major1.trim(),
+            major2: formData.major2.trim(),
+            targetDegree: formData.targetDegree.trim(),
+          }
+        : {
+            school: formData.school,
+            grade: formData.grade,
+            intake: formData.intake,
+            countries: formData.countries.split(',').map((s) => s.trim()).filter(Boolean),
+          };
+
       const updatedPayload: Student = {
         ...student,
         name: formData.name,
         email: formData.email,
         phone: formData.phone,
-        school: formData.school,
-        grade: formData.grade,
-        intake: formData.intake,
-        countries: formData.countries.split(',').map(s => s.trim()).filter(Boolean),
+        ...academicPatch,
         counselor: resolvedCounselorName,
         counselorId: isUnassigned ? undefined : (matchedCounselor?.id || undefined),
         counselorEmail: isUnassigned
@@ -4885,7 +5015,7 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
         if (!pwdRes.ok) {
           setProfileFeedback({
             type: 'error',
-            message: `Profile saved, but password update failed: ${pwdRes.error || 'Please try again.'}`,
+            message: `Profile saved, but password update failed: ${sanitizeUserErrorMessage(pwdRes.error, 'Please try again or talk to your Admin.')}`,
           });
           setIsSavingProfile(false);
           return;
@@ -4893,12 +5023,12 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
         setNewPasswordDraft('');
         setProfileFeedback({
           type: 'success',
-          message: 'Student profile and portal password updated directly in Firebase.',
+          message: 'Student profile and portal password updated successfully.',
         });
       } else {
         setProfileFeedback({
           type: 'success',
-          message: 'Student profile saved to Firestore.',
+          message: 'Student profile saved successfully.',
         });
       }
 
@@ -4906,7 +5036,10 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
     } catch (err: any) {
       setProfileFeedback({
         type: 'error',
-        message: err?.message || 'Failed to save student profile changes.',
+        message: sanitizeUserErrorMessage(
+          err,
+          'Unable to save student profile changes right now. Please talk to your Admin.'
+        ),
       });
     } finally {
       setIsSavingProfile(false);
@@ -5184,6 +5317,341 @@ function ProfileDetailsView({ student, onUpdate }: { student: Student, onUpdate:
                 <p className="text-sm font-medium text-slate-900 bg-slate-50 p-2.5 rounded-lg border border-slate-200">
                   {student.satMathMentor || <span className="text-slate-400 italic">Unassigned</span>}
                 </p>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* SECTION 1: ACADEMIC PROFILE & HIGH SCHOOL INFORMATION */}
+      <Card className="border-slate-200 shadow-none">
+        <CardContent className="p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4 border-b border-slate-100 pb-2.5">
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <GraduationCap className="w-4 h-4 text-indigo-600" />
+              Academic Profile &amp; High School Information
+            </h3>
+            {isEditing && !canEditAcademicSections && (
+              <span className="text-[11px] font-medium text-slate-400">
+                View only · Editable by Admin, Category Manager, or Assigned Counselor
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">High School Name</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. Delhi Public School / Oakridge"
+                  value={formData.school}
+                  onChange={(e) => setFormData({ ...formData, school: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900">{student.school || <span className="text-slate-400">Not set</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Curriculum / Board</p>
+              {isEditing && canEditAcademicSections ? (
+                <select
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={formData.curriculum}
+                  onChange={(e) => setFormData({ ...formData, curriculum: e.target.value })}
+                >
+                  <option value="">Select Curriculum</option>
+                  <option value="IB Diploma">IB Diploma</option>
+                  <option value="CBSE">CBSE</option>
+                  <option value="ISC / ICSE">ISC / ICSE</option>
+                  <option value="A-Levels / IGCSE">A-Levels / IGCSE</option>
+                  <option value="AP / US High School">AP / US High School</option>
+                  <option value="State Board">State Board</option>
+                  <option value="Other">Other</option>
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-slate-900">{student.curriculum || <span className="text-slate-400">Not set</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Current Grade / Class</p>
+              {isEditing && canEditAcademicSections ? (
+                <select
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={formData.grade}
+                  onChange={(e) => setFormData({ ...formData, grade: e.target.value })}
+                >
+                  {COUNSELLING_GRADES.map((g) => (
+                    <option key={g} value={g}>Grade {g}</option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-slate-900 tabular-nums">Grade {student.grade || resolvedGradeInfo.grade}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">GPA / Percentage</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. 3.9/4.0 or 94.5% or 41/45"
+                  value={formData.gpa}
+                  onChange={(e) => setFormData({ ...formData, gpa: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-semibold text-slate-900 tabular-nums">{student.gpa || <span className="text-slate-400 font-normal">Not set</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Class Rank</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. Top 5% or 3 / 180"
+                  value={formData.classRank}
+                  onChange={(e) => setFormData({ ...formData, classRank: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900 tabular-nums">{student.classRank || <span className="text-slate-400">Not set</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Graduation Year</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. 2027"
+                  value={formData.graduationYear}
+                  onChange={(e) => setFormData({ ...formData, graduationYear: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900 tabular-nums">{student.graduationYear || <span className="text-slate-400">Not set</span>}</p>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* SECTION 2: STANDARDIZED TEST SCORES */}
+      <Card className="border-slate-200 shadow-none">
+        <CardContent className="p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4 border-b border-slate-100 pb-2.5">
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <Award className="w-4 h-4 text-indigo-600" />
+              Standardized Test Scores
+            </h3>
+            {isEditing && !canEditAcademicSections && (
+              <span className="text-[11px] font-medium text-slate-400">
+                View only · Editable by Admin, Category Manager, or Assigned Counselor
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">SAT Total (400–1600)</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. 1510"
+                  value={formData.satTotal}
+                  onChange={(e) => setFormData({ ...formData, satTotal: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-semibold text-slate-900 tabular-nums">{student.satTotal || <span className="text-slate-400 font-normal">Not reported</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">SAT Reading &amp; Writing</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. 740"
+                  value={formData.satRw}
+                  onChange={(e) => setFormData({ ...formData, satRw: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900 tabular-nums">{student.satRw || <span className="text-slate-400">Not reported</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">SAT Math</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. 770"
+                  value={formData.satMath}
+                  onChange={(e) => setFormData({ ...formData, satMath: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900 tabular-nums">{student.satMath || <span className="text-slate-400">Not reported</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">ACT Composite (1–36)</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. 34"
+                  value={formData.actScore}
+                  onChange={(e) => setFormData({ ...formData, actScore: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-semibold text-slate-900 tabular-nums">{student.actScore || <span className="text-slate-400 font-normal">Not reported</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">English Proficiency Test</p>
+              {isEditing && canEditAcademicSections ? (
+                <select
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={formData.engTest}
+                  onChange={(e) => setFormData({ ...formData, engTest: e.target.value })}
+                >
+                  <option value="">Select Test</option>
+                  <option value="IELTS">IELTS</option>
+                  <option value="TOEFL iBT">TOEFL iBT</option>
+                  <option value="Duolingo (DET)">Duolingo (DET)</option>
+                  <option value="PTE Academic">PTE Academic</option>
+                  <option value="Waived">Waived</option>
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-slate-900">{student.engTest || <span className="text-slate-400">Not set</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">English Test Score</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 tabular-nums focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. 8.0 or 112"
+                  value={formData.engScore}
+                  onChange={(e) => setFormData({ ...formData, engScore: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-semibold text-slate-900 tabular-nums">{student.engScore || <span className="text-slate-400 font-normal">Not reported</span>}</p>
+              )}
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* SECTION 3: TARGET INTAKE & UNIVERSITY PREFERENCES */}
+      <Card className="border-slate-200 shadow-none">
+        <CardContent className="p-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4 border-b border-slate-100 pb-2.5">
+            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <MapPin className="w-4 h-4 text-indigo-600" />
+              Target Intake &amp; University Preferences
+            </h3>
+            {isEditing && !canEditAcademicSections && (
+              <span className="text-[11px] font-medium text-slate-400">
+                View only · Editable by Admin, Category Manager, or Assigned Counselor
+              </span>
+            )}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Target Intake</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. Fall 2027"
+                  value={formData.intake}
+                  onChange={(e) => setFormData({ ...formData, intake: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-semibold text-slate-900">{student.intake || <span className="text-slate-400 font-normal">Not set</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Primary Target Country</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. USA"
+                  value={formData.primaryCountry}
+                  onChange={(e) => setFormData({ ...formData, primaryCountry: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900">
+                  {student.primaryCountry || student.targetCountry || (student.countries?.[0] || '') || <span className="text-slate-400">Not set</span>}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Other Interested Country (after comma = 3rd country)</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. United Kingdom, Canada"
+                  value={formData.otherCountries}
+                  onChange={(e) => setFormData({ ...formData, otherCountries: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900">
+                  {student.otherCountries ||
+                    (Array.isArray(student.countries) && student.countries.length > 1
+                      ? student.countries.slice(1).join(', ')
+                      : '') || <span className="text-slate-400">None listed</span>}
+                </p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Primary Major / Field of Study</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. Computer Science"
+                  value={formData.major1}
+                  onChange={(e) => setFormData({ ...formData, major1: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900">{student.major1 || <span className="text-slate-400">Not set</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Secondary / Alternate Major</p>
+              {isEditing && canEditAcademicSections ? (
+                <input
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  placeholder="e.g. Data Science / Economics"
+                  value={formData.major2}
+                  onChange={(e) => setFormData({ ...formData, major2: e.target.value })}
+                />
+              ) : (
+                <p className="text-sm font-medium text-slate-900">{student.major2 || <span className="text-slate-400">Not set</span>}</p>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1.5">Target Degree Level</p>
+              {isEditing && canEditAcademicSections ? (
+                <select
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  value={formData.targetDegree}
+                  onChange={(e) => setFormData({ ...formData, targetDegree: e.target.value })}
+                >
+                  <option value="">Select Degree</option>
+                  <option value="Undergraduate (BS / BA / BEng)">Undergraduate (BS / BA / BEng)</option>
+                  <option value="Graduate (MS / MA / MBA)">Graduate (MS / MA / MBA)</option>
+                  <option value="Direct Medicine (MD / MBBS)">Direct Medicine (MD / MBBS)</option>
+                  <option value="Foundation / Pathway">Foundation / Pathway</option>
+                </select>
+              ) : (
+                <p className="text-sm font-medium text-slate-900">{student.targetDegree || <span className="text-slate-400">Not set</span>}</p>
               )}
             </div>
           </div>

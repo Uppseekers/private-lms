@@ -141,7 +141,7 @@ export const GoogleSheetsSyncModal: React.FC<Props> = ({ isOpen, onClose }) => {
               Do I need 2 databases for backup?
             </div>
             <p className="text-slate-600 leading-relaxed">
-              Your primary database in <strong>Firebase Firestore</strong> already has enterprise multi-region replication and fault tolerance. However, keeping live copies in <strong>Google Sheets</strong> provides a real-time offsite backup and allows your staff to view/audit records in a familiar spreadsheet format.
+              Your primary <strong>cloud database</strong> already has enterprise multi-region replication and fault tolerance. However, keeping live copies in <strong>Google Sheets</strong> provides a real-time offsite backup and allows your staff to view/audit records in a familiar spreadsheet format.
             </p>
           </div>
 

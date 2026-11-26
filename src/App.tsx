@@ -18,6 +18,7 @@ import TeamVault from './pages/team/Vault';
 import Batches from './pages/team/Batches';
 import Evaluator from './pages/team/Evaluator';
 import TeamReports from './pages/team/Reports';
+import TeamAnalytics from './pages/team/Analytics';
 import TeamUniversities from './pages/team/Universities';
 import StudentEssays from './pages/student/Essays';
 import StudentTasks from './pages/student/Tasks';
@@ -101,6 +102,7 @@ export default function App() {
             <Route path="batches" element={<Batches />} />
             <Route path="reports" element={<TeamReports />} />
             <Route path="report" element={<Navigate to="reports" replace />} />
+            <Route path="analytics" element={<TeamAnalytics />} />
             <Route path="universities" element={<TeamUniversities />} />
             <Route path="launchpad" element={<TeamLaunchpad />} />
             <Route path="settings" element={<TeamSettings />} />

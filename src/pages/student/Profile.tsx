@@ -344,18 +344,18 @@ export default function StudentProfile() {
       const cleanedPhone = (formValues.phone || '').split('|')[0].trim();
       const enteredEmail = (formValues.email || '').trim() || student?.email || '';
 
+      const otherParts = (formValues.otherCountries || '').split(',').map(c => c.trim()).filter(Boolean);
+      const secondCountry = otherParts[0] || '';
+      const thirdCountry = otherParts[1] || ''; // after comma will be considered as third country
       const targetCountriesList: string[] = [];
       if (formValues.primaryCountry.trim()) {
         targetCountriesList.push(formValues.primaryCountry.trim());
       }
-      if (formValues.otherCountries.trim()) {
-        formValues.otherCountries
-          .split(',')
-          .map(c => c.trim())
-          .filter(Boolean)
-          .forEach(c => {
-            if (!targetCountriesList.includes(c)) targetCountriesList.push(c);
-          });
+      if (secondCountry && !targetCountriesList.includes(secondCountry)) {
+        targetCountriesList.push(secondCountry);
+      }
+      if (thirdCountry && !targetCountriesList.includes(thirdCountry)) {
+        targetCountriesList.push(thirdCountry);
       }
       const resolvedCountries =
         targetCountriesList.length > 0
@@ -600,11 +600,11 @@ export default function StudentProfile() {
           </div>
 
           <div>
-            <Label>Other Interested Countries (Text Field Only)</Label>
+            <Label>Other Interested Country (after comma will be considered as third country)</Label>
             <input 
               type="text"
               name="otherCountries"
-              placeholder="e.g. Germany, Japan, Ireland..." 
+              placeholder="e.g. United Kingdom, Canada..." 
               value={formValues.otherCountries}
               onChange={e => updateField('otherCountries', e.target.value)}
               className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 w-full"

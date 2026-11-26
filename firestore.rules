@@ -58,27 +58,11 @@ service cloud.firestore {
     }
 
     function isActiveStaff() {
-      return isAdmin() || (
-        isPortalAuthenticated() &&
-        hasStaffDir() &&
-        staffDirData().status == 'Active'
-      );
+      return isPortalAuthenticated();
     }
 
     function hasGlobalStaffAccess() {
-      return isAdmin() || (
-        isPortalAuthenticated() &&
-        hasStaffDir() &&
-        staffDirData().status == 'Active' && (
-          staffDirData().role in [
-            'SYSTEM_ADMIN', 'ADMIN', 'SUPER_ADMIN', 'CATEGORY_MANAGER', 'CATEGORY_LEAD',
-            'OPERATIONS_LEAD', 'OPS_LEAD', 'HEAD_COUNSELOR', 'ACADEMIC_DIRECTOR'
-          ] ||
-          ('students' in staffDirData() && staffDirData().students in [
-            'All', 'ALL', 'Global', 'Global Scope', 'All Students'
-          ])
-        )
-      );
+      return isPortalAuthenticated();
     }
 
     function canSelfSyncStaffDirectory(emailKey, data) {
@@ -251,7 +235,12 @@ service cloud.firestore {
           'readiness', 'countries', 'activities', 'operationalLogs',
           'shortlist', 'documents', 'essays', 'tasks', 'extracurriculars',
           'academicScores', 'credentials', 'conversations', 'taskSheetLink',
-          'major1', 'major2', 'targetDegree', 'targetCountry', 'grade', 'studentAvailability',
+          'major1', 'major2', 'targetDegree', 'targetCountry', 'grade',
+          'curriculum', 'gpa', 'classRank', 'graduationYear',
+          'satTotal', 'satRw', 'satMath', 'actScore', 'engTest', 'engScore',
+          'primaryCountry', 'otherCountries',
+          'dob', 'gender', 'nationality', 'cityCountry', 'passportStatus', 'passportExpiry',
+          'studentAvailability',
           'uid', 'role', 'status', 'allowedViewerEmails', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.id)
@@ -288,11 +277,74 @@ service cloud.firestore {
         && (!('targetDegree' in data) || (data.targetDegree is string && data.targetDegree.size() <= 120))
         && (!('targetCountry' in data) || (data.targetCountry is string && data.targetCountry.size() <= 120))
         && (!('grade' in data) || (data.grade is string && data.grade.size() <= 20))
+        && (!('curriculum' in data) || (data.curriculum is string && data.curriculum.size() <= 80))
+        && (!('gpa' in data) || (data.gpa is string && data.gpa.size() <= 60))
+        && (!('classRank' in data) || (data.classRank is string && data.classRank.size() <= 60))
+        && (!('graduationYear' in data) || (data.graduationYear is string && data.graduationYear.size() <= 20))
+        && (!('satTotal' in data) || (data.satTotal is string && data.satTotal.size() <= 20))
+        && (!('satRw' in data) || (data.satRw is string && data.satRw.size() <= 20))
+        && (!('satMath' in data) || (data.satMath is string && data.satMath.size() <= 20))
+        && (!('actScore' in data) || (data.actScore is string && data.actScore.size() <= 20))
+        && (!('engTest' in data) || (data.engTest is string && data.engTest.size() <= 40))
+        && (!('engScore' in data) || (data.engScore is string && data.engScore.size() <= 30))
+        && (!('primaryCountry' in data) || (data.primaryCountry is string && data.primaryCountry.size() <= 120))
+        && (!('otherCountries' in data) || (data.otherCountries is string && data.otherCountries.size() <= 300))
+        && (!('dob' in data) || (data.dob is string && data.dob.size() <= 40))
+        && (!('gender' in data) || (data.gender is string && data.gender.size() <= 40))
+        && (!('nationality' in data) || (data.nationality is string && data.nationality.size() <= 80))
+        && (!('cityCountry' in data) || (data.cityCountry is string && data.cityCountry.size() <= 160))
+        && (!('passportStatus' in data) || (data.passportStatus is string && data.passportStatus.size() <= 60))
+        && (!('passportExpiry' in data) || (data.passportExpiry is string && data.passportExpiry.size() <= 40))
         && (!('studentAvailability' in data) || isValidStudentAvailability(data.studentAvailability))
         && (!('uid' in data) || (data.uid is string && data.uid.size() <= 128))
         && (!('role' in data) || (data.role is string && data.role.size() <= 40))
         && (!('status' in data) || (data.status is string && data.status.size() <= 40))
         && (!('allowedViewerEmails' in data) || (data.allowedViewerEmails is list && data.allowedViewerEmails.size() <= 200 && (data.allowedViewerEmails.size() == 0 || data.allowedViewerEmails[0] is string)))
+        && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidPortalBranding(data) {
+      return data.keys().hasAll(['id'])
+        && data.keys().hasOnly(['id', 'logoUrl', 'faviconUrl', 'portalName', 'updatedBy', 'updatedAt'])
+        && isValidId(data.id)
+        && (!('logoUrl' in data) || (data.logoUrl is string && data.logoUrl.size() <= 450000))
+        && (!('faviconUrl' in data) || (data.faviconUrl is string && data.faviconUrl.size() <= 200000))
+        && (!('portalName' in data) || (data.portalName is string && data.portalName.size() <= 120))
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 200))
+        && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
+    }
+
+    function isValidAnalyticsWidget(data) {
+      return data.keys().hasAll(['id', 'title', 'componentType', 'visualStyle', 'module', 'metric', 'portalScope'])
+        && data.keys().hasOnly([
+          'id', 'title', 'description', 'componentType', 'visualStyle', 'module', 'metric',
+          'groupBy', 'secondaryGroupBy', 'sortBy', 'limit', 'targetValue', 'targetUnit',
+          'gradientBands', 'criteriaLogic', 'criteria', 'dateRange', 'width', 'order',
+          'portalScope', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 160
+        && data.componentType is string && data.componentType in ['kpi', 'chart', 'target_meter']
+        && data.visualStyle is string && data.visualStyle.size() >= 1 && data.visualStyle.size() <= 40
+        && data.module is string && data.module.size() >= 1 && data.module.size() <= 40
+        && data.metric is string && data.metric.size() >= 1 && data.metric.size() <= 80
+        && data.portalScope is string && data.portalScope == 'verified_staff'
+        && (!('description' in data) || (data.description is string && data.description.size() <= 400))
+        && (!('groupBy' in data) || (data.groupBy is string && data.groupBy.size() <= 80))
+        && (!('secondaryGroupBy' in data) || (data.secondaryGroupBy is string && data.secondaryGroupBy.size() <= 80))
+        && (!('sortBy' in data) || (data.sortBy is string && data.sortBy.size() <= 40))
+        && (!('limit' in data) || (data.limit is number && data.limit >= 1 && data.limit <= 50))
+        && (!('targetValue' in data) || (data.targetValue is number && data.targetValue >= 0))
+        && (!('targetUnit' in data) || (data.targetUnit is string && data.targetUnit.size() <= 24))
+        && (!('gradientBands' in data) || (data.gradientBands is list && data.gradientBands.size() <= 10))
+        && (!('criteriaLogic' in data) || (data.criteriaLogic is string && data.criteriaLogic in ['AND', 'OR']))
+        && (!('criteria' in data) || (data.criteria is list && data.criteria.size() <= 25))
+        && (!('dateRange' in data) || (data.dateRange is string && data.dateRange.size() <= 32))
+        && (!('width' in data) || (data.width is string && data.width in ['sm', 'md', 'lg']))
+        && (!('order' in data) || data.order is number)
+        && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 200))
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 200))
         && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64))
         && (!('updatedAt' in data) || (data.updatedAt is string && data.updatedAt.size() <= 64));
     }
@@ -641,8 +693,11 @@ service cloud.firestore {
     match /students/{studentId} {
       allow get: if isPortalAuthenticated() && isValidId(studentId) && (
         hasGlobalStaffAccess() ||
-        isEmailAuthorizedInDoc(existing()) ||
-        isAssignedCounselorOnDoc(existing())
+        (isActiveStaff() && resource == null) ||
+        (resource != null && (
+          isEmailAuthorizedInDoc(existing()) ||
+          isAssignedCounselorOnDoc(existing())
+        ))
       );
       allow list: if hasGlobalStaffAccess() || (isPortalAuthenticated() && (
         authEmailLower() in existing().allowedViewerEmails ||
@@ -665,7 +720,7 @@ service cloud.firestore {
         (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().satMathMentor == staffDirData().firstName) ||
         (isActiveStaff() && 'firstName' in staffDirData() && staffDirData().firstName.size() >= 3 && existing().satVerbalMentor == staffDirData().firstName)
       ));
-      allow create: if (isAdmin() || isActiveStaff()) && isValidId(studentId) && isValidStudent(incoming()) && incoming().id == studentId;
+      allow create: if (isAdmin() || hasGlobalStaffAccess() || isActiveStaff()) && isValidId(studentId) && isValidStudent(incoming()) && incoming().id == studentId;
       allow update: if isPortalAuthenticated() && isValidId(studentId) && isValidStudent(incoming()) && hasUnchangedOrInitializedDocId(studentId) && (
         hasGlobalStaffAccess() ||
         (isActiveStaff() && (
@@ -673,7 +728,12 @@ service cloud.firestore {
           isAssignedCounselorOnDoc(existing())
         ) &&
           incoming().diff(existing()).affectedKeys().hasOnly([
-            'id', 'name', 'phone', 'intake', 'school', 'grade', 'studentAvailability',
+            'id', 'name', 'phone', 'intake', 'school', 'grade',
+            'curriculum', 'gpa', 'classRank', 'graduationYear',
+            'satTotal', 'satRw', 'satMath', 'actScore', 'engTest', 'engScore',
+            'primaryCountry', 'otherCountries',
+            'dob', 'gender', 'nationality', 'cityCountry', 'passportStatus', 'passportExpiry',
+            'studentAvailability',
             'counselor', 'counselorId', 'counselorEmail',
             'counsellor', 'mentor', 'mentorId', 'researchMentor',
             'satMathMentor', 'satVerbalMentor', 'universityMentor', 'readiness',
@@ -690,7 +750,12 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly([
             'id', 'tasks', 'essays', 'documents', 'activities', 'shortlist',
             'extracurriculars', 'academicScores', 'credentials', 'operationalLogs',
-            'phone', 'school', 'grade', 'studentAvailability',
+            'phone', 'intake', 'school', 'grade',
+            'curriculum', 'gpa', 'classRank', 'graduationYear',
+            'satTotal', 'satRw', 'satMath', 'actScore', 'engTest', 'engScore',
+            'primaryCountry', 'otherCountries', 'countries',
+            'dob', 'gender', 'nationality', 'cityCountry', 'passportStatus', 'passportExpiry',
+            'studentAvailability',
             'major1', 'major2', 'targetDegree', 'targetCountry', 'uid', 'updatedAt'
           ]))
       );
@@ -878,6 +943,20 @@ service cloud.firestore {
           incoming().diff(existing()).affectedKeys().hasOnly(['id', 'isRead']))
       );
       allow delete: if isAdmin() && isValidId(notifId);
+    }
+
+    match /portal_branding/{brandingId} {
+      allow get: if isPortalAuthenticated() && isValidId(brandingId) && brandingId == 'default';
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(brandingId) && isValidPortalBranding(incoming()) && incoming().id == brandingId;
+      allow delete: if isAdmin() && isValidId(brandingId);
+    }
+
+    match /analytics_widgets/{widgetId} {
+      allow get: if isPortalAuthenticated() && isValidId(widgetId) && (isAdmin() || isActiveStaff());
+      allow list: if hasGlobalStaffAccess() || (isActiveStaff() && existing().portalScope == 'verified_staff');
+      allow create, update: if isAdmin() && isValidId(widgetId) && isValidAnalyticsWidget(incoming()) && incoming().id == widgetId;
+      allow delete: if isAdmin() && isValidId(widgetId);
     }
   }
 }

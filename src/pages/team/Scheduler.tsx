@@ -95,6 +95,17 @@ export default function TeamScheduler() {
   // Post-session modal state
   const [activeSessionModalEvt, setActiveSessionModalEvt] = useState<any | null>(null);
   const [activeTab, setActiveTab] = useState<'mom' | 'tasks' | 'resources' | 'ratings'>('mom');
+  const [showAddMomForm, setShowAddMomForm] = useState(false);
+  const [expandedMomCards, setExpandedMomCards] = useState<Record<string, boolean>>({});
+
+  // Keep activeSessionModalEvt live-synced with Firestore events updates
+  useEffect(() => {
+    if (!activeSessionModalEvt?.id) return;
+    const fresh = events.find((e: any) => e.id === activeSessionModalEvt.id);
+    if (fresh && fresh !== activeSessionModalEvt) {
+      setActiveSessionModalEvt(fresh);
+    }
+  }, [events, activeSessionModalEvt?.id]);
 
   // MOM form
   const [momKeyPoints, setMomKeyPoints] = useState('');
@@ -362,8 +373,12 @@ export default function TeamScheduler() {
            (e.stream || '').toLowerCase().includes(q) ||
            (e.host || '').toLowerCase().includes(q);
   }).sort((a: any, b: any) => {
-    const diff = getEventSortTimestamp(a) - getEventSortTimestamp(b);
-    return horizonFilter === 'past' ? -diff : diff;
+    const tA = getEventSortTimestamp(a);
+    const tB = getEventSortTimestamp(b);
+    if (horizonFilter === 'past') {
+      return tB - tA; // latest to last for past sessions
+    }
+    return tA - tB; // latest to future for upcoming classes
   });
 
   const handleOpenModal = (preselectedBatchId?: string) => {
@@ -943,6 +958,7 @@ export default function TeamScheduler() {
     setMomObservations('');
     setMomNextSteps('');
     setMomFollowUp('');
+    setShowAddMomForm(false);
   };
 
   const handleAddPostMeetingTask = () => {
@@ -1931,6 +1947,99 @@ export default function TeamScheduler() {
                     )}
                   </div>
                 )}
+
+                {/* Inline Minutes of Meeting (MoM) Preview for Past Sessions & Sessions with Recorded MoM */}
+                {(inPast || (evt.moms && evt.moms.length > 0)) && (() => {
+                  const momsList: MeetingMOM[] = Array.isArray(evt.moms) ? evt.moms : [];
+                  const isExpanded = Boolean(expandedMomCards[evt.id]);
+                  const visibleMoms = isExpanded ? momsList : momsList.slice(0, 1);
+
+                  if (momsList.length > 0) {
+                    return (
+                      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/80 p-3 space-y-2.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                            <FileText className="w-3.5 h-3.5 text-blue-600" />
+                            Minutes of Meeting ({momsList.length})
+                          </span>
+                          <div className="flex items-center gap-3">
+                            {momsList.length > 1 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedMomCards((prev) => ({ ...prev, [evt.id]: !prev[evt.id] }))
+                                }
+                                className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 cursor-pointer"
+                              >
+                                {isExpanded ? 'Show latest only' : `Show all ${momsList.length} MoMs`}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveSessionModalEvt(evt);
+                                setActiveTab('mom');
+                                setShowAddMomForm(false);
+                              }}
+                              className="text-[11px] font-semibold text-blue-700 hover:underline cursor-pointer"
+                            >
+                              Open Full MoM
+                            </button>
+                          </div>
+                        </div>
+
+                        {visibleMoms.map((momEntry) => (
+                          <div key={momEntry.id} className="bg-white rounded-lg border border-slate-200/80 p-2.5 space-y-2">
+                            <div className="flex flex-wrap items-center justify-between gap-1 text-[11px] text-slate-500">
+                              <span>
+                                By <strong className="text-slate-700">{momEntry.authorName}</strong>
+                                {momEntry.authorRole ? ` (${momEntry.authorRole})` : ''}
+                              </span>
+                              <span className="tabular-nums">{momEntry.date}</span>
+                            </div>
+                            {momEntry.keyPoints && (
+                              <div>
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-0.5">
+                                  Key Discussion Points
+                                </p>
+                                <FormattedMomText text={momEntry.keyPoints} className="text-xs text-slate-800" />
+                              </div>
+                            )}
+                            {momEntry.nextSteps && (
+                              <div className="pt-1.5 border-t border-slate-100">
+                                <p className="text-[10px] font-bold uppercase tracking-wider text-blue-700 mb-0.5">
+                                  Next Steps
+                                </p>
+                                <FormattedMomText text={momEntry.nextSteps} className="text-xs text-slate-700" />
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-3 py-2 flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] text-slate-500">
+                        {evt.notes?.trim()
+                          ? `Session notes: ${evt.notes.trim().slice(0, 140)}${evt.notes.trim().length > 140 ? '…' : ''}`
+                          : 'No Minutes of Meeting (MoM) recorded for this past session yet.'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveSessionModalEvt(evt);
+                          setActiveTab('mom');
+                          setShowAddMomForm(true);
+                        }}
+                        className="text-[11px] font-semibold text-blue-700 hover:underline whitespace-nowrap cursor-pointer"
+                      >
+                        + Add MoM
+                      </button>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Action Buttons */}
@@ -1983,10 +2092,12 @@ export default function TeamScheduler() {
                   onClick={() => {
                     setActiveSessionModalEvt(evt);
                     setActiveTab('mom');
+                    setShowAddMomForm(!(evt.moms && evt.moms.length > 0));
                   }}
-                  className="bg-white text-xs h-8 px-3 font-semibold text-blue-700 border-blue-200 hover:bg-blue-50"
+                  className="bg-white text-xs h-8 px-3 font-semibold text-blue-700 border-blue-200 hover:bg-blue-50 whitespace-nowrap"
                 >
-                  <FileText className="w-3.5 h-3.5 mr-1" /> Meeting Notes & Tasks
+                  <FileText className="w-3.5 h-3.5 mr-1" />
+                  {evt.moms?.length > 0 ? `View MoM (${evt.moms.length})` : 'Meeting Notes & Tasks'}
                 </Button>
 
                 <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-slate-500 hover:text-slate-800" onClick={() => handleEditEvent(evt)}>
@@ -2125,143 +2236,33 @@ export default function TeamScheduler() {
             <div className="p-6 overflow-y-auto space-y-6 flex-1 text-xs">
               {/* TAB 1: MOM */}
               {activeTab === 'mom' && (
-                <div className="space-y-6">
-                  <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">Add Meeting Notes / Minutes of Meeting (MOM)</h4>
-                      <span className="text-[11px] text-slate-500">
-                        Use one bullet per line (starts with <code className="bg-white px-1 rounded border border-slate-200">-</code> or <code className="bg-white px-1 rounded border border-slate-200">•</code>). Students only see <strong>Key Discussion Points</strong> &amp; <strong>Next Steps</strong>.
-                      </span>
-                    </div>
-
-                    <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="block text-[11px] font-bold text-slate-700">
-                          Key Discussion Points * <span className="font-normal text-emerald-700">(Visible to Student)</span>
-                        </label>
-                        <button
-                          type="button"
-                          onClick={() => setMomKeyPoints((prev) => appendBulletPoint(prev))}
-                          className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
-                        >
-                          + Add Bullet
-                        </button>
-                      </div>
-                      <textarea
-                        value={momKeyPoints}
-                        onChange={e => setMomKeyPoints(e.target.value)}
-                        rows={4}
-                        placeholder={"• Reviewed target university list and early decision deadlines\n• Discussed Common App personal statement angle\n• Confirmed SAT retake timeline"}
-                        className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                      />
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-4">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="block text-[11px] font-bold text-slate-700">
-                            Next Steps <span className="font-normal text-emerald-700">(Visible to Student)</span>
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setMomNextSteps((prev) => appendBulletPoint(prev))}
-                            className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
-                          >
-                            + Add Bullet
-                          </button>
-                        </div>
-                        <textarea
-                          value={momNextSteps}
-                          onChange={e => setMomNextSteps(e.target.value)}
-                          rows={4}
-                          placeholder={"• Complete 2nd draft of Common App essay by Friday\n• Shortlist 3 safety universities in the US and UK\n• Upload Grade 11 transcript to Student Vault"}
-                          className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                        />
-                      </div>
-
-                      <div className="pt-2 border-t border-slate-200 space-y-4">
-                        <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                          Internal Counselor &amp; Team Notes (Hidden from Student Portal)
-                        </p>
-
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[11px] font-bold text-slate-700">Student Progress Notes (Internal)</label>
-                            <button
-                              type="button"
-                              onClick={() => setMomProgress((prev) => appendBulletPoint(prev))}
-                              className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
-                            >
-                              + Add Bullet
-                            </button>
-                          </div>
-                          <textarea
-                            value={momProgress}
-                            onChange={e => setMomProgress(e.target.value)}
-                            rows={3}
-                            placeholder={"• Common App draft is 80% complete\n• Strong improvement in SAT reading comprehension"}
-                            className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                          />
-                        </div>
-
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[11px] font-bold text-slate-700">Mentor Observations (Internal)</label>
-                            <button
-                              type="button"
-                              onClick={() => setMomObservations((prev) => appendBulletPoint(prev))}
-                              className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
-                            >
-                              + Add Bullet
-                            </button>
-                          </div>
-                          <textarea
-                            value={momObservations}
-                            onChange={e => setMomObservations(e.target.value)}
-                            rows={3}
-                            placeholder={"• Needs sharper opening hook in personal essay\n• Responds well to structured weekly deadlines"}
-                            className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                          />
-                        </div>
-
-                        <div>
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-[11px] font-bold text-slate-700">Follow-up Actions (Internal)</label>
-                            <button
-                              type="button"
-                              onClick={() => setMomFollowUp((prev) => appendBulletPoint(prev))}
-                              className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
-                            >
-                              + Add Bullet
-                            </button>
-                          </div>
-                          <textarea
-                            value={momFollowUp}
-                            onChange={e => setMomFollowUp(e.target.value)}
-                            rows={3}
-                            placeholder={"• Check in with parents next Tuesday\n• Coordinate with SAT verbal mentor before mock review"}
-                            className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="flex justify-end pt-1">
-                      <Button size="sm" onClick={handleAddMOM} disabled={!momKeyPoints.trim()} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4">
-                        Save Session MOM &amp; Mark Completed
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* MOM History */}
+                <div className="space-y-5">
+                  {/* MOM History shown FIRST so Past Session MoMs are immediately visible */}
                   <div className="space-y-3">
-                    <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">Recorded Session MOM History</h4>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px] flex items-center gap-1.5">
+                        <FileText className="w-3.5 h-3.5 text-blue-600" />
+                        Recorded Session MOM History ({activeSessionModalEvt.moms?.length || 0})
+                      </h4>
+                      {activeSessionModalEvt.moms && activeSessionModalEvt.moms.length > 0 && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setShowAddMomForm((prev) => !prev)}
+                          className="h-7 px-2.5 text-[11px] font-semibold border-blue-200 text-blue-700 hover:bg-blue-50"
+                        >
+                          {showAddMomForm ? 'Hide Add MoM Form' : '+ Add Another MoM Entry'}
+                        </Button>
+                      )}
+                    </div>
+
                     {activeSessionModalEvt.moms && activeSessionModalEvt.moms.length > 0 ? (
                       activeSessionModalEvt.moms.map((m: MeetingMOM) => (
-                        <div key={m.id} className="bg-white border border-slate-200 rounded-xl p-4 space-y-3 shadow-sm">
+                        <div key={m.id} className="bg-white border border-slate-200 rounded-xl p-4 space-y-3">
                           <div className="flex justify-between items-center text-slate-500 text-[11px] border-b border-slate-100 pb-2">
                             <span>Recorded by <strong>{m.authorName}</strong> ({m.authorRole})</span>
-                            <span>{m.date}</span>
+                            <span className="tabular-nums">{m.date}</span>
                           </div>
 
                           <div>
@@ -2301,9 +2302,146 @@ export default function TeamScheduler() {
                         </div>
                       ))
                     ) : (
-                      <p className="text-slate-400 italic text-center py-4 bg-slate-50 rounded-lg">No MOM recorded for this session yet.</p>
+                      <div className="text-slate-500 text-center py-4 px-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 space-y-1">
+                        <p className="font-medium text-slate-700">No MOM recorded for this session yet.</p>
+                        {activeSessionModalEvt.notes?.trim() && (
+                          <p className="text-[11px] text-slate-500">
+                            Agenda / Notes: {activeSessionModalEvt.notes}
+                          </p>
+                        )}
+                      </div>
                     )}
                   </div>
+
+                  {/* Add New MOM Form (shown automatically if 0 MoMs, or toggled on when MoMs exist) */}
+                  {(showAddMomForm || !activeSessionModalEvt.moms || activeSessionModalEvt.moms.length === 0) && (
+                    <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <h4 className="font-bold text-slate-900 uppercase tracking-wider text-[11px]">Add Meeting Notes / Minutes of Meeting (MOM)</h4>
+                        <span className="text-[11px] text-slate-500">
+                          Use one bullet per line (starts with <code className="bg-white px-1 rounded border border-slate-200">-</code> or <code className="bg-white px-1 rounded border border-slate-200">•</code>). Students only see <strong>Key Discussion Points</strong> &amp; <strong>Next Steps</strong>.
+                        </span>
+                      </div>
+
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-[11px] font-bold text-slate-700">
+                            Key Discussion Points * <span className="font-normal text-emerald-700">(Visible to Student)</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setMomKeyPoints((prev) => appendBulletPoint(prev))}
+                            className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
+                          >
+                            + Add Bullet
+                          </button>
+                        </div>
+                        <textarea
+                          value={momKeyPoints}
+                          onChange={e => setMomKeyPoints(e.target.value)}
+                          rows={4}
+                          placeholder={"• Reviewed target university list and early decision deadlines\n• Discussed Common App personal statement angle\n• Confirmed SAT retake timeline"}
+                          className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-4">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-[11px] font-bold text-slate-700">
+                              Next Steps <span className="font-normal text-emerald-700">(Visible to Student)</span>
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => setMomNextSteps((prev) => appendBulletPoint(prev))}
+                              className="text-[10px] font-bold text-blue-600 hover:text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
+                            >
+                              + Add Bullet
+                            </button>
+                          </div>
+                          <textarea
+                            value={momNextSteps}
+                            onChange={e => setMomNextSteps(e.target.value)}
+                            rows={4}
+                            placeholder={"• Complete 2nd draft of Common App essay by Friday\n• Shortlist 3 safety universities in the US and UK\n• Upload Grade 11 transcript to Student Vault"}
+                            className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                          />
+                        </div>
+
+                        <div className="pt-2 border-t border-slate-200 space-y-4">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                            Internal Counselor &amp; Team Notes (Hidden from Student Portal)
+                          </p>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[11px] font-bold text-slate-700">Student Progress Notes (Internal)</label>
+                              <button
+                                type="button"
+                                onClick={() => setMomProgress((prev) => appendBulletPoint(prev))}
+                                className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
+                              >
+                                + Add Bullet
+                              </button>
+                            </div>
+                            <textarea
+                              value={momProgress}
+                              onChange={e => setMomProgress(e.target.value)}
+                              rows={3}
+                              placeholder={"• Common App draft is 80% complete\n• Strong improvement in SAT reading comprehension"}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[11px] font-bold text-slate-700">Mentor Observations (Internal)</label>
+                              <button
+                                type="button"
+                                onClick={() => setMomObservations((prev) => appendBulletPoint(prev))}
+                                className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
+                              >
+                                + Add Bullet
+                              </button>
+                            </div>
+                            <textarea
+                              value={momObservations}
+                              onChange={e => setMomObservations(e.target.value)}
+                              rows={3}
+                              placeholder={"• Needs sharper opening hook in personal essay\n• Responds well to structured weekly deadlines"}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex items-center justify-between mb-1">
+                              <label className="block text-[11px] font-bold text-slate-700">Follow-up Actions (Internal)</label>
+                              <button
+                                type="button"
+                                onClick={() => setMomFollowUp((prev) => appendBulletPoint(prev))}
+                                className="text-[10px] font-bold text-slate-600 hover:text-slate-900 bg-white px-2 py-0.5 rounded border border-slate-200"
+                              >
+                                + Add Bullet
+                              </button>
+                            </div>
+                            <textarea
+                              value={momFollowUp}
+                              onChange={e => setMomFollowUp(e.target.value)}
+                              rows={3}
+                              placeholder={"• Check in with parents next Tuesday\n• Coordinate with SAT verbal mentor before mock review"}
+                              className="w-full bg-white border border-slate-200 rounded-lg p-3 text-xs leading-relaxed focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end pt-1">
+                        <Button size="sm" onClick={handleAddMOM} disabled={!momKeyPoints.trim()} className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold px-4">
+                          Save Session MOM &amp; Mark Completed
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

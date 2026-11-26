@@ -38,7 +38,7 @@ function mapFirebaseAuthError(err: any): string {
 
 export default function Login() {
   const navigate = useNavigate();
-  const { isAuthenticated, currentUser, isFirebaseAuthReady, authError, clearAuthError, signOutAll } = useDatabase();
+  const { isAuthenticated, currentUser, isFirebaseAuthReady, authError, clearAuthError, signOutAll, portalBranding } = useDatabase();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -46,6 +46,11 @@ export default function Login() {
   const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
   const [showBootstrapAdminSetup, setShowBootstrapAdminSetup] = useState(false);
+  const [logoFailed, setLogoFailed] = useState(false);
+
+  useEffect(() => {
+    setLogoFailed(false);
+  }, [portalBranding.logoUrl]);
 
   useEffect(() => {
     if (isFirebaseAuthReady && isAuthenticated && currentUser) {
@@ -82,7 +87,7 @@ export default function Login() {
             const keys: string[] = [];
             for (let i = 0; i < window.localStorage.length; i++) {
               const k = window.localStorage.key(i);
-              if (k && k !== 'uppseekers_zoho_diagnostic_trace_v1') keys.push(k);
+              if (k && k !== 'uppseekers_zoho_diagnostic_trace_v1' && k !== 'uppseekers_portal_branding_cache') keys.push(k);
             }
             keys.forEach((k) => window.localStorage.removeItem(k));
           }
@@ -172,11 +177,20 @@ export default function Login() {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
         <div className="flex flex-col items-center">
-          <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg">
-            <GraduationCap className="h-8 w-8 text-white" />
-          </div>
-          <h2 className="mt-6 text-center text-3xl font-bold text-slate-900 tracking-tight">
-            Uppseekers
+          {portalBranding.logoUrl && !logoFailed ? (
+            <img
+              src={portalBranding.logoUrl}
+              alt={portalBranding.portalName || 'Uppseekers'}
+              onError={() => setLogoFailed(true)}
+              className="h-14 max-w-[220px] object-contain"
+            />
+          ) : (
+            <div className="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg">
+              <GraduationCap className="h-8 w-8 text-white" />
+            </div>
+          )}
+          <h2 className="mt-5 text-center text-3xl font-bold text-slate-900 tracking-tight">
+            {portalBranding.portalName || 'Uppseekers'}
           </h2>
           <p className="mt-1 text-center text-sm text-slate-500">
             Student Counseling & Admissions Portal

@@ -31,7 +31,8 @@ import {
   ShieldAlert,
   Compass,
   Lock,
-  SlidersHorizontal
+  SlidersHorizontal,
+  BarChart3
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getScopedStudentsForStaff, isUserAdmin, canStaffAccessReports, getStaffLaunchpadPermissions } from '@/lib/staffPermissions';
@@ -80,6 +81,7 @@ const teamNavigation: SidebarItem[] = [
   { name: 'Assignment Evaluator', href: '/team/evaluator', icon: CheckSquare, tabKey: 'tab_evaluator', permissionKey: 'assign_tasks', categoryKey: 'tasks' },
   { name: 'Student Database', href: '/team/users', icon: Users, tabKey: 'tab_users', permissionKey: 'view_roster', categoryKey: 'profile' },
   { name: 'Reports', href: '/team/reports', icon: FileSpreadsheet, tabKey: 'tab_reports', permissionKey: 'view_meeting_reports', categoryKey: 'reports' },
+  { name: 'Analytics & Reports', href: '/team/analytics', icon: BarChart3, tabKey: 'tab_analytics' },
   { name: 'Universities', href: '/team/universities', icon: GraduationCap, tabKey: 'tab_universities', permissionKey: 'add_uni', categoryKey: 'shortlist' },
   { name: 'Admin Settings', href: '/team/settings', icon: Shield, tabKey: 'tab_settings', permissionKey: 'staff_onboard', categoryKey: 'admin', adminOnly: true },
 ];
@@ -112,11 +114,17 @@ export default function AppLayout() {
     batches,
     events,
     firestoreStatus,
+    portalBranding,
     signOutAll,
   } = useDatabase();
   const [isChangePasswordOpen, setIsChangePasswordOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+  const [logoImgError, setLogoImgError] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setLogoImgError(false);
+  }, [portalBranding.logoUrl]);
 
   const handleSaveCurrentUserPassword = async (
     _userId: string,
@@ -616,10 +624,23 @@ export default function AppLayout() {
       {/* Desktop Sidebar */}
       <aside className="w-64 bg-white border-r border-slate-200 hidden lg:flex flex-col transition-all duration-300 shrink-0">
         <div className="p-6 flex items-center gap-3">
-          <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm">
-            <GraduationCap className="h-5 w-5 text-white" />
-          </div>
-          <span className="font-bold text-xl tracking-tight text-slate-900 truncate">Uppseekers</span>
+          {portalBranding.logoUrl && !logoImgError ? (
+            <img
+              src={portalBranding.logoUrl}
+              alt={portalBranding.portalName || 'Uppseekers'}
+              onError={() => setLogoImgError(true)}
+              className="h-9 max-w-[180px] object-contain"
+            />
+          ) : (
+            <>
+              <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center flex-shrink-0 shadow-sm">
+                <GraduationCap className="h-5 w-5 text-white" />
+              </div>
+              <span className="font-bold text-xl tracking-tight text-slate-900 truncate">
+                {portalBranding.portalName || 'Uppseekers'}
+              </span>
+            </>
+          )}
         </div>
         
         <div className="flex-1 overflow-y-auto py-2">
@@ -677,10 +698,23 @@ export default function AppLayout() {
           <div className="relative flex-1 flex flex-col max-w-xs w-full bg-white shadow-2xl z-10 animate-in slide-in-from-left duration-200">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
-                  <GraduationCap className="h-5 w-5 text-white" />
-                </div>
-                <span className="font-bold text-lg tracking-tight text-slate-900">Uppseekers</span>
+                {portalBranding.logoUrl && !logoImgError ? (
+                  <img
+                    src={portalBranding.logoUrl}
+                    alt={portalBranding.portalName || 'Uppseekers'}
+                    onError={() => setLogoImgError(true)}
+                    className="h-8 max-w-[160px] object-contain"
+                  />
+                ) : (
+                  <>
+                    <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center shrink-0 shadow-sm">
+                      <GraduationCap className="h-5 w-5 text-white" />
+                    </div>
+                    <span className="font-bold text-lg tracking-tight text-slate-900">
+                      {portalBranding.portalName || 'Uppseekers'}
+                    </span>
+                  </>
+                )}
               </div>
               <button 
                 onClick={() => setIsMobileMenuOpen(false)}
@@ -1235,10 +1269,10 @@ export default function AppLayout() {
               <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <p className="text-xs sm:text-sm font-bold text-amber-950">
-                  Firestore permissions restricted for your current session
+                  Access permissions are restricted for your current session
                 </p>
                 <p className="text-[11px] sm:text-xs text-amber-800">
-                  Please sign out and sign back in with your verified email/password account or contact your administrator to refresh your staff directory permissions.
+                  Please sign out and sign back in with your verified account, or talk to your Admin to refresh your staff access permissions.
                 </p>
               </div>
             </div>

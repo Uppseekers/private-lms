@@ -86,6 +86,24 @@
         "targetDegree": { "type": "string", "maxLength": 120 },
         "targetCountry": { "type": "string", "maxLength": 120 },
         "grade": { "type": "string", "maxLength": 20 },
+        "curriculum": { "type": "string", "maxLength": 80 },
+        "gpa": { "type": "string", "maxLength": 60 },
+        "classRank": { "type": "string", "maxLength": 60 },
+        "graduationYear": { "type": "string", "maxLength": 20 },
+        "satTotal": { "type": "string", "maxLength": 20 },
+        "satRw": { "type": "string", "maxLength": 20 },
+        "satMath": { "type": "string", "maxLength": 20 },
+        "actScore": { "type": "string", "maxLength": 20 },
+        "engTest": { "type": "string", "maxLength": 40 },
+        "engScore": { "type": "string", "maxLength": 30 },
+        "primaryCountry": { "type": "string", "maxLength": 120 },
+        "otherCountries": { "type": "string", "maxLength": 300 },
+        "dob": { "type": "string", "maxLength": 40 },
+        "gender": { "type": "string", "maxLength": 40 },
+        "nationality": { "type": "string", "maxLength": 80 },
+        "cityCountry": { "type": "string", "maxLength": 160 },
+        "passportStatus": { "type": "string", "maxLength": 60 },
+        "passportExpiry": { "type": "string", "maxLength": 40 },
         "studentAvailability": { "type": "object", "description": "Student preferred counselling availability (days of week, uniform or day-wise timings, and optional date-wise overrides)" },
         "uid": { "type": "string", "maxLength": 128 },
         "role": { "type": "string", "maxLength": 40 },
@@ -435,6 +453,52 @@
         "updatedAt": { "type": "string", "maxLength": 80 }
       },
       "required": ["id", "staffEmail", "sealedVault"]
+    },
+    "PortalBranding": {
+      "title": "PortalBranding",
+      "description": "Admin-managed portal logo and browser favicon configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "logoUrl": { "type": "string", "maxLength": 450000 },
+        "faviconUrl": { "type": "string", "maxLength": 200000 },
+        "portalName": { "type": "string", "maxLength": 120 },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id"]
+    },
+    "AnalyticsWidget": {
+      "title": "AnalyticsWidget",
+      "description": "Admin-authored Zoho-style KPI, Chart, or Target Meter dashboard component",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "description": { "type": "string", "maxLength": 400 },
+        "componentType": { "type": "string", "enum": ["kpi", "chart", "target_meter"], "maxLength": 32 },
+        "visualStyle": { "type": "string", "maxLength": 40 },
+        "module": { "type": "string", "maxLength": 40 },
+        "metric": { "type": "string", "maxLength": 80 },
+        "groupBy": { "type": "string", "maxLength": 80 },
+        "secondaryGroupBy": { "type": "string", "maxLength": 80 },
+        "sortBy": { "type": "string", "maxLength": 40 },
+        "limit": { "type": "number" },
+        "targetValue": { "type": "number" },
+        "targetUnit": { "type": "string", "maxLength": 24 },
+        "gradientBands": { "type": "array" },
+        "criteriaLogic": { "type": "string", "enum": ["AND", "OR"], "maxLength": 8 },
+        "criteria": { "type": "array" },
+        "dateRange": { "type": "string", "maxLength": 32 },
+        "width": { "type": "string", "enum": ["sm", "md", "lg"], "maxLength": 8 },
+        "order": { "type": "number" },
+        "portalScope": { "type": "string", "maxLength": 40 },
+        "createdBy": { "type": "string", "maxLength": 200 },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "maxLength": 64 }
+      },
+      "required": ["id", "title", "componentType", "visualStyle", "module", "metric", "portalScope"]
     }
   },
   "firestore": {
@@ -521,6 +585,14 @@
     "/staff_zoho_vault/{emailKey}": {
       "schema": { "$ref": "#/entities/StaffZohoVault" },
       "description": "Server-sealed Zoho OAuth token vault per counsellor"
+    },
+    "/portal_branding/{brandingId}": {
+      "schema": { "$ref": "#/entities/PortalBranding" },
+      "description": "Global portal branding settings (logo and favicon)"
+    },
+    "/analytics_widgets/{widgetId}": {
+      "schema": { "$ref": "#/entities/AnalyticsWidget" },
+      "description": "Admin-authored Analytics & Reports components visible to scoped staff"
     }
   }
 }

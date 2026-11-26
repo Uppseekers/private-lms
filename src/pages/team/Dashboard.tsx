@@ -385,12 +385,12 @@ export default function TeamDashboard() {
 
   // 5. Stage Breakdown Counts for Chart
   const stageChartData = useMemo(() => {
-    const counts = {
-      'TO_DO': 0,
-      'IN_PROGRESS': 0,
-      'UNDER_REVIEW': 0,
-      'VERIFIED_COMPLETED': 0,
-      'OVERDUE': 0
+    const buckets: Record<string, { count: number; studentNames: Set<string> }> = {
+      'TO_DO': { count: 0, studentNames: new Set() },
+      'IN_PROGRESS': { count: 0, studentNames: new Set() },
+      'UNDER_REVIEW': { count: 0, studentNames: new Set() },
+      'VERIFIED_COMPLETED': { count: 0, studentNames: new Set() },
+      'OVERDUE': { count: 0, studentNames: new Set() },
     };
 
     const todayStr = new Date().toISOString().split('T')[0];
@@ -401,22 +401,25 @@ export default function TeamDashboard() {
       if (stageKey === 'IN PROGRESS') stageKey = 'IN_PROGRESS';
       if (stageKey === 'UNDER REVIEW') stageKey = 'UNDER_REVIEW';
 
-      // Check if overdue
+      let targetBucket = 'TO_DO';
       if (stageKey !== 'VERIFIED_COMPLETED' && task.dueDate < todayStr) {
-        counts['OVERDUE']++;
-      } else if (counts[stageKey as keyof typeof counts] !== undefined) {
-        counts[stageKey as keyof typeof counts]++;
-      } else {
-        counts['TO_DO']++;
+        targetBucket = 'OVERDUE';
+      } else if (buckets[stageKey]) {
+        targetBucket = stageKey;
+      }
+
+      buckets[targetBucket].count++;
+      if (task.studentName) {
+        buckets[targetBucket].studentNames.add(task.studentName);
       }
     });
 
     return [
-      { name: 'To Do', code: 'TO_DO', count: counts['TO_DO'], color: '#64748b' },
-      { name: 'In Progress', code: 'IN_PROGRESS', count: counts['IN_PROGRESS'], color: '#6366f1' },
-      { name: 'Under Review', code: 'UNDER_REVIEW', count: counts['UNDER_REVIEW'], color: '#f59e0b' },
-      { name: 'Completed / Verified', code: 'VERIFIED_COMPLETED', count: counts['VERIFIED_COMPLETED'], color: '#10b981' },
-      { name: 'Overdue', code: 'OVERDUE', count: counts['OVERDUE'], color: '#f43f5e' }
+      { name: 'To Do', code: 'TO_DO', count: buckets['TO_DO'].count, students: Array.from(buckets['TO_DO'].studentNames), color: '#64748b' },
+      { name: 'In Progress', code: 'IN_PROGRESS', count: buckets['IN_PROGRESS'].count, students: Array.from(buckets['IN_PROGRESS'].studentNames), color: '#6366f1' },
+      { name: 'Under Review', code: 'UNDER_REVIEW', count: buckets['UNDER_REVIEW'].count, students: Array.from(buckets['UNDER_REVIEW'].studentNames), color: '#f59e0b' },
+      { name: 'Completed / Verified', code: 'VERIFIED_COMPLETED', count: buckets['VERIFIED_COMPLETED'].count, students: Array.from(buckets['VERIFIED_COMPLETED'].studentNames), color: '#10b981' },
+      { name: 'Overdue', code: 'OVERDUE', count: buckets['OVERDUE'].count, students: Array.from(buckets['OVERDUE'].studentNames), color: '#f43f5e' }
     ];
   }, [filteredTasksForChart]);
 
@@ -652,8 +655,24 @@ export default function TeamDashboard() {
                 <YAxis stroke="#64748b" fontSize={12} tickLine={false} axisLine={false} allowDecimals={false} />
                 <Tooltip 
                   cursor={{ fill: '#f8fafc' }}
-                  contentStyle={{ borderRadius: '12px', border: '1px solid #e2e8f0', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)' }}
-                  formatter={(val: any) => [`${val} Tasks`, 'Count']}
+                  content={({ active, payload }) => {
+                    if (active && payload && payload.length) {
+                      const data = payload[0].payload;
+                      const studentsList = Array.isArray(data.students) && data.students.length > 0
+                        ? data.students.join(', ')
+                        : 'None assigned';
+                      return (
+                        <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-xl text-xs space-y-1.5 max-w-xs">
+                          <p className="font-bold text-slate-900">{data.name} Tasks</p>
+                          <p className="font-semibold text-indigo-600">Count: {data.count} Tasks</p>
+                          <p className="text-slate-600 text-[11px] leading-relaxed">
+                            <strong>Students:</strong> {studentsList}
+                          </p>
+                        </div>
+                      );
+                    }
+                    return null;
+                  }}
                 />
                 <Bar dataKey="count" radius={[8, 8, 0, 0]} name="Task Count">
                   {stageChartData.map((entry, index) => (

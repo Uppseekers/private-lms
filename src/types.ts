@@ -276,6 +276,24 @@ export interface Student {
   satMathMentor?: string;
   universityMentor?: string;
   school: string;
+  curriculum?: string;
+  gpa?: string;
+  classRank?: string;
+  graduationYear?: string;
+  satTotal?: string;
+  satRw?: string;
+  satMath?: string;
+  actScore?: string;
+  engTest?: string;
+  engScore?: string;
+  primaryCountry?: string;
+  otherCountries?: string;
+  dob?: string;
+  gender?: string;
+  nationality?: string;
+  cityCountry?: string;
+  passportStatus?: string;
+  passportExpiry?: string;
   major1?: string;
   major2?: string;
   targetDegree?: string;
@@ -297,6 +315,95 @@ export interface Student {
   role?: string;
   status?: string;
   allowedViewerEmails?: string[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PortalBrandingSettings {
+  id: 'default';
+  portalName: string;
+  logoUrl: string;
+  faviconUrl: string;
+  updatedBy?: string;
+  updatedAt?: string;
+}
+
+export type AnalyticsComponentType = 'kpi' | 'chart' | 'target_meter';
+
+export type AnalyticsVisualStyle =
+  | 'standard'
+  | 'comparison'
+  | 'scorecard'
+  | 'column'
+  | 'bar'
+  | 'stacked_column'
+  | 'line'
+  | 'area'
+  | 'donut'
+  | 'pie'
+  | 'funnel'
+  | 'gauge'
+  | 'progress_bar'
+  | 'bullet';
+
+export type AnalyticsModuleKey =
+  | 'students'
+  | 'tasks'
+  | 'sessions'
+  | 'shortlist'
+  | 'essays'
+  | 'documents'
+  | 'batches'
+  | 'launchpad'
+  | 'staff';
+
+export type AnalyticsOperator =
+  | 'equals'
+  | 'not_equals'
+  | 'contains'
+  | 'gte'
+  | 'lte'
+  | 'is_empty'
+  | 'is_not_empty';
+
+export interface AnalyticsCriterion {
+  id: string;
+  field: string;
+  operator: AnalyticsOperator;
+  value: string;
+}
+
+export interface TargetGradientBand {
+  id: string;
+  label: string;
+  min: number;
+  max: number;
+  color: string;
+}
+
+export interface AnalyticsWidgetConfig {
+  id: string;
+  title: string;
+  description?: string;
+  componentType: AnalyticsComponentType;
+  visualStyle: AnalyticsVisualStyle;
+  module: AnalyticsModuleKey;
+  metric: string;
+  groupBy?: string;
+  secondaryGroupBy?: string;
+  sortBy?: 'value_desc' | 'value_asc' | 'label_asc';
+  limit?: number;
+  targetValue?: number;
+  targetUnit?: string;
+  gradientBands?: TargetGradientBand[];
+  criteriaLogic: 'AND' | 'OR';
+  criteria: AnalyticsCriterion[];
+  dateRange?: 'all_time' | 'this_month' | 'last_30_days' | 'last_90_days' | 'this_year';
+  width?: 'sm' | 'md' | 'lg';
+  order: number;
+  portalScope: 'verified_staff';
+  createdBy?: string;
+  updatedBy?: string;
   createdAt?: string;
   updatedAt?: string;
 }

@@ -32,7 +32,9 @@ import {
   GraduationCap,
   Eye,
   EyeOff,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Palette,
+  BarChart3
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useDatabase, PermissionCategory } from '@/context/DatabaseContext';
@@ -48,8 +50,9 @@ import {
 import ChangeUserPasswordModal, { TargetUserForPassword } from '@/components/ChangeUserPasswordModal';
 import ZohoSetupDiagnosticsPanel from '@/components/ZohoSetupDiagnosticsPanel';
 import SuggestedSchedulerRulesCard from '@/components/SuggestedSchedulerRulesCard';
+import PortalBrandingSettingsCard from '@/components/PortalBrandingSettingsCard';
 
-type TabType = 'staff' | 'permissions' | 'counselling_rules' | 'taxonomies' | 'communications' | 'calendar' | 'billing' | 'developer' | 'audit';
+type TabType = 'branding' | 'staff' | 'permissions' | 'counselling_rules' | 'taxonomies' | 'communications' | 'calendar' | 'billing' | 'developer' | 'audit';
 type Scope = 'Global Scope' | 'Assigned Scope' | 'Read-Only Scope' | 'Enabled' | 'None' | null;
 
 export default function TeamSettings() {
@@ -654,6 +657,7 @@ export default function TeamSettings() {
       <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-2">
         {(
           [
+            { id: 'branding', label: 'Branding (Logo & Favicon)', icon: Palette },
             { id: 'staff', label: 'Staff Onboarding', icon: Users },
             { id: 'permissions', label: 'Access & Permissions', icon: Shield },
             { id: 'counselling_rules', label: 'Class-Wise Counselling Rules', icon: SlidersHorizontal },
@@ -680,6 +684,10 @@ export default function TeamSettings() {
           </button>
         ))}
       </div>
+
+      {activeTab === 'branding' && (
+        <PortalBrandingSettingsCard onSaved={(msg) => addAuditLog(msg)} />
+      )}
 
       {activeTab === 'staff' && (
         <Card className="border-slate-200 shadow-sm overflow-hidden">
@@ -913,6 +921,7 @@ export default function TeamSettings() {
                  tab_evaluator: CheckSquare,
                  tab_users: Users,
                  tab_reports: FileSpreadsheet,
+                 tab_analytics: BarChart3,
                  tab_universities: GraduationCap,
                  tab_settings: Shield,
                };
@@ -926,6 +935,7 @@ export default function TeamSettings() {
                  tab_evaluator: 'Assignment Evaluator',
                  tab_users: 'Student Database',
                  tab_reports: 'Reports',
+                 tab_analytics: 'Analytics & Reports',
                  tab_universities: 'Universities',
                  tab_settings: 'Admin Settings',
                };

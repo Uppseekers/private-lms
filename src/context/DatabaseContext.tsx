@@ -24,7 +24,10 @@ import {
   CounsellorPrimaryAvailability,
   StudentAvailability,
   CounsellingSchedulerSettings,
+  PortalBrandingSettings,
+  AnalyticsWidgetConfig,
 } from '@/types';
+import { sanitizeUserErrorMessage } from '@/lib/friendlyError';
 import {
   LaunchpadSubject,
   LaunchpadWeekModule,
@@ -119,6 +122,7 @@ const permissionCategoriesTemplate: PermissionCategory[] = [
       { id: 'tab_evaluator', name: 'Assignment Evaluator Tab', enabled: true, scope: null },
       { id: 'tab_users', name: 'Student Database Tab', enabled: true, scope: null },
       { id: 'tab_reports', name: 'Reports Tab', enabled: true, scope: null },
+      { id: 'tab_analytics', name: 'Analytics Only', enabled: true, scope: null },
       { id: 'tab_universities', name: 'Universities Tab', enabled: true, scope: null },
       { id: 'tab_settings', name: 'Admin Settings Tab', enabled: false, scope: null },
     ],
@@ -460,6 +464,13 @@ interface DatabaseContextType {
   clearAuthError: () => void;
   permissionsMatrix: Record<string, PermissionCategory[]>;
   setPermissionsMatrix: (matrix: Record<string, PermissionCategory[]>) => void;
+  portalBranding: PortalBrandingSettings;
+  savePortalBranding: (branding: Partial<PortalBrandingSettings>) => Promise<void>;
+  resetPortalBranding: () => Promise<void>;
+  analyticsWidgets: AnalyticsWidgetConfig[];
+  saveAnalyticsWidget: (widget: AnalyticsWidgetConfig) => Promise<void>;
+  deleteAnalyticsWidget: (widgetId: string) => Promise<void>;
+  reorderAnalyticsWidgets: (orderedIds: string[]) => Promise<void>;
   schedulerSettings: CounsellingSchedulerSettings;
   saveSchedulerSettings: (settings: CounsellingSchedulerSettings) => Promise<void>;
   saveStaffPrimaryAvailability: (
@@ -650,6 +661,28 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
 
   const [permissionsMatrixState, setPermissionsMatrixState] =
     useState<Record<string, PermissionCategory[]>>(defaultPermissionsMatrix);
+  const [portalBranding, setPortalBrandingState] = useState<PortalBrandingSettings>(() => {
+    try {
+      const raw = typeof window !== 'undefined' ? window.localStorage.getItem('uppseekers_portal_branding_cache') : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          return {
+            id: 'default',
+            logoUrl: typeof parsed.logoUrl === 'string' ? parsed.logoUrl : '',
+            faviconUrl: typeof parsed.faviconUrl === 'string' ? parsed.faviconUrl : '',
+            portalName: typeof parsed.portalName === 'string' ? parsed.portalName : 'Uppseekers',
+            updatedBy: parsed.updatedBy,
+            updatedAt: parsed.updatedAt,
+          };
+        }
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+    return { id: 'default', logoUrl: '', faviconUrl: '', portalName: 'Uppseekers' };
+  });
+  const [analyticsWidgets, setAnalyticsWidgetsState] = useState<AnalyticsWidgetConfig[]>([]);
   const [schedulerSettingsState, setSchedulerSettingsState] =
     useState<CounsellingSchedulerSettings>(DEFAULT_SCHEDULER_SETTINGS);
   const [adminStudentPasswords, setAdminStudentPasswords] = useState<Record<string, string>>({});
@@ -703,6 +736,45 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const clearAuthError = () => setAuthError(null);
+
+  // Dynamically apply configured Favicon to browser tab whenever branding changes
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const targetHref = portalBranding.faviconUrl?.trim() || '/favicon.svg';
+    let iconLink = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!iconLink) {
+      iconLink = document.createElement('link');
+      iconLink.rel = 'icon';
+      document.head.appendChild(iconLink);
+    }
+    if (targetHref.startsWith('data:image/png')) {
+      iconLink.type = 'image/png';
+    } else if (targetHref.startsWith('data:image/jpeg')) {
+      iconLink.type = 'image/jpeg';
+    } else if (targetHref.startsWith('data:image/webp')) {
+      iconLink.type = 'image/webp';
+    } else if (targetHref.endsWith('.svg') || targetHref.startsWith('data:image/svg')) {
+      iconLink.type = 'image/svg+xml';
+    } else {
+      iconLink.removeAttribute('type');
+    }
+    iconLink.href = targetHref;
+
+    try {
+      window.localStorage.setItem(
+        'uppseekers_portal_branding_cache',
+        JSON.stringify({
+          logoUrl: portalBranding.logoUrl || '',
+          faviconUrl: portalBranding.faviconUrl || '',
+          portalName: portalBranding.portalName || 'Uppseekers',
+          updatedBy: portalBranding.updatedBy || '',
+          updatedAt: portalBranding.updatedAt || '',
+        })
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }, [portalBranding.faviconUrl, portalBranding.logoUrl, portalBranding.portalName, portalBranding.updatedAt, portalBranding.updatedBy]);
 
   const mergePermissionsWithDefaults = (parsed: any): Record<string, PermissionCategory[]> => {
     const merged: Record<string, PermissionCategory[]> = JSON.parse(JSON.stringify(defaultPermissionsMatrix));
@@ -1396,7 +1468,12 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       } catch (err: any) {
         if (cancelled) return;
         console.error('Firebase profile resolution error:', err);
-        setAuthError(err?.message || 'Unable to load portal profile from Firestore.');
+        setAuthError(
+          sanitizeUserErrorMessage(
+            err,
+            'Unable to load your portal profile right now. Please talk to your Admin for assistance.'
+          )
+        );
         setFirestoreStatus(err?.code === 'permission-denied' ? 'permission-denied' : 'error');
         setIsFirebaseAuthReady(true);
       }
@@ -2001,6 +2078,52 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
       })();
     } else {
       setAdminStudentPasswords({});
+    }
+
+    // Live Portal Branding (Logo & Favicon) listener for all authenticated portal users
+    unsubs.push(
+      onSnapshot(
+        doc(db, 'portal_branding', 'default'),
+        (snap) => {
+          if (snap.exists()) {
+            const d = snap.data() as PortalBrandingSettings;
+            setPortalBrandingState({
+              id: 'default',
+              logoUrl: typeof d.logoUrl === 'string' ? d.logoUrl : '',
+              faviconUrl: typeof d.faviconUrl === 'string' ? d.faviconUrl : '',
+              portalName: typeof d.portalName === 'string' && d.portalName.trim() ? d.portalName : 'Uppseekers',
+              updatedBy: d.updatedBy,
+              updatedAt: d.updatedAt,
+            });
+          } else {
+            setPortalBrandingState({ id: 'default', logoUrl: '', faviconUrl: '', portalName: 'Uppseekers' });
+          }
+        },
+        handleSnapErr('portal_branding/default', true)
+      )
+    );
+
+    // Live Analytics & Reports components listener for active staff
+    if (isStaff) {
+      const analyticsQ = hasGlobalAccess
+        ? collection(db, 'analytics_widgets')
+        : query(collection(db, 'analytics_widgets'), where('portalScope', '==', 'verified_staff'));
+      unsubs.push(
+        onSnapshot(
+          analyticsQ,
+          (snap) => {
+            const list: AnalyticsWidgetConfig[] = [];
+            snap.forEach((d) => {
+              list.push({ ...(d.data() as AnalyticsWidgetConfig), id: d.id });
+            });
+            list.sort((a, b) => (Number(a.order ?? 999) - Number(b.order ?? 999)) || String(a.createdAt || '').localeCompare(String(b.createdAt || '')));
+            setAnalyticsWidgetsState(list);
+          },
+          handleSnapErr('analytics_widgets', true)
+        )
+      );
+    } else {
+      setAnalyticsWidgetsState([]);
     }
 
     return () => {
@@ -2907,7 +3030,12 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     const cleanEmail = normalizeEmail(raw.email) || 'student@uppseekers.com';
     const cleaned = stripUndefinedAndNulls(stripPasswordField(raw));
     const allowedKeys = [
-      'id', 'name', 'email', 'phone', 'intake', 'school', 'grade', 'studentAvailability', 'counselor',
+      'id', 'name', 'email', 'phone', 'intake', 'school', 'grade',
+      'curriculum', 'gpa', 'classRank', 'graduationYear',
+      'satTotal', 'satRw', 'satMath', 'actScore', 'engTest', 'engScore',
+      'primaryCountry', 'otherCountries',
+      'dob', 'gender', 'nationality', 'cityCountry', 'passportStatus', 'passportExpiry',
+      'studentAvailability', 'counselor',
       'counselorId', 'counselorEmail', 'counsellor', 'mentor', 'mentorId',
       'researchMentor', 'satMathMentor', 'satVerbalMentor', 'universityMentor',
       'readiness', 'countries', 'activities', 'operationalLogs',
@@ -2967,6 +3095,24 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     if (typeof out.intake === 'string') out.intake = out.intake.slice(0, 60);
     if (typeof out.school === 'string') out.school = out.school.slice(0, 200);
     if (typeof out.grade === 'string') out.grade = out.grade.slice(0, 20);
+    if (typeof out.curriculum === 'string') out.curriculum = out.curriculum.slice(0, 80);
+    if (typeof out.gpa === 'string') out.gpa = out.gpa.slice(0, 60);
+    if (typeof out.classRank === 'string') out.classRank = out.classRank.slice(0, 60);
+    if (typeof out.graduationYear === 'string') out.graduationYear = out.graduationYear.slice(0, 20);
+    if (typeof out.satTotal === 'string') out.satTotal = out.satTotal.slice(0, 20);
+    if (typeof out.satRw === 'string') out.satRw = out.satRw.slice(0, 20);
+    if (typeof out.satMath === 'string') out.satMath = out.satMath.slice(0, 20);
+    if (typeof out.actScore === 'string') out.actScore = out.actScore.slice(0, 20);
+    if (typeof out.engTest === 'string') out.engTest = out.engTest.slice(0, 40);
+    if (typeof out.engScore === 'string') out.engScore = out.engScore.slice(0, 30);
+    if (typeof out.primaryCountry === 'string') out.primaryCountry = out.primaryCountry.slice(0, 120);
+    if (typeof out.otherCountries === 'string') out.otherCountries = out.otherCountries.slice(0, 300);
+    if (typeof out.dob === 'string') out.dob = out.dob.slice(0, 40);
+    if (typeof out.gender === 'string') out.gender = out.gender.slice(0, 40);
+    if (typeof out.nationality === 'string') out.nationality = out.nationality.slice(0, 80);
+    if (typeof out.cityCountry === 'string') out.cityCountry = out.cityCountry.slice(0, 160);
+    if (typeof out.passportStatus === 'string') out.passportStatus = out.passportStatus.slice(0, 60);
+    if (typeof out.passportExpiry === 'string') out.passportExpiry = out.passportExpiry.slice(0, 40);
     if (raw.studentAvailability && typeof raw.studentAvailability === 'object') {
       out.studentAvailability = stripUndefinedAndNulls(
         sanitizeStudentAvailabilityForFirestore(raw.studentAvailability)
@@ -3021,7 +3167,12 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         const selfAllowedKeys = [
           'tasks', 'essays', 'documents', 'activities', 'shortlist',
           'extracurriculars', 'academicScores', 'credentials', 'operationalLogs',
-          'phone', 'school', 'grade', 'studentAvailability', 'major1', 'major2', 'targetDegree', 'targetCountry', 'updatedAt',
+          'phone', 'intake', 'school', 'grade',
+          'curriculum', 'gpa', 'classRank', 'graduationYear',
+          'satTotal', 'satRw', 'satMath', 'actScore', 'engTest', 'engScore',
+          'primaryCountry', 'otherCountries', 'countries',
+          'dob', 'gender', 'nationality', 'cityCountry', 'passportStatus', 'passportExpiry',
+          'studentAvailability', 'major1', 'major2', 'targetDegree', 'targetCountry', 'updatedAt',
         ] as const;
         const patch: Record<string, any> = {};
         for (const k of selfAllowedKeys) {
@@ -3035,21 +3186,34 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         await updateDoc(doc(db, 'students', safeId), patch);
       } else {
         const existingRef = doc(db, 'students', safeId);
-        const snap = await getDoc(existingRef);
+        let snap: Awaited<ReturnType<typeof getDoc>> | null = null;
+        try {
+          snap = await getDoc(existingRef);
+        } catch {
+          // Treat unreadable/missing pre-check as new document creation attempt
+          snap = null;
+        }
+        const docExists = Boolean(snap && snap.exists());
         const canFullWrite =
-          !snap.exists() ||
+          !docExists ||
           isUserAdmin(currentUser) ||
           canStaffAccessAllStudents(currentUser, permissionsMatrixState);
         if (canFullWrite) {
+          const existingSnapData = docExists ? (snap!.data() as Record<string, any>) : null;
           const existingInnerId =
-            snap.exists() && typeof snap.data()?.id === 'string' && snap.data()!.id.trim()
-              ? snap.data()!.id
+            existingSnapData && typeof existingSnapData.id === 'string' && existingSnapData.id.trim()
+              ? existingSnapData.id
               : safeId;
           await setDoc(existingRef, { ...payload, id: existingInnerId });
         } else {
-          const existingData = snap.data() || {};
+          const existingData = (snap?.data() as Record<string, any>) || {};
           const staffMutableKeys = [
-            'name', 'phone', 'intake', 'school', 'grade', 'studentAvailability',
+            'name', 'phone', 'intake', 'school', 'grade',
+            'curriculum', 'gpa', 'classRank', 'graduationYear',
+            'satTotal', 'satRw', 'satMath', 'actScore', 'engTest', 'engScore',
+            'primaryCountry', 'otherCountries',
+            'dob', 'gender', 'nationality', 'cityCountry', 'passportStatus', 'passportExpiry',
+            'studentAvailability',
             'counselor', 'counselorId', 'counselorEmail',
             'counsellor', 'mentor', 'mentorId', 'researchMentor',
             'satMathMentor', 'satVerbalMentor', 'universityMentor', 'readiness',
@@ -3085,7 +3249,12 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     } catch (err) {
       const info = buildFirestoreErrorInfo(err, OperationType.WRITE, `students/${safeId}`);
       console.error('Firestore student write error:', JSON.stringify(info));
-      throw new Error('Unable to save student changes to Firestore. Please verify permissions and try again.');
+      throw new Error(
+        sanitizeUserErrorMessage(
+          err,
+          'Unable to save student changes right now. Please talk to your Admin for assistance.'
+        )
+      );
     }
   };
 
@@ -4624,6 +4793,124 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
+  const savePortalBranding = async (branding: Partial<PortalBrandingSettings>): Promise<void> => {
+    if (!auth.currentUser || !isUserAdmin(currentUser)) {
+      throw new Error('Only System Administrators can update portal branding. Please talk to your Admin.');
+    }
+    const next: PortalBrandingSettings = {
+      id: 'default',
+      logoUrl: typeof branding.logoUrl === 'string' ? branding.logoUrl.trim().slice(0, 450000) : portalBranding.logoUrl || '',
+      faviconUrl: typeof branding.faviconUrl === 'string' ? branding.faviconUrl.trim().slice(0, 200000) : portalBranding.faviconUrl || '',
+      portalName:
+        typeof branding.portalName === 'string' && branding.portalName.trim()
+          ? branding.portalName.trim().slice(0, 120)
+          : portalBranding.portalName || 'Uppseekers',
+      updatedBy: normalizeEmail(auth.currentUser.email || currentUser?.email).slice(0, 200),
+      updatedAt: new Date().toISOString(),
+    };
+    setPortalBrandingState(next);
+    try {
+      await setDoc(doc(db, 'portal_branding', 'default'), next);
+    } catch (err) {
+      console.error('Portal branding save error:', buildFirestoreErrorInfo(err, OperationType.WRITE, 'portal_branding/default'));
+      throw new Error(sanitizeUserErrorMessage(err, 'Unable to save portal branding right now. Please talk to your Admin.'));
+    }
+  };
+
+  const resetPortalBranding = async (): Promise<void> => {
+    await savePortalBranding({ logoUrl: '', faviconUrl: '', portalName: 'Uppseekers' });
+  };
+
+  const saveAnalyticsWidget = async (widget: AnalyticsWidgetConfig): Promise<void> => {
+    if (!auth.currentUser || !isUserAdmin(currentUser)) {
+      throw new Error('Only System Administrators can create or edit Analytics components. Please talk to your Admin.');
+    }
+    const safeId = toValidDocId(widget.id || `AW_${Date.now()}`, 'AW');
+    const nowIso = new Date().toISOString();
+    const actorEmail = normalizeEmail(auth.currentUser.email || currentUser?.email).slice(0, 200);
+    const cleanPayload: Record<string, any> = stripUndefinedAndNulls({
+      id: safeId,
+      title: String(widget.title || 'Untitled Component').trim().slice(0, 160),
+      description: widget.description ? String(widget.description).trim().slice(0, 400) : undefined,
+      componentType: widget.componentType,
+      visualStyle: String(widget.visualStyle || 'standard').slice(0, 40),
+      module: String(widget.module || 'students').slice(0, 40),
+      metric: String(widget.metric || 'count').slice(0, 80),
+      groupBy: widget.groupBy ? String(widget.groupBy).slice(0, 80) : undefined,
+      secondaryGroupBy: widget.secondaryGroupBy ? String(widget.secondaryGroupBy).slice(0, 80) : undefined,
+      sortBy: widget.sortBy ? String(widget.sortBy).slice(0, 40) : undefined,
+      limit: typeof widget.limit === 'number' && Number.isFinite(widget.limit) ? Math.min(50, Math.max(1, Math.round(widget.limit))) : undefined,
+      targetValue: typeof widget.targetValue === 'number' && Number.isFinite(widget.targetValue) ? Math.max(0, widget.targetValue) : undefined,
+      targetUnit: widget.targetUnit ? String(widget.targetUnit).slice(0, 24) : undefined,
+      gradientBands: Array.isArray(widget.gradientBands) ? widget.gradientBands.slice(0, 10) : undefined,
+      criteriaLogic: widget.criteriaLogic === 'OR' ? 'OR' : 'AND',
+      criteria: Array.isArray(widget.criteria) ? widget.criteria.slice(0, 25) : [],
+      dateRange: widget.dateRange ? String(widget.dateRange).slice(0, 32) : 'all_time',
+      width: widget.width === 'sm' || widget.width === 'lg' ? widget.width : 'md',
+      order: typeof widget.order === 'number' && Number.isFinite(widget.order) ? widget.order : analyticsWidgets.length,
+      portalScope: 'verified_staff',
+      createdBy: widget.createdBy || actorEmail,
+      updatedBy: actorEmail,
+      createdAt: widget.createdAt || nowIso,
+      updatedAt: nowIso,
+    });
+
+    setAnalyticsWidgetsState((prev) => {
+      const exists = prev.some((w) => w.id === safeId);
+      const nextList = exists
+        ? prev.map((w) => (w.id === safeId ? (cleanPayload as AnalyticsWidgetConfig) : w))
+        : [...prev, cleanPayload as AnalyticsWidgetConfig];
+      return [...nextList].sort((a, b) => Number(a.order ?? 999) - Number(b.order ?? 999));
+    });
+
+    try {
+      await setDoc(doc(db, 'analytics_widgets', safeId), cleanPayload);
+    } catch (err) {
+      console.error('Analytics widget save error:', buildFirestoreErrorInfo(err, OperationType.WRITE, `analytics_widgets/${safeId}`));
+      throw new Error(sanitizeUserErrorMessage(err, 'Unable to save this analytics component right now. Please talk to your Admin.'));
+    }
+  };
+
+  const deleteAnalyticsWidget = async (widgetId: string): Promise<void> => {
+    if (!auth.currentUser || !isUserAdmin(currentUser)) {
+      throw new Error('Only System Administrators can delete Analytics components. Please talk to your Admin.');
+    }
+    const safeId = toValidDocId(widgetId, 'AW');
+    setAnalyticsWidgetsState((prev) => prev.filter((w) => w.id !== widgetId && w.id !== safeId));
+    try {
+      await deleteDoc(doc(db, 'analytics_widgets', safeId));
+    } catch (err) {
+      console.error('Analytics widget delete error:', buildFirestoreErrorInfo(err, OperationType.DELETE, `analytics_widgets/${safeId}`));
+      throw new Error(sanitizeUserErrorMessage(err, 'Unable to delete this analytics component right now. Please talk to your Admin.'));
+    }
+  };
+
+  const reorderAnalyticsWidgets = async (orderedIds: string[]): Promise<void> => {
+    if (!auth.currentUser || !isUserAdmin(currentUser)) return;
+    const nowIso = new Date().toISOString();
+    const actorEmail = normalizeEmail(auth.currentUser.email || currentUser?.email).slice(0, 200);
+    const byId = new Map(analyticsWidgets.map((w) => [w.id, w]));
+    const updatedWidgets: AnalyticsWidgetConfig[] = [];
+    orderedIds.forEach((id, idx) => {
+      const existing = byId.get(id);
+      if (existing) {
+        updatedWidgets.push({ ...existing, order: idx, updatedBy: actorEmail, updatedAt: nowIso });
+      }
+    });
+    if (updatedWidgets.length === 0) return;
+    setAnalyticsWidgetsState(updatedWidgets);
+    try {
+      const batch = writeBatch(db);
+      updatedWidgets.forEach((w) => {
+        const safeId = toValidDocId(w.id, 'AW');
+        batch.set(doc(db, 'analytics_widgets', safeId), stripUndefinedAndNulls({ ...w, id: safeId, portalScope: 'verified_staff' }));
+      });
+      await batch.commit();
+    } catch (err) {
+      console.error('Analytics widget reorder error:', buildFirestoreErrorInfo(err, OperationType.WRITE, 'analytics_widgets'));
+    }
+  };
+
   const initializeData = async (): Promise<void> => {
     // Firestore onSnapshot streams keep state synchronized automatically once authenticated.
   };
@@ -4646,6 +4933,13 @@ export const DatabaseProvider = ({ children }: { children: ReactNode }) => {
         clearAuthError,
         permissionsMatrix: permissionsMatrixState,
         setPermissionsMatrix,
+        portalBranding,
+        savePortalBranding,
+        resetPortalBranding,
+        analyticsWidgets,
+        saveAnalyticsWidget,
+        deleteAnalyticsWidget,
+        reorderAnalyticsWidgets,
         schedulerSettings: schedulerSettingsState,
         saveSchedulerSettings,
         saveStaffPrimaryAvailability,

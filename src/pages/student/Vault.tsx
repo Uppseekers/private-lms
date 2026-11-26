@@ -6,6 +6,7 @@ import { cn } from '@/lib/utils';
 import { useDatabase } from '@/context/DatabaseContext';
 import PortalCredentialsManager from '@/components/PortalCredentialsManager';
 import { PortalCredential } from '@/types';
+import { sanitizeUserErrorMessage } from '@/lib/friendlyError';
 
 interface DocumentInfo {
   id: string;
@@ -218,7 +219,12 @@ export default function StudentVault() {
       setUploadSuccess(`"${newDoc.name}" uploaded and saved to your Document Vault.`);
       setTimeout(() => setUploadSuccess(''), 4000);
     } catch (err: any) {
-      setUploadError(err?.message || 'Failed to save document to Firestore. Please try again.');
+      setUploadError(
+        sanitizeUserErrorMessage(
+          err,
+          'Unable to save this document right now. Please try again or talk to your Admin.'
+        )
+      );
     } finally {
       setIsUploading(false);
     }

@@ -365,21 +365,32 @@ export default function Evaluator() {
   };
 
   const handleSaveTaskEvaluation = () => {
-    if (!activeTaskSubmission || !activeTaskSubmission.rawTask) return;
+    if (!activeTaskSubmission) return;
     setIsSaving(true);
+    console.log('[Evaluator] Saving task evaluation mutation:', {
+      taskId: activeTaskSubmission.id,
+      title: activeTaskSubmission.title,
+      studentId: activeTaskSubmission.studentId,
+      newStage: taskReviewStage,
+      feedback: taskFeedback,
+    });
 
-    const targetStudent = students.find(s => s.id === activeTaskSubmission.studentId);
+    const targetStudent = students.find((s) => s.id === activeTaskSubmission.studentId);
     if (!targetStudent) {
+      console.warn('[Evaluator] Target student not found for task evaluation:', activeTaskSubmission.studentId);
       setIsSaving(false);
       return;
     }
 
-    const updatedTasks = (targetStudent.tasks || []).map(t => {
-      if (t.id === activeTaskSubmission.rawTask?.id) {
+    const targetTaskId = activeTaskSubmission.rawTask?.id || activeTaskSubmission.id.replace(/^task_/, '');
+
+    const updatedTasks = (targetStudent.tasks || []).map((t) => {
+      if (String(t.id) === String(targetTaskId) || t.name === activeTaskSubmission.title) {
         return {
           ...t,
           stage: taskReviewStage,
-          feedback: taskFeedback
+          feedback: taskFeedback,
+          updatedAt: new Date().toISOString(),
         };
       }
       return t;
@@ -387,28 +398,52 @@ export default function Evaluator() {
 
     const logEntry = {
       id: 'LOG-' + Date.now(),
-      timestamp: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+      timestamp: new Date().toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: 'numeric',
+        hour12: true,
+      }),
       performedBy: currentUser?.name || 'Evaluator',
       role: currentUser?.role || 'MENTOR',
       studentId: targetStudent.id,
       activityType: 'Task Evaluated',
-      description: `Evaluated Task "${activeTaskSubmission.title}" for ${targetStudent.name}. Stage updated to "${taskReviewStage.replace(/_/g, ' ')}".`
+      description: `Evaluated Task "${activeTaskSubmission.title}" for ${targetStudent.name}. Stage updated to "${taskReviewStage.replace(
+        /_/g,
+        ' '
+      )}".`,
     };
 
     const newActivities = [...(targetStudent.activities || [])];
     if (taskReviewStage === 'COMPLETED') {
       newActivities.unshift({
         id: 'ACT-' + Date.now(),
-        date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+        date: new Date().toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: 'numeric',
+          hour12: true,
+        }),
         type: 'VERIFIED',
-        description: `Task verified and completed by counselor: ${activeTaskSubmission.title}`
+        description: `Task verified and completed by counselor: ${activeTaskSubmission.title}`,
       });
     } else if (taskReviewStage === 'NEEDS_REVISION') {
       newActivities.unshift({
         id: 'ACT-' + Date.now(),
-        date: new Date().toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }),
+        date: new Date().toLocaleString('en-US', {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: 'numeric',
+          hour12: true,
+        }),
         type: 'UPDATE',
-        description: `Task revision requested by counselor: ${activeTaskSubmission.title}`
+        description: `Task revision requested by counselor: ${activeTaskSubmission.title}`,
       });
     }
 
@@ -416,8 +451,14 @@ export default function Evaluator() {
       ...targetStudent,
       tasks: updatedTasks,
       activities: newActivities,
-      operationalLogs: [logEntry, ...(targetStudent.operationalLogs || [])]
-    });
+      operationalLogs: [logEntry, ...(targetStudent.operationalLogs || [])],
+    })
+      .then(() => {
+        console.log('[Evaluator] Task evaluation successfully persisted and state refreshed.');
+      })
+      .catch((err) => {
+        console.error('[Evaluator] Failed to persist task evaluation mutation:', err);
+      });
 
     setTimeout(() => {
       setIsSaving(false);
@@ -425,8 +466,8 @@ export default function Evaluator() {
       setTimeout(() => {
         setSaveSuccess(false);
         setActiveTaskSubmission(null);
-      }, 1000);
-    }, 500);
+      }, 800);
+    }, 300);
   };
 
   const getPendingDays = (dateStr: string) => {
